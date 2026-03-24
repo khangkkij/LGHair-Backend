@@ -1,0 +1,6 @@
+@MinhTamHair_HostAddress = http://localhost:5048
+
+GET {{MinhTamHair_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
