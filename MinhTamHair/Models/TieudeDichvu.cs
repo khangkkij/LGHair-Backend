@@ -13,6 +13,10 @@ public partial class TieudeDichvu
 
     public string? MoTaTieuDe { get; set; }
 
+    public int? SoThuTu { get; set; }
+
+    public int? LoaiHienThi { get; set; }
+
     public int? TrangThai { get; set; }
 
     public virtual ICollection<ChitietTieude> ChitietTieudes { get; set; } = new List<ChitietTieude>();

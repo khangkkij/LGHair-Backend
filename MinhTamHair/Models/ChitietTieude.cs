@@ -15,6 +15,8 @@ public partial class ChitietTieude
 
     public string? MoTaTieuDe { get; set; }
 
+    public int? SoThuTu { get; set; }
+
     public string? HinhAnh { get; set; }
 
     public virtual Dichvu? MaDvNavigation { get; set; }

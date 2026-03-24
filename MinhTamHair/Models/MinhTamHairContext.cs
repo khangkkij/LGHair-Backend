@@ -67,11 +67,12 @@ public partial class MinhTamHairContext : DbContext
 
     public virtual DbSet<Voucher> Vouchers { get; set; }
 
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Bangmau>(entity =>
         {
-            entity.HasKey(e => e.MaMau).HasName("PK__BANGMAU__27572EAE8CEB647E");
+            entity.HasKey(e => e.MaMau).HasName("PK__BANGMAU__27572EAE77605C70");
 
             entity.ToTable("BANGMAU");
 
@@ -87,7 +88,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<ChitietFlashsale>(entity =>
         {
-            entity.HasKey(e => new { e.MaFl, e.MaCb, e.MaDv }).HasName("PK__CHITIET___3DE7DAF366A8C150");
+            entity.HasKey(e => new { e.MaFl, e.MaCb, e.MaDv }).HasName("PK__CHITIET___3DE7DAF3B787769A");
 
             entity.ToTable("CHITIET_FLASHSALE");
 
@@ -123,7 +124,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<ChitietLichdat>(entity =>
         {
-            entity.HasKey(e => e.MaCtld).HasName("PK__CHITIET___FD279DF082910D26");
+            entity.HasKey(e => e.MaCtld).HasName("PK__CHITIET___FD279DF0AAB0864A");
 
             entity.ToTable("CHITIET_LICHDAT");
 
@@ -170,7 +171,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<ChitietTieude>(entity =>
         {
-            entity.HasKey(e => e.MaCttd).HasName("PK__CHITIET___FD26D0E67EB0D3C1");
+            entity.HasKey(e => e.MaCttd).HasName("PK__CHITIET___FD26D0E6362B88FA");
 
             entity.ToTable("CHITIET_TIEUDE");
 
@@ -190,6 +191,7 @@ public partial class MinhTamHairContext : DbContext
             entity.Property(e => e.MoTaTieuDe)
                 .HasMaxLength(255)
                 .HasColumnName("moTaTieuDe");
+            entity.Property(e => e.SoThuTu).HasColumnName("soThuTu");
             entity.Property(e => e.TenTieuDe)
                 .HasMaxLength(100)
                 .HasColumnName("tenTieuDe");
@@ -205,7 +207,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<Combo>(entity =>
         {
-            entity.HasKey(e => e.MaCb).HasName("PK__COMBO__7A3E0CE4F8A82490");
+            entity.HasKey(e => e.MaCb).HasName("PK__COMBO__7A3E0CE4ED642CC5");
 
             entity.ToTable("COMBO");
 
@@ -239,7 +241,7 @@ public partial class MinhTamHairContext : DbContext
                         .HasConstraintName("FK__CHITIET_CO__maCB__52593CB8"),
                     j =>
                     {
-                        j.HasKey("MaCb", "MaDv").HasName("PK__CHITIET___7D9DE3A5454C5FEF");
+                        j.HasKey("MaCb", "MaDv").HasName("PK__CHITIET___7D9DE3A586B4B5EC");
                         j.ToTable("CHITIET_COMBO");
                         j.IndexerProperty<string>("MaCb")
                             .HasMaxLength(10)
@@ -254,7 +256,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<DanhMuc>(entity =>
         {
-            entity.HasKey(e => e.MaDm).HasName("PK__DANH_MUC__7A3EF40862255EF4");
+            entity.HasKey(e => e.MaDm).HasName("PK__DANH_MUC__7A3EF4081AD9A7FB");
 
             entity.ToTable("DANH_MUC");
 
@@ -275,7 +277,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<DanhgiaDichvu>(entity =>
         {
-            entity.HasKey(e => e.MaDgdv).HasName("PK__DANHGIA___351DF509E610A20B");
+            entity.HasKey(e => e.MaDgdv).HasName("PK__DANHGIA___351DF5097437A20A");
 
             entity.ToTable("DANHGIA_DICHVU");
 
@@ -322,7 +324,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<DanhgiaNhanvien>(entity =>
         {
-            entity.HasKey(e => e.MaDgnv).HasName("PK__DANHGIA___351E2BDA9F4C9929");
+            entity.HasKey(e => e.MaDgnv).HasName("PK__DANHGIA___351E2BDA5F4D0AB0");
 
             entity.ToTable("DANHGIA_NHANVIEN");
 
@@ -353,7 +355,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<Dichvu>(entity =>
         {
-            entity.HasKey(e => e.MaDv).HasName("PK__DICHVU__7A3EF4116DD04664");
+            entity.HasKey(e => e.MaDv).HasName("PK__DICHVU__7A3EF4111F544280");
 
             entity.ToTable("DICHVU");
 
@@ -382,7 +384,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<Flashsale>(entity =>
         {
-            entity.HasKey(e => e.MaFl).HasName("PK__FLASHSAL__7A3E04C9778778CB");
+            entity.HasKey(e => e.MaFl).HasName("PK__FLASHSAL__7A3E04C9E9420861");
 
             entity.ToTable("FLASHSALE");
 
@@ -401,7 +403,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<Hangthanhvien>(entity =>
         {
-            entity.HasKey(e => e.MaRank).HasName("PK__HANGTHAN__AC1EB3F0DF372D09");
+            entity.HasKey(e => e.MaRank).HasName("PK__HANGTHAN__AC1EB3F04B5DDA24");
 
             entity.ToTable("HANGTHANHVIEN");
 
@@ -419,7 +421,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<Hinhanh>(entity =>
         {
-            entity.HasKey(e => e.MaHa).HasName("PK__HINHANH__7A3E148302AF7C50");
+            entity.HasKey(e => e.MaHa).HasName("PK__HINHANH__7A3E1483BFEC708E");
 
             entity.ToTable("HINHANH");
 
@@ -440,7 +442,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<HoaDon>(entity =>
         {
-            entity.HasKey(e => e.MaHd).HasName("PK__HOA_DON__7A3E148651AA2412");
+            entity.HasKey(e => e.MaHd).HasName("PK__HOA_DON__7A3E1486F3B8EE3A");
 
             entity.ToTable("HOA_DON");
 
@@ -498,7 +500,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<Khachhang>(entity =>
         {
-            entity.HasKey(e => e.MaKh).HasName("PK__KHACHHAN__7A3ECFE48607CF00");
+            entity.HasKey(e => e.MaKh).HasName("PK__KHACHHAN__7A3ECFE43DC91534");
 
             entity.ToTable("KHACHHANG");
 
@@ -555,7 +557,7 @@ public partial class MinhTamHairContext : DbContext
                         .HasConstraintName("FK__KHACHHANG___maKH__6A30C649"),
                     j =>
                     {
-                        j.HasKey("MaKh", "MaCode").HasName("PK__KHACHHAN__C958E6AA8DF22623");
+                        j.HasKey("MaKh", "MaCode").HasName("PK__KHACHHAN__C958E6AAAE16A29A");
                         j.ToTable("KHACHHANG_VOUCHER");
                         j.IndexerProperty<string>("MaKh")
                             .HasMaxLength(10)
@@ -570,7 +572,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<Kifutoc>(entity =>
         {
-            entity.HasKey(e => e.MaKt).HasName("PK__KIFUTOC__7A3ECFF86F3FAF84");
+            entity.HasKey(e => e.MaKt).HasName("PK__KIFUTOC__7A3ECFF831EEC40E");
 
             entity.ToTable("KIFUTOC");
 
@@ -599,7 +601,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<Lichdat>(entity =>
         {
-            entity.HasKey(e => e.MaLd).HasName("PK__LICHDAT__7A3EB709B7414DD0");
+            entity.HasKey(e => e.MaLd).HasName("PK__LICHDAT__7A3EB709BDC0CDFF");
 
             entity.ToTable("LICHDAT");
 
@@ -626,7 +628,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<Lichlamviec>(entity =>
         {
-            entity.HasKey(e => e.MaLich).HasName("PK__LICHLAMV__F0B8217BFC974C47");
+            entity.HasKey(e => e.MaLich).HasName("PK__LICHLAMV__F0B8217BB1B5E87D");
 
             entity.ToTable("LICHLAMVIEC");
 
@@ -648,7 +650,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<Lichsuthutoc>(entity =>
         {
-            entity.HasKey(e => e.Id).HasName("PK__LICHSUTH__3214EC27183B2257");
+            entity.HasKey(e => e.Id).HasName("PK__LICHSUTH__3214EC277D377291");
 
             entity.ToTable("LICHSUTHUTOC");
 
@@ -692,7 +694,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<Loainhanvien>(entity =>
         {
-            entity.HasKey(e => e.MaLoaiNv).HasName("PK__LOAINHAN__7A9A6EBA1F82092D");
+            entity.HasKey(e => e.MaLoaiNv).HasName("PK__LOAINHAN__7A9A6EBA1DC5396A");
 
             entity.ToTable("LOAINHANVIEN");
 
@@ -715,7 +717,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<Nhanvien>(entity =>
         {
-            entity.HasKey(e => e.MaNv).HasName("PK__NHANVIEN__7A3EC7D5DC881661");
+            entity.HasKey(e => e.MaNv).HasName("PK__NHANVIEN__7A3EC7D510272919");
 
             entity.ToTable("NHANVIEN");
 
@@ -779,7 +781,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<Refreshtoken>(entity =>
         {
-            entity.HasKey(e => e.Id).HasName("PK__REFRESHT__3214EC073D968DF6");
+            entity.HasKey(e => e.Id).HasName("PK__REFRESHT__3214EC07E53BB784");
 
             entity.ToTable("REFRESHTOKEN");
 
@@ -793,7 +795,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<Role>(entity =>
         {
-            entity.HasKey(e => e.MaRole).HasName("PK__ROLE__509E0512D3CDB482");
+            entity.HasKey(e => e.MaRole).HasName("PK__ROLE__509E051278464AD2");
 
             entity.ToTable("ROLE");
 
@@ -809,7 +811,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<Thanhtoan>(entity =>
         {
-            entity.HasKey(e => e.MaTt).HasName("PK__THANHTOA__7A226247E8189A5E");
+            entity.HasKey(e => e.MaTt).HasName("PK__THANHTOA__7A2262477BF7F293");
 
             entity.ToTable("THANHTOAN");
 
@@ -833,7 +835,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<Thongbao>(entity =>
         {
-            entity.HasKey(e => e.MaTb).HasName("PK__THONGBAO__7A2262697CF22831");
+            entity.HasKey(e => e.MaTb).HasName("PK__THONGBAO__7A2262699AD3AF89");
 
             entity.ToTable("THONGBAO");
 
@@ -867,7 +869,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<TieudeDichvu>(entity =>
         {
-            entity.HasKey(e => e.MaTd).HasName("PK__TIEUDE_D__7A2262577893700C");
+            entity.HasKey(e => e.MaTd).HasName("PK__TIEUDE_D__7A2262573E7A4201");
 
             entity.ToTable("TIEUDE_DICHVU");
 
@@ -882,6 +884,7 @@ public partial class MinhTamHairContext : DbContext
             entity.Property(e => e.MoTaTieuDe)
                 .HasMaxLength(255)
                 .HasColumnName("moTaTieuDe");
+            entity.Property(e => e.SoThuTu).HasColumnName("soThuTu");
             entity.Property(e => e.TenTieuDe)
                 .HasMaxLength(100)
                 .HasColumnName("tenTieuDe");
@@ -894,7 +897,7 @@ public partial class MinhTamHairContext : DbContext
 
         modelBuilder.Entity<Voucher>(entity =>
         {
-            entity.HasKey(e => e.MaCode).HasName("PK__VOUCHER__366294EA4FB7EE0B");
+            entity.HasKey(e => e.MaCode).HasName("PK__VOUCHER__366294EAE5A78846");
 
             entity.ToTable("VOUCHER");
 
