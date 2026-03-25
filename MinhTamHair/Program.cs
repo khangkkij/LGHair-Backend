@@ -92,7 +92,7 @@ if (app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 
 app.UseCors("AllowVueApp"); // Bật CORS trước
-
+app.UseStaticFiles();
 app.UseAuthentication();    // Bật Xác thực trước
 app.UseAuthorization();     // Bật Phân quyền sau
 
