@@ -129,7 +129,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         .Where(fs => fs.MaFlNavigation.TrangThai == 1
                             && fs.MaFlNavigation.NgayBatDau <= now
                             && fs.MaFlNavigation.NgayKetThuc >= now)
-                        .Select(fs => new
+                        .Select(fs => new  
                         {
                             fs.PhanTramGiam,
                             fs.MaFlNavigation.NgayKetThuc
