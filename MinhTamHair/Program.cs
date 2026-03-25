@@ -1,11 +1,13 @@
-﻿using Microsoft.AspNetCore.Authentication.Cookies;
+﻿using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models;
 using MinhTamHair.Models;
-using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
+using MinhTamHair.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -72,15 +74,51 @@ builder.Services.AddAuthentication(options =>
         }
     };
 });
+builder.Services.AddSwaggerGen(c =>
+{
+	c.SwaggerDoc("v1", new OpenApiInfo { Title = "Minh Tam Hair API", Version = "v1" });
 
+	// 1. Thêm nút Authorize (Định nghĩa kiểu bảo mật là Bearer Token)
+	c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+	{
+		Description = "Vui lòng nhập token theo định dạng: Bearer {chuỗi_token_của_bạn}",
+		Name = "Authorization",
+		In = ParameterLocation.Header,
+		Type = SecuritySchemeType.ApiKey,
+		Scheme = "Bearer"
+	});
+
+	// 2. Yêu cầu Swagger áp dụng Token này cho tất cả các API
+	c.AddSecurityRequirement(new OpenApiSecurityRequirement
+	{
+		{
+			new OpenApiSecurityScheme
+			{
+				Reference = new OpenApiReference
+				{
+					Type = ReferenceType.SecurityScheme,
+					Id = "Bearer"
+				}
+			},
+			new string[] {}
+		}
+	});
+});
 // --- 5. Cấu hình Phân quyền (Authorization) ---
 builder.Services.AddAuthorization(options => {
     options.AddPolicy("AdminPolicy", policy => policy.RequireRole("Admin"));
     options.AddPolicy("StaffPolicy", policy => policy.RequireRole("Admin", "NhanVien"));
     options.AddPolicy("CustomerPolicy", policy => policy.RequireRole("KhachHang"));
 });
+builder.Services.AddMemoryCache();
+builder.Services.AddTransient<IEmailService, EmailService>();
 
 var app = builder.Build();
+app.Use((context, next) =>
+{
+	context.Response.Headers.Append("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
+	return next();
+});
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
