@@ -2,7 +2,7 @@
 using MinhTamHair.Models;
 using System.Linq;
 
-namespace MinhTamHair.KhachHang.Controllers
+namespace MinhTamHair.KhanchHang.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
@@ -107,7 +107,8 @@ namespace MinhTamHair.KhachHang.Controllers
             // 🔥 TOTAL COUNT
             var totalItems = query.Count();
 
-            // 🔥 PAGINATION
+            var now = DateTime.Now;
+
             var services = query
                 .OrderBy(x => x.MaDv)
                 .Skip((page - 1) * pageSize)
@@ -117,11 +118,22 @@ namespace MinhTamHair.KhachHang.Controllers
                     x.MaDv,
                     x.TenDv,
                     x.Gia,
-                    x.MaDmNavigation,
                     x.ThoiGianLam,
                     x.MoTa,
+
                     HinhAnh = x.Hinhanhs
                         .Select(h => h.DuongDan)
+                        .FirstOrDefault(),
+
+                    FlashSale = x.ChitietFlashsales
+                        .Where(fs => fs.MaFlNavigation.TrangThai == 1
+                            && fs.MaFlNavigation.NgayBatDau <= now
+                            && fs.MaFlNavigation.NgayKetThuc >= now)
+                        .Select(fs => new
+                        {
+                            fs.PhanTramGiam,
+                            fs.MaFlNavigation.NgayKetThuc
+                        })
                         .FirstOrDefault()
                 })
                 .ToList();
