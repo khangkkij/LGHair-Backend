@@ -1,4 +1,4 @@
-﻿using System.IdentityModel.Tokens.Jwt;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
@@ -41,6 +41,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 
 			// 1. Kiểm tra tài khoản (Email hoặc SĐT)
 			var khachHang = await _context.Khachhangs
+			.Include(kh => kh.MaRankNavigation)
 				.FirstOrDefaultAsync(kh =>
 					(kh.Email == request.Username || kh.Sdt == request.Username)
 					&& kh.MatKhau== request.Password
@@ -77,7 +78,8 @@ namespace MinhTamHair.KhanchHang.Controllers
 					maKH = khachHang.MaKh,
 					hoTen = khachHang.HoTen,
 					hinhAnh = khachHang.HinhAnh,
-					maRank = khachHang.MaRank
+					maRank = khachHang.MaRank,
+					tenRank = khachHang.MaRankNavigation?.TenRank
 				}
 			});
 		}
@@ -154,6 +156,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 				Email = request.Email,
 				MatKhau = request.MatKhau, // Thực tế nên Hash (mã hóa) mật khẩu trước khi lưu
 				NgayTao = DateTime.Now,
+				MaRank = "RANK01",
 				TrangThai = 1, // 1 là Active
 				DiemTichLuy = 0
 			};
@@ -176,6 +179,10 @@ namespace MinhTamHair.KhanchHang.Controllers
 			_context.Refreshtokens.Add(refreshTokenEntity);
 			await _context.SaveChangesAsync();
 
+			var userResponse = await _context.Khachhangs
+	.Include(kh => kh.MaRankNavigation)
+	.FirstOrDefaultAsync(kh => kh.MaKh == newKhachHang.MaKh);
+
 			// 6. Trả về kết quả giống hệt API Login
 			return Ok(new
 			{
@@ -185,10 +192,11 @@ namespace MinhTamHair.KhanchHang.Controllers
 				refreshToken = refreshToken,
 				user = new
 				{
-					maKH = newKhachHang.MaKh,
-					hoTen = newKhachHang.HoTen,
-					hinhAnh = newKhachHang.HinhAnh,
-					maRank = newKhachHang.MaRank
+					maKH = userResponse.MaKh,
+					hoTen = userResponse.HoTen,
+					hinhAnh = userResponse.HinhAnh,
+					maRank = userResponse.MaRank,
+					tenRank = userResponse.MaRankNavigation?.TenRank
 				}
 			});
 		}
@@ -228,6 +236,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 
 				// 2. Kiểm tra khách hàng đã tồn tại trong DB chưa (dựa vào Email)
 				var khachHang = await _context.Khachhangs
+				.Include(kh => kh.MaRankNavigation)
 					.FirstOrDefaultAsync(kh => kh.Email == payload.Email);
 
 				// 3. Nếu chưa có, tạo tài khoản mới tự động
@@ -241,6 +250,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 						HinhAnh = payload.Picture, // Lấy luôn ảnh từ Google
 						NgayTao = DateTime.Now,
 						TrangThai = 1,
+						MaRank = "RANK01",
 						DiemTichLuy = 0,
 						MatKhau = Guid.NewGuid().ToString() // Mật khẩu ngẫu nhiên vì login qua Google
 					};
@@ -263,6 +273,10 @@ namespace MinhTamHair.KhanchHang.Controllers
 				_context.Refreshtokens.Add(refreshTokenEntity);
 				await _context.SaveChangesAsync();
 
+				var userResponse = await _context.Khachhangs
+	.Include(kh => kh.MaRankNavigation)
+	.FirstOrDefaultAsync(kh => kh.MaKh == khachHang.MaKh);
+
 				return Ok(new
 				{
 					success = true,
@@ -270,10 +284,11 @@ namespace MinhTamHair.KhanchHang.Controllers
 					refreshToken,
 					user = new
 					{
-						maKH = khachHang.MaKh,
-						hoTen = khachHang.HoTen,
-						hinhAnh = khachHang.HinhAnh,
-						maRank = khachHang.MaRank
+						maKH = userResponse.MaKh,
+						hoTen = userResponse.HoTen,
+						hinhAnh = userResponse.HinhAnh,
+						maRank = userResponse.MaRank,
+						tenRank = userResponse.MaRankNavigation?.TenRank
 					}
 				});
 			}
