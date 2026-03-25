@@ -1,13 +1,14 @@
-﻿using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
-using Microsoft.AspNetCore.Authentication.Cookies;
+﻿using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using MinhTamHair.Models;
 using MinhTamHair.Services;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -128,6 +129,19 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+app.UseStaticFiles();
+
+var uploadDirectory = Path.Combine(builder.Environment.ContentRootPath, "UserUploads");
+if (!Directory.Exists(uploadDirectory))
+{
+    Directory.CreateDirectory(uploadDirectory);
+}
+
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new PhysicalFileProvider(uploadDirectory), // Cập nhật lại biến này thay vì viết gộp
+    RequestPath = "/UserUploads"
+});
 
 app.UseCors("AllowVueApp"); // Bật CORS trước
 app.UseStaticFiles();
