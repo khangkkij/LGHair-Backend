@@ -77,33 +77,33 @@ builder.Services.AddAuthentication(options =>
 });
 builder.Services.AddSwaggerGen(c =>
 {
-	c.SwaggerDoc("v1", new OpenApiInfo { Title = "Minh Tam Hair API", Version = "v1" });
+    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Minh Tam Hair API", Version = "v1" });
 
-	// 1. Thêm nút Authorize (Định nghĩa kiểu bảo mật là Bearer Token)
-	c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
-	{
-		Description = "Vui lòng nhập token theo định dạng: Bearer {chuỗi_token_của_bạn}",
-		Name = "Authorization",
-		In = ParameterLocation.Header,
-		Type = SecuritySchemeType.ApiKey,
-		Scheme = "Bearer"
-	});
+    // 1. Thêm nút Authorize (Định nghĩa kiểu bảo mật là Bearer Token)
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Description = "Vui lòng nhập token theo định dạng: Bearer {chuỗi_token_của_bạn}",
+        Name = "Authorization",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.ApiKey,
+        Scheme = "Bearer"
+    });
 
-	// 2. Yêu cầu Swagger áp dụng Token này cho tất cả các API
-	c.AddSecurityRequirement(new OpenApiSecurityRequirement
-	{
-		{
-			new OpenApiSecurityScheme
-			{
-				Reference = new OpenApiReference
-				{
-					Type = ReferenceType.SecurityScheme,
-					Id = "Bearer"
-				}
-			},
-			new string[] {}
-		}
-	});
+    // 2. Yêu cầu Swagger áp dụng Token này cho tất cả các API
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference
+                {
+                    Type = ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            new string[] {}
+        }
+    });
 });
 // --- 5. Cấu hình Phân quyền (Authorization) ---
 builder.Services.AddAuthorization(options => {
@@ -117,8 +117,8 @@ builder.Services.AddTransient<IEmailService, EmailService>();
 var app = builder.Build();
 app.Use((context, next) =>
 {
-	context.Response.Headers.Append("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
-	return next();
+    context.Response.Headers.Append("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
+    return next();
 });
 
 // Configure the HTTP request pipeline.
@@ -127,8 +127,10 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI();
 }
-
-app.UseHttpsRedirection();
+else
+{
+    app.UseHttpsRedirection();
+}
 app.UseStaticFiles();
 
 var uploadDirectory = Path.Combine(builder.Environment.ContentRootPath, "UserUploads");
