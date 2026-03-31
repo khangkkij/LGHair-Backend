@@ -3,6 +3,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using Google.Apis.Auth;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -25,7 +26,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 		private readonly IMemoryCache _cache;
 		private readonly IEmailService _emailService;
 
-		public AccountController(MinhTamHairContext context, IConfiguration configuration, IMemoryCache cache, IEmailService emailService )
+		public AccountController(MinhTamHairContext context, IConfiguration configuration, IMemoryCache cache, IEmailService emailService)
 		{
 			_context = context;
 			_configuration = configuration;
@@ -39,51 +40,52 @@ namespace MinhTamHair.KhanchHang.Controllers
 			if (string.IsNullOrEmpty(request.Username) || string.IsNullOrEmpty(request.Password))
 				return BadRequest(new { success = false, message = "Vui lòng nhập tài khoản và mật khẩu." });
 
-			// 1. Kiểm tra tài khoản (Email hoặc SĐT)
 			var khachHang = await _context.Khachhangs
-			.Include(kh => kh.MaRankNavigation)
-				.FirstOrDefaultAsync(kh =>
-					(kh.Email == request.Username || kh.Sdt == request.Username)
-					&& kh.MatKhau== request.Password
-					&& kh.TrangThai == 1);
+				.FirstOrDefaultAsync(kh => (kh.Email == request.Username || kh.Sdt == request.Username)
+											&& kh.MatKhau == request.Password && kh.TrangThai == 1);
 
 			if (khachHang == null)
 				return Unauthorized(new { success = false, message = "Tài khoản hoặc mật khẩu không chính xác." });
 
-			// 2. Tạo Access Token (JWT)
-			var accessToken = GenerateJwtToken(khachHang);
+			// Cập nhật lại Rank dựa trên điểm hiện tại trước khi trả về cho khách
+			khachHang.MaRank = await GetRankByPointsAsync(khachHang.DiemTichLuy);
+			await _context.SaveChangesAsync();
 
-			// 3. Tạo Refresh Token và lưu vào DB (bảng REFRESHTOKEN của bạn)
+			var accessToken = GenerateJwtToken(khachHang);
 			var refreshToken = GenerateRefreshToken();
+
+			// Lưu Refresh Token
 			var refreshTokenEntity = new Refreshtoken
 			{
 				UserId = khachHang.MaKh,
 				Token = refreshToken,
 				IssuedAt = DateTime.Now,
-				ExpiredAt = DateTime.Now.AddDays(7) // Refresh Token sống 7 ngày
+				ExpiredAt = DateTime.Now.AddDays(7)
 			};
-
 			_context.Refreshtokens.Add(refreshTokenEntity);
 			await _context.SaveChangesAsync();
 
-			// 4. Trả kết quả về cho Vue.js
+			// Lấy thông tin user kèm tên Rank để hiển thị ở Frontend
+			var userResponse = await _context.Khachhangs
+				.Include(rank => rank.MaRankNavigation)
+				.FirstOrDefaultAsync(kh => kh.MaKh == khachHang.MaKh);
+
 			return Ok(new
 			{
 				success = true,
 				message = "Đăng nhập thành công!",
-				accessToken = accessToken,
-				refreshToken = refreshToken,
+				accessToken,
+				refreshToken,
 				user = new
 				{
-					maKH = khachHang.MaKh,
-					hoTen = khachHang.HoTen,
-					hinhAnh = khachHang.HinhAnh,
-					maRank = khachHang.MaRank,
-					tenRank = khachHang.MaRankNavigation?.TenRank
+					maKH = userResponse.MaKh,
+					hoTen = userResponse.HoTen,
+					hinhAnh = userResponse.HinhAnh,
+					maRank = userResponse.MaRank,
+					tenRank = userResponse.MaRankNavigation?.TenRank // Trả về tên hạng thực tế
 				}
 			});
 		}
-
 		// --- HÀM HỖ TRỢ TẠO JWT TOKEN ---
 		private string GenerateJwtToken(Khachhang kh)
 		{
@@ -156,7 +158,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 				Email = request.Email,
 				MatKhau = request.MatKhau, // Thực tế nên Hash (mã hóa) mật khẩu trước khi lưu
 				NgayTao = DateTime.Now,
-				MaRank = "RANK01",
+				MaRank = await GetRankByPointsAsync(0),
 				TrangThai = 1, // 1 là Active
 				DiemTichLuy = 0
 			};
@@ -247,14 +249,20 @@ namespace MinhTamHair.KhanchHang.Controllers
 						MaKh = "GG" + new Random().Next(100000, 999999).ToString(),
 						HoTen = payload.Name,
 						Email = payload.Email,
-						HinhAnh = payload.Picture, // Lấy luôn ảnh từ Google
+						HinhAnh = payload.Picture,
 						NgayTao = DateTime.Now,
 						TrangThai = 1,
-						MaRank = "RANK01",
+						MaRank = await GetRankByPointsAsync(0), // Không gán cứng RANK01
 						DiemTichLuy = 0,
-						MatKhau = Guid.NewGuid().ToString() // Mật khẩu ngẫu nhiên vì login qua Google
+						MatKhau = Guid.NewGuid().ToString()
 					};
 					_context.Khachhangs.Add(khachHang);
+					await _context.SaveChangesAsync();
+				}
+				else
+				{
+					// Nếu khách đã có tài khoản, cập nhật rank theo điểm hiện tại
+					khachHang.MaRank = await GetRankByPointsAsync(khachHang.DiemTichLuy);
 					await _context.SaveChangesAsync();
 				}
 
@@ -394,6 +402,57 @@ namespace MinhTamHair.KhanchHang.Controllers
 			await _context.SaveChangesAsync();
 
 			return Ok(new { success = true, message = "Đổi mật khẩu thành công!" });
+		}
+		// Hàm xác định MaRank bằng cách truy vấn Database mốc điểm từ bảng HANGTHANHVIEN
+		private async Task<string> GetRankByPointsAsync(int? points)
+		{
+			int p = points ?? 0;
+
+			// Lấy danh sách các hạng đang hoạt động, sắp xếp theo điểm tối thiểu giảm dần
+			var ranks = await _context.Hangthanhviens
+				.Where(r => r.TrangThai == 1)
+				.OrderByDescending(r => r.DiemToiThieu)
+				.ToListAsync();
+
+			// Tìm hạng đầu tiên mà điểm của khách >= điểm tối thiểu của hạng đó
+			var currentRank = ranks.FirstOrDefault(r => p >= r.DiemToiThieu);
+
+			// Trả về MaRank tìm được, mặc định là RANK01 nếu không tìm thấy
+			return currentRank?.MaRank ?? "RANK01";
+		}
+		[HttpGet("get-profile")]
+		[Authorize]
+		public async Task<IActionResult> GetProfile()
+		{
+			var maKh = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
+			if (string.IsNullOrEmpty(maKh)) return Unauthorized();
+
+			// Chỉ truy vấn DB đúng 1 lần
+			var khachHang = await _context.Khachhangs.FirstOrDefaultAsync(kh => kh.MaKh == maKh);
+			if (khachHang == null) return NotFound();
+
+			// Tính lại Rank mới nhất
+			khachHang.MaRank = await GetRankByPointsAsync(khachHang.DiemTichLuy);
+			await _context.SaveChangesAsync();
+
+			// TỐI ƯU Ở ĐÂY: Thay vì query DB tìm khách hàng lần nữa để Include, 
+			// ta chỉ yêu cầu EF Core nạp thêm dữ liệu của MaRankNavigation vào object hiện tại
+			await _context.Entry(khachHang).Reference(k => k.MaRankNavigation).LoadAsync();
+
+			return Ok(new
+			{
+				success = true,
+				user = new
+				{
+					maKH = khachHang.MaKh,
+					hoTen = khachHang.HoTen,
+					hinhAnh = khachHang.HinhAnh,
+					maRank = khachHang.MaRank,
+					tenRank = khachHang.MaRankNavigation?.TenRank,
+					diemTichLuy = khachHang.DiemTichLuy
+				}
+			});
 		}
 	}
 }
