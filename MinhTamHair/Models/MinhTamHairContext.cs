@@ -66,6 +66,7 @@ public partial class MinhTamHairContext : DbContext
     public virtual DbSet<TieudeDichvu> TieudeDichvus { get; set; }
 
     public virtual DbSet<Voucher> Vouchers { get; set; }
+    public DbSet<Combo_DichVu> Combo_DichVus { get; set; }
 
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -227,31 +228,6 @@ public partial class MinhTamHairContext : DbContext
                 .HasMaxLength(100)
                 .HasColumnName("tenCombo");
             entity.Property(e => e.TrangThai).HasColumnName("trangThai");
-
-            entity.HasMany(d => d.MaDvs).WithMany(p => p.MaCbs)
-                .UsingEntity<Dictionary<string, object>>(
-                    "ChitietCombo",
-                    r => r.HasOne<Dichvu>().WithMany()
-                        .HasForeignKey("MaDv")
-                        .OnDelete(DeleteBehavior.ClientSetNull)
-                        .HasConstraintName("FK__CHITIET_CO__maDV__534D60F1"),
-                    l => l.HasOne<Combo>().WithMany()
-                        .HasForeignKey("MaCb")
-                        .OnDelete(DeleteBehavior.ClientSetNull)
-                        .HasConstraintName("FK__CHITIET_CO__maCB__52593CB8"),
-                    j =>
-                    {
-                        j.HasKey("MaCb", "MaDv").HasName("PK__CHITIET___7D9DE3A586B4B5EC");
-                        j.ToTable("CHITIET_COMBO");
-                        j.IndexerProperty<string>("MaCb")
-                            .HasMaxLength(10)
-                            .IsUnicode(false)
-                            .HasColumnName("maCB");
-                        j.IndexerProperty<string>("MaDv")
-                            .HasMaxLength(10)
-                            .IsUnicode(false)
-                            .HasColumnName("maDV");
-                    });
         });
 
         modelBuilder.Entity<DanhMuc>(entity =>
@@ -924,6 +900,34 @@ public partial class MinhTamHairContext : DbContext
                 .HasColumnType("decimal(18, 2)")
                 .HasColumnName("soTienGiam");
             entity.Property(e => e.TrangThai).HasColumnName("trangThai");
+        });
+        modelBuilder.Entity<Combo_DichVu>(entity =>
+        {
+            entity.ToTable("CHITIET_COMBO");
+
+            entity.HasKey(e => new { e.MaCB, e.MaDV }); // Khai báo khóa chính composite
+
+            entity.Property(e => e.MaCB)
+                .HasMaxLength(10)
+                .IsUnicode(false)
+                .HasColumnName("maCB");
+
+            entity.Property(e => e.MaDV)
+                .HasMaxLength(10)
+                .IsUnicode(false)
+                .HasColumnName("maDV");
+
+            entity.HasOne(d => d.Combo)
+                .WithMany(p => p.Combo_DichVus)
+                .HasForeignKey(d => d.MaCB)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK__CHITIET_CO__maCB__52593CB8");
+
+            entity.HasOne(d => d.DichVu)
+                .WithMany(p => p.Combo_DichVus)
+                .HasForeignKey(d => d.MaDV)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK__CHITIET_CO__maDV__534D60F1");
         });
 
         OnModelCreatingPartial(modelBuilder);

@@ -29,8 +29,9 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             // 🔹 Combos chứa service này
             var combos = await _context.Combos
-                .Include(c => c.MaDvs)
-                .Where(c => c.MaDvs.Any(d => d.MaDv == id))
+                .Include(c => c.Combo_DichVus)
+                    .ThenInclude(cd => cd.DichVu)
+                .Where(c => c.Combo_DichVus.Any(cd => cd.MaDV == id))
                 .ToListAsync();
 
             // 🔹 Suggested services
