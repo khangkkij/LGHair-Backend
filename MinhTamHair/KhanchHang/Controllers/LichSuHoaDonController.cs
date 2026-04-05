@@ -1,0 +1,107 @@
+﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using MinhTamHair.Models;
+
+namespace MinhTamHair.KhanchHang.Controllers
+{
+    [Route("api/[controller]")]
+    [ApiController]
+    public class LichSuHoaDonController : Controller
+    {
+        private readonly MinhTamHairContext _context;
+        public LichSuHoaDonController(MinhTamHairContext context)
+        {
+            _context = context;
+            
+        }
+        [HttpGet("booking-history/{maKh}")]
+        public async Task<IActionResult> GetBookingHistory(string maKh)
+        {
+            // Kiểm tra nếu maKh trống
+            if (string.IsNullOrEmpty(maKh)) return BadRequest("Mã khách hàng không hợp lệ");
+
+            var history = await _context.Lichdats
+                .Where(ld => ld.MaKh == maKh)
+                .OrderByDescending(ld => ld.NgayHen)
+                .Select(ld => new {
+                    id = ld.MaLd,
+                    date = ld.NgayHen.HasValue ? ld.NgayHen.Value.ToString("yyyy-MM-dd") : "",
+                    service = _context.ChitietLichdats
+                        .Where(ct => ct.MaLd == ld.MaLd)
+                        .Select(ct => ct.MaDvNavigation.TenDv ?? ct.MaCbNavigation.TenCombo)
+                        .FirstOrDefault() ?? "Dịch vụ",
+                    amount = ld.TongTienDuKien ?? 0,
+                    // Quy ước trạng thái như đã bàn
+                    status = ld.TrangThai == 0 ? "cancelled" :
+                             ld.TrangThai == 1 ? "pending" :
+                             ld.TrangThai == 2 ? "paid-full" : "completed"
+                })
+                .ToListAsync();
+
+            return Ok(history);
+        }
+        [HttpPut("cancel-booking/{id}")]
+        public async Task<IActionResult> CancelBooking(string id)
+        {
+            var booking = await _context.Lichdats.FindAsync(id);
+            if (booking == null) return NotFound();
+
+            // Chỉ cho phép hủy nếu đơn đang ở trạng thái chờ (1 hoặc 2)
+            if (booking.TrangThai == 1 || booking.TrangThai == 2)
+            {
+                booking.TrangThai = 0; // Chuyển về trạng thái Hủy
+                await _context.SaveChangesAsync();
+                return Ok(new { message = "Đã hủy đơn thành công" });
+            }
+
+            return BadRequest("Không thể hủy đơn hàng này.");
+        }
+        [HttpGet("booking-detail/{id}")]
+        public async Task<IActionResult> GetBookingDetail(string id)
+        {
+            var detail = await _context.Lichdats
+                .Where(ld => ld.MaLd == id)
+                .Select(ld => new
+                {
+                    maLd = ld.MaLd,
+                    ngayHen = ld.NgayHen,
+                    gioHen = ld.GioBatDau,
+                    // 1. Danh sách dịch vụ cụ thể
+                    items = _context.ChitietLichdats
+                        .Where(ct => ct.MaLd == ld.MaLd)
+                        .Select(ct => new {
+                            name = ct.MaDvNavigation.TenDv ?? ct.MaCbNavigation.TenCombo,
+                            price = ct.GiaLucDat
+                        }).ToList(),
+
+                    // 2. Tính tổng tiền dịch vụ (chưa giảm)
+                    totalOriginal = _context.ChitietLichdats
+                        .Where(ct => ct.MaLd == ld.MaLd)
+                        .Sum(ct => ct.GiaLucDat),
+
+                    // 3. Lấy thông tin giảm giá từ Hóa Đơn
+                    voucherGiam = _context.HoaDons
+                        .Where(hd => hd.MaLd == ld.MaLd)
+                        .Select(hd => new {
+                            code = hd.MaCode,
+                            // Giả sử bạn có cột tiền giảm hoặc tính bằng: Tổng gốc - Thành tiền
+                            amount = (hd.TongTien ?? 0) - (hd.ThanhTien ?? 0)
+                        }).FirstOrDefault(),
+
+                    // 4. Số tiền cuối cùng phải trả
+                    finalAmount = _context.HoaDons
+                        .Where(hd => hd.MaLd == ld.MaLd)
+                        .Select(hd => hd.ThanhTien)
+                        .FirstOrDefault() ?? ld.TongTienDuKien,
+
+                    trangThai = ld.TrangThai
+                })
+                .FirstOrDefaultAsync();
+
+            if (detail == null) return NotFound();
+            return Ok(detail);
+        }    
+    }
+}
+ 
