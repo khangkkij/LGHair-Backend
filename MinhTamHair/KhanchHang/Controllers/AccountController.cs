@@ -63,6 +63,12 @@ namespace MinhTamHair.KhanchHang.Controllers
 				ExpiredAt = DateTime.Now.AddDays(7)
 			};
 			_context.Refreshtokens.Add(refreshTokenEntity);
+
+			// Gọi hàm lưu vào Cookie
+			int expireDays = request.RememberMe ? 30 : 1; // Tích thì 30 ngày, không thì 1 ngày
+			SetTokenCookie("accessToken", accessToken, expireDays);
+			SetTokenCookie("refreshToken", refreshToken, 7); // Refresh Token sống 7 ngày
+
 			await _context.SaveChangesAsync();
 
 			// Lấy thông tin user kèm tên Rank để hiển thị ở Frontend
@@ -74,8 +80,6 @@ namespace MinhTamHair.KhanchHang.Controllers
 			{
 				success = true,
 				message = "Đăng nhập thành công!",
-				accessToken,
-				refreshToken,
 				user = new
 				{
 					maKH = userResponse.MaKh,
@@ -170,6 +174,10 @@ namespace MinhTamHair.KhanchHang.Controllers
 			var accessToken = GenerateJwtToken(newKhachHang);
 			var refreshToken = GenerateRefreshToken();
 
+			// Gọi hàm lưu vào Cookie
+			SetTokenCookie("accessToken", accessToken, 1); // Access Token sống 1 ngày
+			SetTokenCookie("refreshToken", refreshToken, 7); // Refresh Token sống 7 ngày
+
 			var refreshTokenEntity = new Refreshtoken
 			{
 				UserId = newKhachHang.MaKh,
@@ -190,8 +198,6 @@ namespace MinhTamHair.KhanchHang.Controllers
 			{
 				success = true,
 				message = "Đăng ký thành công!",
-				accessToken = accessToken,
-				refreshToken = refreshToken,
 				user = new
 				{
 					maKH = userResponse.MaKh,
@@ -203,25 +209,28 @@ namespace MinhTamHair.KhanchHang.Controllers
 			});
 		}
 		[HttpPost("logout")]
-		public async Task<IActionResult> Logout([FromBody] LogoutRequest request)
+		public async Task<IActionResult> Logout()
 		{
-			if (string.IsNullOrEmpty(request.RefreshToken))
+			// 1. Tìm Refresh Token từ Cookie thay vì từ Body
+			if (Request.Cookies.TryGetValue("refreshToken", out string refreshToken))
 			{
-				return BadRequest(new { success = false, message = "RefreshToken không hợp lệ." });
+				var refreshTokenEntry = await _context.Refreshtokens
+					.FirstOrDefaultAsync(rt => rt.Token == refreshToken);
+
+				if (refreshTokenEntry != null)
+				{
+					// Xóa Refresh Token trong Database
+					_context.Refreshtokens.Remove(refreshTokenEntry);
+					await _context.SaveChangesAsync();
+				}
 			}
 
-			// Tìm RefreshToken trong CSDL (Lưu ý: Tên bảng Refreshtokens và class Refreshtoken viết thường chữ t)
-			var refreshTokenEntry = await _context.Refreshtokens
-				.FirstOrDefaultAsync(rt => rt.Token == request.RefreshToken);
+			// 2. "Ra lệnh" cho trình duyệt xóa sạch Cookie bảo mật
+			var cookieOptions = new CookieOptions { Secure = true, SameSite = SameSiteMode.None };
+			Response.Cookies.Delete("accessToken", cookieOptions);
+			Response.Cookies.Delete("refreshToken", cookieOptions);
 
-			if (refreshTokenEntry != null)
-			{
-				// Xóa Refresh Token để không thể dùng nó cấp mới Access Token được nữa
-				_context.Refreshtokens.Remove(refreshTokenEntry);
-				await _context.SaveChangesAsync();
-			}
-
-			return Ok(new { success = true, message = "Đã đăng xuất ở máy chủ." });
+			return Ok(new { success = true, message = "Đã đăng xuất an toàn." });
 		}
 		[HttpPost("google-login")]
 		public async Task<IActionResult> GoogleLogin([FromBody] GoogleLoginRequest request)
@@ -270,6 +279,10 @@ namespace MinhTamHair.KhanchHang.Controllers
 				var accessToken = GenerateJwtToken(khachHang);
 				var refreshToken = GenerateRefreshToken();
 
+				// Gọi hàm lưu vào Cookie
+				SetTokenCookie("accessToken", accessToken, 1); // Access Token sống 1 ngày
+				SetTokenCookie("refreshToken", refreshToken, 7); // Refresh Token sống 7 ngày
+
 				var refreshTokenEntity = new Refreshtoken
 				{
 					UserId = khachHang.MaKh,
@@ -288,8 +301,6 @@ namespace MinhTamHair.KhanchHang.Controllers
 				return Ok(new
 				{
 					success = true,
-					accessToken,
-					refreshToken,
 					user = new
 					{
 						maKH = userResponse.MaKh,
@@ -453,6 +464,58 @@ namespace MinhTamHair.KhanchHang.Controllers
 					diemTichLuy = khachHang.DiemTichLuy
 				}
 			});
+		}
+		private void SetTokenCookie(string cookieName, string token, int expireDays)
+		{
+			var cookieOptions = new CookieOptions
+			{
+				HttpOnly = true, // KHÔNG cho phép JavaScript (Vue) đọc cookie này -> Chống XSS
+				Secure = true, // Bắt buộc dùng HTTPS (localhost của bạn đang dùng https://localhost:7196 là OK)
+				SameSite = SameSiteMode.None, // RẤT QUAN TRỌNG: Cho phép gửi cookie chéo cổng (ví dụ Vue chạy port 5173, .NET chạy 7196)
+				Expires = DateTime.UtcNow.AddDays(expireDays)
+			};
+			Response.Cookies.Append(cookieName, token, cookieOptions);
+		}
+		[HttpPost("refresh-token")]
+		public async Task<IActionResult> RefreshToken()
+		{
+			// 1. Lấy Refresh Token từ Cookie
+			if (!Request.Cookies.TryGetValue("refreshToken", out var oldRefreshToken))
+			{
+				return Unauthorized(new { message = "Phiên đăng nhập đã hết hạn." });
+			}
+
+			// 2. Tìm trong DB xem Token này có hợp lệ không
+			var rtRecord = await _context.Refreshtokens.FirstOrDefaultAsync(rt => rt.Token == oldRefreshToken);
+
+			if (rtRecord == null || rtRecord.ExpiredAt <= DateTime.UtcNow)
+			{
+				// Token lởm hoặc hết hạn 7 ngày -> Xóa cookie luôn
+				var cookieOptions = new CookieOptions { Secure = true, SameSite = SameSiteMode.None };
+				Response.Cookies.Delete("accessToken", cookieOptions);
+				Response.Cookies.Delete("refreshToken", cookieOptions);
+				return Unauthorized(new { message = "Vui lòng đăng nhập lại." });
+			}
+
+			// 3. Lấy thông tin khách hàng
+			var khachHang = await _context.Khachhangs.FirstOrDefaultAsync(kh => kh.MaKh == rtRecord.UserId);
+			if (khachHang == null || khachHang.TrangThai != 1) return Unauthorized();
+
+			// 4. Cấp bộ Token mới
+			var newAccessToken = GenerateJwtToken(khachHang);
+			var newRefreshTokenString = GenerateRefreshToken();
+
+			// 5. Cập nhật vào Database
+			rtRecord.Token = newRefreshTokenString;
+			rtRecord.IssuedAt = DateTime.UtcNow;
+			rtRecord.ExpiredAt = DateTime.UtcNow.AddDays(7);
+			await _context.SaveChangesAsync();
+
+			// 6. Gắn lại vào Cookie
+			SetTokenCookie("accessToken", newAccessToken, 1);
+			SetTokenCookie("refreshToken", newRefreshTokenString, 7);
+
+			return Ok(new { success = true, message = "Làm mới Token thành công." });
 		}
 	}
 }
