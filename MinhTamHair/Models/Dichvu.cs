@@ -36,4 +36,5 @@ public partial class Dichvu
     public virtual ICollection<TieudeDichvu> TieudeDichvus { get; set; } = new List<TieudeDichvu>();
 
     public virtual ICollection<Combo> MaCbs { get; set; } = new List<Combo>();
+    public ICollection<Combo_DichVu> Combo_DichVus { get; set; }
 }
