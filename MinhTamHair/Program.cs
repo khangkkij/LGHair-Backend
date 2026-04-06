@@ -74,6 +74,19 @@ builder.Services.AddAuthentication(options =>
             return Task.CompletedTask;
         }
     };
+	options.Events = new JwtBearerEvents
+	{
+		OnMessageReceived = context =>
+		{
+			// Nếu request có chứa cookie tên là "accessToken"
+			if (context.Request.Cookies.ContainsKey("accessToken"))
+			{
+				// Lấy ra và gán vào context để .NET xác thực
+				context.Token = context.Request.Cookies["accessToken"];
+			}
+			return Task.CompletedTask;
+		}
+	};
 });
 builder.Services.AddSwaggerGen(c =>
 {
