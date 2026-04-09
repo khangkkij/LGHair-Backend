@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
 using System.Security.Claims;
+using System.IO;
 
 namespace MinhTamHair.Controllers
 {
@@ -20,7 +21,7 @@ namespace MinhTamHair.Controllers
             _env = env;
         }
 
-        // --- 1. LẤY THÔNG TIN PROFILE ---
+        // --- 1. LẤY THÔNG TIN PROFILE (TỰ ĐỘNG TÍNH ĐIỂM DỰA TRÊN TỔNG TIỀN) ---
         [HttpGet("me")]
         public async Task<IActionResult> GetProfile()
         {
@@ -33,6 +34,49 @@ namespace MinhTamHair.Controllers
 
             if (user == null) return NotFound(new { success = false, message = "Không tìm thấy người dùng." });
 
+            // ====================================================================
+            // 1. TÍNH TỔNG TIỀN ĐỂ XÉT HẠNG (Dùng TongTien để lấy giá trị dịch vụ 450k)
+            // Lưu ý: Đã đổi TienDaTra thành TongTien để không bị lỗi Model và cộng đủ điểm
+            // ====================================================================
+            var tongTienDaChi = await _context.HoaDons
+                .Where(h => h.MaKh == userId)
+                // Nếu muốn chỉ cộng điểm khi hóa đơn đã xong, bạn có thể thêm: && h.TrangThai == 1
+                .SumAsync(h => h.TongTien ?? 0);
+
+            // 2. Quy đổi ra điểm (1 điểm = 10.000 VNĐ)
+            int diemMoi = (int)(tongTienDaChi / 10000);
+
+            // 3. Lấy danh sách các hạng thành viên sắp xếp từ CAO xuống THẤP
+            var allRanks = await _context.Hangthanhviens
+                .Where(r => r.TrangThai == 1)
+                .OrderByDescending(r => r.DiemToiThieu)
+                .ToListAsync();
+
+            // 4. Tìm hạng phù hợp nhất với số điểm hiện tại
+            string? maRankMoi = null;
+            foreach (var rank in allRanks)
+            {
+                if (diemMoi >= rank.DiemToiThieu)
+                {
+                    maRankMoi = rank.MaRank;
+                    break;
+                }
+            }
+
+            // 5. Nếu có sự thay đổi về Điểm hoặc Hạng thì cập nhật ngay vào CSDL
+            if (user.DiemTichLuy != diemMoi || user.MaRank != maRankMoi)
+            {
+                user.DiemTichLuy = diemMoi;
+                user.MaRank = maRankMoi;
+                await _context.SaveChangesAsync();
+
+                if (!string.IsNullOrEmpty(maRankMoi))
+                {
+                    await _context.Entry(user).Reference(u => u.MaRankNavigation).LoadAsync();
+                }
+            }
+            // ====================================================================
+
             return Ok(new
             {
                 success = true,
@@ -42,8 +86,9 @@ namespace MinhTamHair.Controllers
                     email = user.Email,
                     sdt = user.Sdt,
                     hinhAnh = user.HinhAnh,
-                    gioiTinh = user.GioiTinh, // Lấy thêm giới tính từ DB
+                    gioiTinh = user.GioiTinh,
                     diemTichLuy = user.DiemTichLuy,
+                    tongTienDaChi = tongTienDaChi, // Truyền biến này về để UI tính tiền lẻ
                     tenRank = user.MaRankNavigation?.TenRank ?? "Thành viên Mới"
                 }
             });
@@ -58,7 +103,6 @@ namespace MinhTamHair.Controllers
 
             if (user == null) return NotFound(new { success = false, message = "Không tìm thấy người dùng." });
 
-            // 1. Kiểm tra Email hoặc SĐT này đã có người KHÁC dùng chưa
             var checkDuplicate = await _context.Khachhangs
                 .FirstOrDefaultAsync(k => (k.Email == request.Email || k.Sdt == request.Sdt) && k.MaKh != userId);
 
@@ -70,7 +114,6 @@ namespace MinhTamHair.Controllers
                     return BadRequest(new { success = false, message = "Email này đã được đăng ký bởi tài khoản khác." });
             }
 
-            // 2. Cập nhật thông tin thực tế có trong DB
             user.HoTen = request.HoTen;
             user.Email = request.Email;
             user.Sdt = request.Sdt;
@@ -84,7 +127,6 @@ namespace MinhTamHair.Controllers
         [HttpPost("upload-avatar")]
         public async Task<IActionResult> UploadAvatar(IFormFile file)
         {
-            // (Phần này giữ nguyên như code hôm trước của bạn đã chạy thành công)
             if (file == null || file.Length == 0)
                 return BadRequest(new { success = false, message = "Vui lòng chọn ảnh." });
 
@@ -118,7 +160,6 @@ namespace MinhTamHair.Controllers
         [HttpGet("ranks")]
         public async Task<IActionResult> GetRanks()
         {
-            // Lấy danh sách hạng và sắp xếp theo điểm tối thiểu tăng dần
             var ranks = await _context.Hangthanhviens
                 .Where(r => r.TrangThai == 1)
                 .OrderBy(r => r.DiemToiThieu)
@@ -134,7 +175,6 @@ namespace MinhTamHair.Controllers
         }
     }
 
-    // Class nhận dữ liệu cập nhật
     public class UpdateProfileRequest
     {
         public string HoTen { get; set; } = null!;
