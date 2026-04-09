@@ -1,6 +1,9 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using MinhTamHair.Models;
 using System.Linq;
+using Microsoft.Extensions.Caching.Distributed;
+using System.Text.Json;
+using System.Threading.Tasks;
 
 namespace MinhTamHair.KhanchHang.Controllers
 {
@@ -9,20 +12,30 @@ namespace MinhTamHair.KhanchHang.Controllers
     public class DanhSachDichVuController : ControllerBase
     {
         private readonly MinhTamHairContext _context;
+        private readonly IDistributedCache _cache;
 
-        public DanhSachDichVuController(MinhTamHairContext context)
+        public DanhSachDichVuController(MinhTamHairContext context, IDistributedCache cache)
         {
             _context = context;
+            _cache = cache;
         }
 
         // ==============================
         // GET ALL DATA
         // ==============================
         [HttpGet]
-        public IActionResult GetAll()
+        public async Task<IActionResult> GetAll()
         {
+            var cacheKey = "home_all";
+
+            var cachedData = await _cache.GetStringAsync(cacheKey);
+
+            if (cachedData != null)
+            {
+                return Content(cachedData, "application/json");
+            }
             var categories = _context.DanhMucs
-                .Where(x => x.TrangThai==1)
+                .Where(x => x.TrangThai == 1)
                 .Select(x => new
                 {
                     x.MaDm,
@@ -58,25 +71,45 @@ namespace MinhTamHair.KhanchHang.Controllers
                 })
                 .ToList();
 
-            return Ok(new
+            var result = new
             {
                 categories,
                 services,
                 combos
-            });
-        }
+            };
 
+            var json = JsonSerializer.Serialize(
+                result,
+                new JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+                });
+
+            await _cache.SetStringAsync(cacheKey, json,
+                new DistributedCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30)
+                });
+
+            return Ok(result);
+        }
         // ==============================
         // FILTER SERVICES
         // ==============================
         [HttpGet("filter")]
-        public IActionResult Filter(
+        public async Task<IActionResult> Filter(
             string? search,
             string? category,
             string? priceRange,
             int page = 1,
             int pageSize = 6)
         {
+            var cacheKey = $"filterServicesUser_{search}_{category}_{priceRange}_{page}_{pageSize}";
+            var cachedData = await _cache.GetStringAsync(cacheKey);
+            if (cachedData != null)
+            {
+                return Content(cachedData, "application/json");
+            }
             var query = _context.Dichvus
                 .Where(x => x.TrangThai == 1)
                 .AsQueryable();
@@ -129,7 +162,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         .Where(fs => fs.MaFlNavigation.TrangThai == 1
                             && fs.MaFlNavigation.NgayBatDau <= now
                             && fs.MaFlNavigation.NgayKetThuc >= now)
-                        .Select(fs => new  
+                        .Select(fs => new
                         {
                             fs.PhanTramGiam,
                             fs.MaFlNavigation.NgayKetThuc
@@ -137,14 +170,26 @@ namespace MinhTamHair.KhanchHang.Controllers
                         .FirstOrDefault()
                 })
                 .ToList();
-
-            return Ok(new
+            var result = new
             {
                 data = services,
                 totalItems,
                 totalPages = (int)Math.Ceiling((double)totalItems / pageSize),
                 currentPage = page
-            });
+            };
+            var json = JsonSerializer.Serialize(
+                result,
+                new JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+                });
+            await _cache.SetStringAsync(cacheKey, json,
+                new DistributedCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30)
+                }
+                );
+            return Ok(result);
         }
     }
 }

@@ -1,9 +1,12 @@
 ﻿using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Distributed;
 using MinhTamHair.KhanchHang.Models;
 using MinhTamHair.Models;
 using System;
+using Microsoft.Extensions.Caching.Distributed;
+using System.Text.Json;
 
 namespace MinhTamHair.KhanchHang.Controllers
 {
@@ -19,7 +22,7 @@ namespace MinhTamHair.KhanchHang.Controllers
         }
 
         [HttpGet]
-        public async Task<IActionResult> GetAll(string? keyword,string? maDm,int? trangThai)
+        public async Task<IActionResult> GetAll(string? keyword, string? maDm, int? trangThai)
         {
             var query = _context.Dichvus
                 .Include(x => x.Hinhanhs)
@@ -61,63 +64,45 @@ namespace MinhTamHair.KhanchHang.Controllers
                     })
                 })
                 .ToListAsync();
-
             return Ok(data);
         }
 
         [HttpPost]
-        public async Task<IActionResult> Create([FromForm] ComboDTO dto)
+        public async Task<IActionResult> Create([FromForm] DichVuCreateDTO dto)
         {
-            var maCB = dto.MaCB.Trim().ToUpper();
-            var tenCombo = dto.TenCombo.Trim().ToLower();
-
-            // ❌ Check mã
-            if (await _context.Combos.AnyAsync(x => x.MaCb == maCB))
-                return BadRequest(new { message = "Mã combo đã tồn tại." });
-
-            // ❌ Check tên
-            if (await _context.Combos.AnyAsync(x => x.TenCombo.ToLower() == tenCombo))
-                return BadRequest(new { message = "Tên combo đã tồn tại." });
-
-            var combo = new Combo
+            var dv = new Dichvu
             {
-                MaCb = maCB,
-                TenCombo = dto.TenCombo.Trim(),
+                MaDv = dto.MaDv,
+                TenDv = dto.TenDv,
                 Gia = dto.Gia,
+                MaDm = dto.MaDm,
                 MoTa = dto.MoTa,
+                ThoiGianLam = dto.ThoiGianLam,
                 TrangThai = dto.TrangThai
             };
 
-            // upload ảnh
-            if (dto.File != null && dto.File.Length > 0)
+            _context.Dichvus.Add(dv);
+
+            if (dto.Files != null && dto.Files.Count > 0)
             {
-                var folder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot/assets/images");
-
-                if (!Directory.Exists(folder))
-                    Directory.CreateDirectory(folder);
-
-                var fileName = Guid.NewGuid() + Path.GetExtension(dto.File.FileName);
-                var filePath = Path.Combine(folder, fileName);
-
-                using var stream = new FileStream(filePath, FileMode.Create);
-                await dto.File.CopyToAsync(stream);
-
-                combo.HinhAnh = "/assets/images/" + fileName;
-            }
-
-            _context.Combos.Add(combo);
-
-            foreach (var dv in dto.DichVus)
-            {
-                _context.Combo_DichVus.Add(new Combo_DichVu
+                foreach (var file in dto.Files)
                 {
-                    MaCB = maCB,
-                    MaDV = dv
-                });
+                    var fileName = Guid.NewGuid() + Path.GetExtension(file.FileName);
+                    var path = Path.Combine("wwwroot/assets/images", fileName);
+
+                    using var stream = new FileStream(path, FileMode.Create);
+                    await file.CopyToAsync(stream);
+
+                    _context.Hinhanhs.Add(new Hinhanh
+                    {
+                        MaDv = dv.MaDv,
+                        DuongDan = "/assets/images/" + fileName
+                    });
+                }
             }
 
             await _context.SaveChangesAsync();
-            return Ok(combo);
+            return Ok(dv);
         }
 
         [HttpPut("{id}")]
@@ -202,8 +187,16 @@ namespace MinhTamHair.KhanchHang.Controllers
         [HttpDelete("{id}")]
         public async Task<IActionResult> Delete(string id)
         {
+            var isUsedInCombo = await _context.Combo_DichVus.AnyAsync(x => x.MaDV == id);
+
+            if (isUsedInCombo)
+            {
+                return BadRequest("Dịch vụ đang nằm trong combo, không thể xóa!");
+            }
             var dv = await _context.Dichvus
                 .Include(x => x.Hinhanhs)
+                .Include(x => x.TieudeDichvus)
+                    .ThenInclude(td => td.ChitietTieudes)
                 .FirstOrDefaultAsync(x => x.MaDv == id);
 
             if (dv == null) return NotFound();
@@ -211,19 +204,29 @@ namespace MinhTamHair.KhanchHang.Controllers
             {
                 return BadRequest("Dịch vụ đang được sử dụng, không thể xóa!");
             }
-            // ✅ XÓA FILE ẢNH TRONG SERVER
+            // Xóa file ảnh
             foreach (var img in dv.Hinhanhs)
             {
                 var path = Path.Combine("wwwroot", img.DuongDan.TrimStart('/'));
-
                 if (System.IO.File.Exists(path))
                 {
                     System.IO.File.Delete(path);
                 }
             }
 
-            // ✅ XÓA DB
+            // Xóa chi tiết tiêu đề
+            foreach (var td in dv.TieudeDichvus)
+            {
+                _context.ChitietTieudes.RemoveRange(td.ChitietTieudes);
+            }
+
+            // Xóa tiêu đề dịch vụ
+            _context.TieudeDichvus.RemoveRange(dv.TieudeDichvus);
+
+            // Xóa ảnh
             _context.Hinhanhs.RemoveRange(dv.Hinhanhs);
+
+            // Xóa dịch vụ
             _context.Dichvus.Remove(dv);
 
             await _context.SaveChangesAsync();
@@ -240,7 +243,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                     dm.TenDanhMuc,
                 })
                 .ToListAsync();
-
             return Ok(data);
         }
     }

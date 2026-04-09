@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Mvc;
 using MinhTamHair.Models;
 using MinhTamHair.KhanchHang.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Distributed;
+using System.Text.Json;
 
 namespace MinhTamHair.KhanchHang.Controllers
 {
@@ -11,17 +13,29 @@ namespace MinhTamHair.KhanchHang.Controllers
     public class ServicesController : ControllerBase
     {
         private readonly MinhTamHairContext _context;
+        private readonly IDistributedCache _cache;
 
-        public ServicesController(MinhTamHairContext context)
+        public ServicesController(MinhTamHairContext context, IDistributedCache cache)
         {
             _context = context;
+            _cache = cache;
         }
 
         [HttpGet("{id}")]
         public async Task<IActionResult> GetServiceDetail(string id)
         {
+            var cacheKey=$"DetailServiceUser_{id}";
+            var cachedData=await _cache.GetStringAsync(cacheKey);
+            if (cachedData != null)
+            {
+                return Content(cachedData,"application/json");
+            }
+            // 🔹 Load service + ảnh + tiêu đề + chi tiết tiêu đề + kiểu tóc
             var service = await _context.Dichvus
                 .Include(d => d.Hinhanhs)
+                .Include(d => d.TieudeDichvus)
+                    .ThenInclude(td => td.ChitietTieudes)
+                .Include(d => d.Kifutocs)
                 .FirstOrDefaultAsync(d => d.MaDv == id);
 
             if (service == null)
@@ -34,15 +48,16 @@ namespace MinhTamHair.KhanchHang.Controllers
                 .Where(c => c.Combo_DichVus.Any(cd => cd.MaDV == id))
                 .ToListAsync();
 
-            // 🔹 Suggested services
+            // 🔹 Suggested services (lấy cùng danh mục nếu có, fallback random)
             var suggested = await _context.Dichvus
-                .Where(d => d.MaDv != id)
+                .Where(d => d.MaDv != id && d.TrangThai == 1)
+                .OrderBy(d => d.MaDm == service.MaDm ? 0 : 1) // ưu tiên cùng danh mục
                 .Take(3)
                 .ToListAsync();
 
             var now = DateTime.Now;
 
-            // 🔹 Flash sale active
+            // 🔹 Flash sale đang active
             var flashSales = await _context.ChitietFlashsales
                 .Where(ct => ct.MaFlNavigation.TrangThai == 1
                     && ct.MaFlNavigation.NgayBatDau <= now
@@ -79,12 +94,45 @@ namespace MinhTamHair.KhanchHang.Controllers
                 GiaGoc = giaGocMain,
                 PhanTramGiam = ptgMain,
                 NgayKetThuc = ngayKetThucMain,
-
                 ThoiGianLam = service.ThoiGianLam ?? 0,
                 MoTa = service.MoTa,
 
                 Images = service.Hinhanhs
                     .Select(h => h.DuongDan)
+                    .ToList(),
+
+                // ================= TIÊU ĐỀ + CHI TIẾT TIÊU ĐỀ =================
+                TieudeDichvus = service.TieudeDichvus
+                    .Where(td => td.TrangThai == 1)
+                    .OrderBy(td => td.SoThuTu)
+                    .Select(td => new
+                    {
+                        MaTd = td.MaTd,
+                        TenTieuDe = td.TenTieuDe,
+                        MoTaTieuDe = td.MoTaTieuDe,
+                        ChiTiet = td.ChitietTieudes
+                            .OrderBy(ct => ct.SoThuTu)
+                            .Select(ct => new
+                            {
+                                MaCttd = ct.MaCttd,
+                                TenTieuDe = ct.TenTieuDe,
+                                MoTaTieuDe = ct.MoTaTieuDe,
+                                HinhAnh = ct.HinhAnh
+                            })
+                            .ToList()
+                    })
+                    .ToList(),
+
+                // ================= KIỂU TÓC (CAROUSEL) =================
+                KieuTocs = service.Kifutocs
+                    .OrderBy(kt => kt.MaKt)
+                    .Select(kt => new
+                    {
+                        MaKt = kt.MaKt,
+                        TenKieuToc = kt.TenKieuToc,
+                        HinhAnh = kt.HinhAnh,
+                        MoTa = kt.MoTa
+                    })
                     .ToList(),
 
                 // ================= COMBOS =================
@@ -94,13 +142,9 @@ namespace MinhTamHair.KhanchHang.Controllers
                         .Where(f => c.MaDvs.Any(d => d.MaDv == f.MaDv))
                         .ToList();
 
-                    DateTime? ngayKetThuc = null;
-
-                    if (fsList.Any())
-                    {
-                        // lấy sale gần nhất (sắp hết)
-                        ngayKetThuc = fsList.Min(f => f.NgayKetThuc);
-                    }
+                    DateTime? ngayKetThuc = fsList.Any()
+                        ? fsList.Min(f => f.NgayKetThuc)
+                        : (DateTime?)null;
 
                     return new ComboDto
                     {
@@ -108,6 +152,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         TenCombo = c.TenCombo,
                         Gia = c.Gia ?? 0,
                         MoTa = c.MoTa,
+                        HinhAnh = c.HinhAnh,
                         Items = c.MaDvs.Select(d => d.TenDv).ToList(),
                     };
                 }).ToList(),
@@ -137,7 +182,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                         GiaGoc = giaGoc,
                         PhanTramGiam = ptg,
                         NgayKetThuc = ngayKetThuc,
-
                         ThoiGianLam = s.ThoiGianLam ?? 0,
                         MoTa = s.MoTa,
                         HinhAnh = _context.Hinhanhs
@@ -147,7 +191,16 @@ namespace MinhTamHair.KhanchHang.Controllers
                     };
                 }).ToList()
             };
-
+            var json = JsonSerializer.Serialize(result,
+                new JsonSerializerOptions
+                {
+                    PropertyNamingPolicy=JsonNamingPolicy.CamelCase
+                });
+            await _cache.SetStringAsync(cacheKey, json,
+                new DistributedCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10)
+                });
             return Ok(result);
         }
     }

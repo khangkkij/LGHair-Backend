@@ -39,7 +39,12 @@ builder.Services.AddCors(options =>
               .AllowCredentials(); // Bắt buộc để gửi AuthToken qua Cookie
     });
 });
-
+// cấu hình redis
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = "localhost:6379,password=123456";
+    options.InstanceName = "MyApp:";
+});
 // --- 4. Cấu hình Authentication (JWT + Cookie ) ---
 builder.Services.AddAuthentication(options =>
 {
@@ -113,7 +118,6 @@ builder.Services.AddAuthorization(options => {
 });
 builder.Services.AddMemoryCache();
 builder.Services.AddTransient<IEmailService, EmailService>();
-
 var app = builder.Build();
 app.Use((context, next) =>
 {
@@ -146,7 +150,6 @@ app.UseStaticFiles(new StaticFileOptions
 });
 
 app.UseCors("AllowVueApp"); // Bật CORS trước
-app.UseStaticFiles();
 app.UseAuthentication();    // Bật Xác thực trước
 app.UseAuthorization();     // Bật Phân quyền sau
 

@@ -1,7 +1,9 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Distributed;
 using MinhTamHair.Models;
-
+using Microsoft.Extensions.Caching.Distributed;
+using System.Text.Json;
 namespace MinhTamHair.Controllers
 {
     [ApiController]
@@ -10,11 +12,13 @@ namespace MinhTamHair.Controllers
     {
         private readonly MinhTamHairContext _context;
         private readonly IWebHostEnvironment _env;
+        private readonly IDistributedCache _cache;
 
-        public DanhMucController(MinhTamHairContext context, IWebHostEnvironment env)
+        public DanhMucController(MinhTamHairContext context, IWebHostEnvironment env, IDistributedCache cache)
         {
             _context = context;
             _env = env;
+            _cache = cache;
         }
 
         // ──────────────────────────────────────────────────────────
@@ -48,7 +52,6 @@ namespace MinhTamHair.Controllers
                 trangThai = d.TrangThai,
                 soDichVu = d.Dichvus?.Count ?? 0
             });
-
             return Ok(result);
         }
 
@@ -64,7 +67,7 @@ namespace MinhTamHair.Controllers
 
             if (d == null) return NotFound(new { message = "Không tìm thấy danh mục." });
 
-            return Ok(new
+            var result = new
             {
                 maDM = d.MaDm,
                 tenDanhMuc = d.TenDanhMuc,
@@ -72,7 +75,8 @@ namespace MinhTamHair.Controllers
                 ngayTao = d.NgayTao,
                 trangThai = d.TrangThai,
                 soDichVu = d.Dichvus?.Count ?? 0
-            });
+            };
+            return Ok(result);
         }
 
         // ──────────────────────────────────────────────────────────
@@ -90,6 +94,9 @@ namespace MinhTamHair.Controllers
 
             if (string.IsNullOrWhiteSpace(dto.TenDanhMuc))
                 return BadRequest(new { message = "Tên danh mục không được để trống." });
+            // ❌ Check tên danh mục
+            if (await _context.DanhMucs.AnyAsync(x => x.TenDanhMuc.ToLower() == dto.TenDanhMuc.Trim().ToLower()))
+                return BadRequest(new { message = "Tên danh mục đã tồn tại." });
 
             string? hinhAnhPath = null;
             if (dto.File != null)
