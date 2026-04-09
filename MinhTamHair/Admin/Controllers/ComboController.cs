@@ -4,6 +4,8 @@ using Microsoft.EntityFrameworkCore;
 using MinhTamHair.KhanchHang.Models;
 using MinhTamHair.Models;
 using System;
+using Microsoft.Extensions.Caching.Distributed;
+using System.Text.Json;
 
 namespace MinhTamHair.KhanchHang.Controllers
 {
@@ -12,10 +14,12 @@ namespace MinhTamHair.KhanchHang.Controllers
     public class ComboController : ControllerBase
     {
         private readonly MinhTamHairContext _context;
+        private readonly IDistributedCache _cache;
 
-        public ComboController(MinhTamHairContext context)
+        public ComboController(MinhTamHairContext context, IDistributedCache cache)
         {
             _context = context;
+            _cache = cache;
         }
 
         [HttpGet]
