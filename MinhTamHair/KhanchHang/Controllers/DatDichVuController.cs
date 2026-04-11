@@ -6,6 +6,7 @@ using MinhTamHair.Models;
 using System.Text; // Để dùng Encoding
 using System.Security.Cryptography; // Để dùng HMACSHA256
 using System.Net.Http.Json; // Để dùng PostAsJsonAsync cho MoMo
+using MinhTamHair.Services;
 
 namespace MinhTamHair.KhanchHang.Controllers
 {
@@ -15,10 +16,12 @@ namespace MinhTamHair.KhanchHang.Controllers
     {
         private readonly MinhTamHairContext _context;
         private readonly IConfiguration _configuration;
-        public DatDichVuController(MinhTamHairContext context, IConfiguration configuration)
+        private readonly IQrEmailService _qrEmailService;
+        public DatDichVuController(MinhTamHairContext context, IConfiguration configuration, IQrEmailService qrEmailService)
         {
             _context = context;
             _configuration = configuration;
+            _qrEmailService = qrEmailService;
         }
         [HttpGet("data-booking")]
         public IActionResult GetAll()
@@ -159,6 +162,43 @@ namespace MinhTamHair.KhanchHang.Controllers
             using var transaction = _context.Database.BeginTransaction();
             try
             {
+                string currentMaKh = model.MaKh;
+
+                // Nếu người đặt là khách vãng lai (GUEST)
+                if (currentMaKh == "GUEST" && !string.IsNullOrEmpty(model.Phone))
+                {
+                    // Kiểm tra xem SĐT này đã từng đặt lịch hoặc có trong DB chưa
+                    var existingKhach = await _context.Khachhangs.FirstOrDefaultAsync(x => x.Sdt == model.Phone);
+
+                    if (existingKhach != null)
+                    {
+                        currentMaKh = existingKhach.MaKh; // Đã có thì dùng lại mã cũ
+                    }
+                    else
+                    {
+                        // Tạo mã KH mới: Lấy chữ "KH" ghép với 4 số đầu SĐT + Random 3 số để tránh trùng lặp nếu 2 người chung đầu số
+                        string prefixSdt = model.Phone.Length >= 4 ? model.Phone.Substring(0, 4) : "0000";
+                        string newMaKh = "KH" + prefixSdt + new Random().Next(100, 999).ToString();
+
+                        var newKhachHang = new Khachhang
+                        {
+                            MaKh = newMaKh,
+                            HoTen = model.HoTen,
+                            Sdt = model.Phone,
+                            Email = model.Email,
+                            MatKhau = null, // Mật khẩu null theo đúng ý bạn
+                            TrangThai = 1,
+                            NgayTao = DateTime.Now,
+                            DiemTichLuy = 0,
+                            MaRank = "RANK01" // Gán rank Đồng mặc định
+                        };
+
+                        _context.Khachhangs.Add(newKhachHang);
+                        await _context.SaveChangesAsync(); // Lưu ngay để có khách hàng trước khi tạo Hóa đơn
+
+                        currentMaKh = newMaKh; // Gán lại mã mới cho quy trình chạy phía dưới
+                    }
+                }
                 string shortMaLd = model.BookingId.Length > 10
                     ? model.BookingId.Substring(model.BookingId.Length - 10)
                     : model.BookingId;
@@ -171,7 +211,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 var lichDat = new Lichdat
                 {
                     MaLd = shortMaLd,
-                    MaKh = model.MaKh,
+                    MaKh = currentMaKh,
                     NgayHen = DateOnly.FromDateTime(model.NgayHen),
                     GioBatDau = TimeOnly.FromDateTime(model.NgayHen), // Lấy giờ từ NgayHen
                     TongTienDuKien = total,
@@ -185,11 +225,12 @@ namespace MinhTamHair.KhanchHang.Controllers
                 {
                     MaHd = shortMaLd,
                     MaLd = shortMaLd,
-                    MaKh = model.MaKh,
+                    MaKh = currentMaKh,
                     NgayTao = DateTime.Now,
                     TongTien = total,
                     TienDaTra = (paymentMode == "10") ? (total * 0.1m) : total,
-                    TrangThai = 0 // 0: Hóa đơn chưa hoàn tất (đang thực hiện)
+                    TrangThai = 0, // 0: Hóa đơn chưa hoàn tất (đang thực hiện)
+                    MaCode = string.IsNullOrEmpty(model.MaCode) ? null : model.MaCode
                 };
                 _context.HoaDons.Add(hoaDon);
 
@@ -228,7 +269,26 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
+                try
+                {
+                    var khachHang = await _context.Khachhangs.FindAsync(model.MaKh);
+                    string tenKhach = khachHang?.HoTen ?? "Khách hàng";
 
+                    // LOGIC VÀNG: Ưu tiên lấy Email từ Vue gửi lên (model.Email). 
+                    // Nếu khách không nhập gì trên web thì mới moi từ Database ra (khachHang?.Email)
+                    string emailNhan = !string.IsNullOrEmpty(model.Email) ? model.Email : khachHang?.Email;
+
+                    if (!string.IsNullOrEmpty(emailNhan))
+                    {
+                        // Gọi qua _qrEmailService và truyền đúng emailNhan vào
+                        await _qrEmailService.SendBookingEmailAsync(emailNhan, tenKhach, shortMaLd, model.NgayHen, total);
+                        Console.WriteLine("Đã gửi mã QR thành công tới email: " + emailNhan);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("LỖI GỬI EMAIL: " + ex.Message);
+                }
                 return Ok(new { message = "Thành công", maLd = shortMaLd });
             }
             catch (Exception ex)
