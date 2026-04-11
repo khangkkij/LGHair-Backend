@@ -13,7 +13,7 @@ namespace MinhTamHair.KhanchHang.Controllers
         public LichSuHoaDonController(MinhTamHairContext context)
         {
             _context = context;
-            
+
         }
         [HttpGet("booking-history/{maKh}")]
         public async Task<IActionResult> GetBookingHistory(string maKh)
@@ -67,7 +67,8 @@ namespace MinhTamHair.KhanchHang.Controllers
                     maLd = ld.MaLd,
                     ngayHen = ld.NgayHen,
                     gioHen = ld.GioBatDau,
-                    // 1. Danh sách dịch vụ cụ thể
+
+                    // 1. Lấy danh sách dịch vụ cụ thể
                     items = _context.ChitietLichdats
                         .Where(ct => ct.MaLd == ld.MaLd)
                         .Select(ct => new {
@@ -80,28 +81,39 @@ namespace MinhTamHair.KhanchHang.Controllers
                         .Where(ct => ct.MaLd == ld.MaLd)
                         .Sum(ct => ct.GiaLucDat),
 
-                    // 3. Lấy thông tin giảm giá từ Hóa Đơn
+                    // 3. Lấy CHÍNH XÁC số tiền giảm từ bảng VOUCHER trong Database
                     voucherGiam = _context.HoaDons
-                        .Where(hd => hd.MaLd == ld.MaLd)
+                        .Where(hd => hd.MaLd == ld.MaLd && hd.MaCode != null && hd.MaCode != "")
                         .Select(hd => new {
                             code = hd.MaCode,
-                            // Giả sử bạn có cột tiền giảm hoặc tính bằng: Tổng gốc - Thành tiền
-                            amount = (hd.TongTien ?? 0) - (hd.ThanhTien ?? 0)
+                            amount = _context.Vouchers
+                                .Where(v => v.MaCode == hd.MaCode)
+                                .Select(v => v.SoTienGiam > 0 ? v.SoTienGiam :
+                                            (v.PhanTramGiam > 0 ? (_context.ChitietLichdats.Where(ct => ct.MaLd == ld.MaLd).Sum(ct => ct.GiaLucDat) * v.PhanTramGiam / 100) : 0))
+                                .FirstOrDefault()
                         }).FirstOrDefault(),
-
-                    // 4. Số tiền cuối cùng phải trả
-                    finalAmount = _context.HoaDons
-                        .Where(hd => hd.MaLd == ld.MaLd)
-                        .Select(hd => hd.ThanhTien)
-                        .FirstOrDefault() ?? ld.TongTienDuKien,
 
                     trangThai = ld.TrangThai
                 })
                 .FirstOrDefaultAsync();
 
             if (detail == null) return NotFound();
-            return Ok(detail);
-        }    
+
+            decimal discount = detail.voucherGiam != null ? (detail.voucherGiam.amount ?? 0) : 0;
+            decimal finalAmount = (detail.totalOriginal ?? 0) - discount;
+
+            // Trả về dữ liệu đã được tính toán kỹ lưỡng
+            return Ok(new
+            {
+                maLd = detail.maLd,
+                ngayHen = detail.ngayHen,
+                gioHen = detail.gioHen,
+                items = detail.items,
+                totalOriginal = detail.totalOriginal,
+                voucherGiam = detail.voucherGiam,
+                finalAmount = finalAmount,
+                trangThai = detail.trangThai
+            });
+        }
     }
 }
- 

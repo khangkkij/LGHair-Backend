@@ -9,6 +9,7 @@ using MinhTamHair.Services;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using MinhTamHair.Services;
 using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -133,6 +134,7 @@ builder.Services.AddAuthorization(options => {
 });
 builder.Services.AddMemoryCache();
 builder.Services.AddTransient<IEmailService, EmailService>();
+builder.Services.AddScoped<IQrEmailService, QrEmailService>();
 var app = builder.Build();
 app.Use((context, next) =>
 {
