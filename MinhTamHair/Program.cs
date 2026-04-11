@@ -10,6 +10,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MinhTamHair.Services;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -41,12 +42,12 @@ builder.Services.AddCors(options =>
     });
 });
 // cấu hình redis
-//builder.Services.AddStackExchangeRedisCache(options =>
-//{
-//    options.Configuration = "localhost:5174,password=123456";
-//    options.InstanceName = "MyApp:";
-//});
-builder.Services.AddDistributedMemoryCache();
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = builder.Configuration.GetValue<string>("Redis");
+    options.InstanceName = "MyApp:";
+});
+//builder.Services.AddDistributedMemoryCache();
 // --- 4. Cấu hình Authentication (JWT + Cookie ) ---
 builder.Services.AddAuthentication(options =>
 {

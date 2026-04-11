@@ -24,11 +24,11 @@ namespace MinhTamHair.KhanchHang.Controllers
         [HttpGet("{id}")]
         public async Task<IActionResult> GetServiceDetail(string id)
         {
-            var cacheKey=$"DetailServiceUser_{id}";
-            var cachedData=await _cache.GetStringAsync(cacheKey);
+            var cacheKey = $"DetailServiceUser_{id}";
+            var cachedData = await _cache.GetStringAsync(cacheKey);
             if (cachedData != null)
             {
-                return Content(cachedData,"application/json");
+                return Content(cachedData, "application/json");
             }
             // 🔹 Load service + ảnh + tiêu đề + chi tiết tiêu đề + kiểu tóc
             var service = await _context.Dichvus
@@ -138,22 +138,32 @@ namespace MinhTamHair.KhanchHang.Controllers
                 // ================= COMBOS =================
                 RelatedCombos = combos.Select(c =>
                 {
-                    var fsList = flashSales
-                        .Where(f => c.MaDvs.Any(d => d.MaDv == f.MaDv))
-                        .ToList();
+                    // Tính giá gốc = tổng giá các dịch vụ trong combo
+                    var giaGocCombo = c.Combo_DichVus
+                        .Sum(cd => cd.DichVu?.Gia ?? 0);
 
-                    DateTime? ngayKetThuc = fsList.Any()
-                        ? fsList.Min(f => f.NgayKetThuc)
-                        : (DateTime?)null;
+                    var giaCombo = c.Gia ?? 0;
 
-                    return new ComboDto
+                    // Tính % tiết kiệm so với mua lẻ
+                    int? ptgCombo = null;
+                    if (giaGocCombo > 0 && giaCombo < giaGocCombo)
+                    {
+                        ptgCombo = (int)Math.Round((1 - (double)giaCombo / (double)giaGocCombo) * 100);
+                    }
+
+                    return new
                     {
                         Id = c.MaCb,
                         TenCombo = c.TenCombo,
-                        Gia = c.Gia ?? 0,
+                        Gia = giaCombo,
+                        GiaGoc = giaGocCombo > giaCombo ? (decimal?)giaGocCombo : null,
+                        PhanTramGiam = ptgCombo,
                         MoTa = c.MoTa,
                         HinhAnh = c.HinhAnh,
-                        Items = c.MaDvs.Select(d => d.TenDv).ToList(),
+                        Items = c.Combo_DichVus
+                            .Select(cd => cd.DichVu != null ? cd.DichVu.TenDv : null)
+                            .Where(t => t != null)
+                            .ToList(),
                     };
                 }).ToList(),
 
@@ -194,12 +204,12 @@ namespace MinhTamHair.KhanchHang.Controllers
             var json = JsonSerializer.Serialize(result,
                 new JsonSerializerOptions
                 {
-                    PropertyNamingPolicy=JsonNamingPolicy.CamelCase
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
                 });
             await _cache.SetStringAsync(cacheKey, json,
                 new DistributedCacheEntryOptions
                 {
-                    AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10)
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(1)
                 });
             return Ok(result);
         }
