@@ -14,38 +14,38 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 builder.Services.AddDbContext<MinhTamHairContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+	options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 // Cấu hình JSON để tránh lỗi vòng lặp khi truy vấn dữ liệu quan hệ (Voucher <-> KhachHang)
 builder.Services.AddControllers()
-    .AddJsonOptions(options =>
-    {
-        // Đảm bảo Frontend Vue nhận được maCode thay vì MaCode
-        options.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
-        // Chống lỗi vòng lặp khi truy vấn dữ liệu quan hệ (Voucher <-> KhachHang)
-        options.JsonSerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles;
-    });
+	.AddJsonOptions(options =>
+	{
+		// Đảm bảo Frontend Vue nhận được maCode thay vì MaCode
+		options.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
+		// Chống lỗi vòng lặp khi truy vấn dữ liệu quan hệ (Voucher <-> KhachHang)
+		options.JsonSerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles;
+	});
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowVueApp", policy =>
-    {
-        //Tuyệt dổi ko được sửa cổng mặt dịnh là 5173 vì Vite/Vue sẽ chạy ở cổng này, nếu sửa sẽ bị lỗi CORS
-        // thành viên nghe theo
-        policy.WithOrigins("http://localhost:5173") // Cổng mặc định của Vite/Vue
-              .AllowAnyHeader()
-              .AllowAnyMethod()
-              .AllowCredentials(); // Bắt buộc để gửi AuthToken qua Cookie
-    });
+	options.AddPolicy("AllowVueApp", policy =>
+	{
+		//Tuyệt dổi ko được sửa cổng mặt dịnh là 5173 vì Vite/Vue sẽ chạy ở cổng này, nếu sửa sẽ bị lỗi CORS
+		// thành viên nghe theo
+		policy.WithOrigins("http://localhost:5173") // Cổng mặc định của Vite/Vue
+			  .AllowAnyHeader()
+			  .AllowAnyMethod()
+			  .AllowCredentials(); // Bắt buộc để gửi AuthToken qua Cookie
+	});
 });
 
 // --- 4. Cấu hình Authentication (JWT + Cookie ) ---
 builder.Services.AddAuthentication(options =>
 {
-    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultSignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+	options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+	options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+	options.DefaultSignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
 })
 .AddCookie()
 .AddJwtBearer(options =>
@@ -61,68 +61,74 @@ builder.Services.AddAuthentication(options =>
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]))
     };
 
-    // QUAN TRỌNG: Tự động lấy Token từ Cookie "AuthToken" để xác thực người dùng
     options.Events = new JwtBearerEvents
     {
         OnMessageReceived = context =>
         {
-            var accessToken = context.Request.Cookies["AuthToken"];
-            if (!string.IsNullOrEmpty(accessToken))
+            // Kiểm tra đường dẫn Request để biết đang là Admin hay Khách hàng
+            var path = context.Request.Path.Value!;
+            
+            if (path.Contains("/api/admin"))
             {
-                context.Token = accessToken;
+                // Nếu là Admin: Phải tìm đúng cái "túi" tên adminAccessToken
+                if (context.Request.Cookies.ContainsKey("adminAccessToken"))
+                {
+                    context.Token = context.Request.Cookies["adminAccessToken"];
+                }
+            }
+            else
+            {
+                // Nếu là Khách hàng: Tìm cái túi tên accessToken
+                if (context.Request.Cookies.ContainsKey("accessToken"))
+                {
+                    context.Token = context.Request.Cookies["accessToken"];
+                }
+                // Dự phòng trường hợp bạn dùng tên cũ AuthToken
+                else if (context.Request.Cookies.ContainsKey("AuthToken"))
+                {
+                    context.Token = context.Request.Cookies["AuthToken"];
+                }
             }
             return Task.CompletedTask;
         }
     };
-	options.Events = new JwtBearerEvents
-	{
-		OnMessageReceived = context =>
-		{
-			// Nếu request có chứa cookie tên là "accessToken"
-			if (context.Request.Cookies.ContainsKey("accessToken"))
-			{
-				// Lấy ra và gán vào context để .NET xác thực
-				context.Token = context.Request.Cookies["accessToken"];
-			}
-			return Task.CompletedTask;
-		}
-	};
 });
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Minh Tam Hair API", Version = "v1" });
+	c.SwaggerDoc("v1", new OpenApiInfo { Title = "Minh Tam Hair API", Version = "v1" });
 
-    // 1. Thêm nút Authorize (Định nghĩa kiểu bảo mật là Bearer Token)
-    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
-    {
-        Description = "Vui lòng nhập token theo định dạng: Bearer {chuỗi_token_của_bạn}",
-        Name = "Authorization",
-        In = ParameterLocation.Header,
-        Type = SecuritySchemeType.ApiKey,
-        Scheme = "Bearer"
-    });
+	// 1. Thêm nút Authorize (Định nghĩa kiểu bảo mật là Bearer Token)
+	c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+	{
+		Description = "Vui lòng nhập token theo định dạng: Bearer {chuỗi_token_của_bạn}",
+		Name = "Authorization",
+		In = ParameterLocation.Header,
+		Type = SecuritySchemeType.ApiKey,
+		Scheme = "Bearer"
+	});
 
-    // 2. Yêu cầu Swagger áp dụng Token này cho tất cả các API
-    c.AddSecurityRequirement(new OpenApiSecurityRequirement
-    {
-        {
-            new OpenApiSecurityScheme
-            {
-                Reference = new OpenApiReference
-                {
-                    Type = ReferenceType.SecurityScheme,
-                    Id = "Bearer"
-                }
-            },
-            new string[] {}
-        }
-    });
+	// 2. Yêu cầu Swagger áp dụng Token này cho tất cả các API
+	c.AddSecurityRequirement(new OpenApiSecurityRequirement
+	{
+		{
+			new OpenApiSecurityScheme
+			{
+				Reference = new OpenApiReference
+				{
+					Type = ReferenceType.SecurityScheme,
+					Id = "Bearer"
+				}
+			},
+			new string[] {}
+		}
+	});
 });
 // --- 5. Cấu hình Phân quyền (Authorization) ---
-builder.Services.AddAuthorization(options => {
-    options.AddPolicy("AdminPolicy", policy => policy.RequireRole("Admin"));
-    options.AddPolicy("StaffPolicy", policy => policy.RequireRole("Admin", "NhanVien"));
-    options.AddPolicy("CustomerPolicy", policy => policy.RequireRole("KhachHang"));
+builder.Services.AddAuthorization(options =>
+{
+	options.AddPolicy("AdminPolicy", policy => policy.RequireRole("Admin"));
+	options.AddPolicy("StaffPolicy", policy => policy.RequireRole("Admin", "NhanVien"));
+	options.AddPolicy("CustomerPolicy", policy => policy.RequireRole("KhachHang"));
 });
 builder.Services.AddMemoryCache();
 builder.Services.AddTransient<IEmailService, EmailService>();
@@ -130,32 +136,32 @@ builder.Services.AddTransient<IEmailService, EmailService>();
 var app = builder.Build();
 app.Use((context, next) =>
 {
-    context.Response.Headers.Append("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
-    return next();
+	context.Response.Headers.Append("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
+	return next();
 });
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
-    app.UseSwagger();
-    app.UseSwaggerUI();
+	app.UseSwagger();
+	app.UseSwaggerUI();
 }
 else
 {
-    app.UseHttpsRedirection();
+	app.UseHttpsRedirection();
 }
 app.UseStaticFiles();
 
 var uploadDirectory = Path.Combine(builder.Environment.ContentRootPath, "UserUploads");
 if (!Directory.Exists(uploadDirectory))
 {
-    Directory.CreateDirectory(uploadDirectory);
+	Directory.CreateDirectory(uploadDirectory);
 }
 
 app.UseStaticFiles(new StaticFileOptions
 {
-    FileProvider = new PhysicalFileProvider(uploadDirectory), // Cập nhật lại biến này thay vì viết gộp
-    RequestPath = "/UserUploads"
+	FileProvider = new PhysicalFileProvider(uploadDirectory), // Cập nhật lại biến này thay vì viết gộp
+	RequestPath = "/UserUploads"
 });
 
 app.UseCors("AllowVueApp"); // Bật CORS trước
