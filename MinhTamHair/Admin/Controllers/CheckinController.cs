@@ -131,7 +131,7 @@ namespace MinhTamHair.Admin.Controllers
         // 4. API lấy tất cả Dịch vụ và Combo đang hoạt động để Frontend dễ tìm kiếm khi thêm dịch vụ vào lịch đặt
         [HttpGet("all-services-combos")]
         public async Task<IActionResult> GetAllServicesAndCombos()
-        { 
+        {
             // Lấy danh sách Dịch vụ
             var services = await _context.Dichvus
                 .Where(s => s.TrangThai == 1)

@@ -15,6 +15,10 @@
         public DateTime NgayHen { get; set; }
         public decimal TotalAmount { get; set; }
         public List<ServiceItemRequest> Services { get; set; } = new();
+        public string Email { get; set; } = string.Empty;
+        public string Phone { get; set; } = string.Empty;
+        public string HoTen { get; set; } = string.Empty;
+        public string MaCode { get; set; } = string.Empty;
     }
 
     public class ServiceItemRequest
