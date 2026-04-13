@@ -129,6 +129,37 @@ namespace MinhTamHair.Admin.Controllers
 
 			return Ok(new { success = true, message = "Làm mới Token thành công." });
 		}
+		[HttpPost("logout")]
+		public async Task<IActionResult> Logout()
+		{
+			// 1. Lấy Refresh Token của thiết bị hiện tại từ Cookie
+			if (Request.Cookies.TryGetValue("adminRefreshToken", out string refreshToken))
+			{
+				// Tìm token này trong Database
+				var refreshTokenEntry = await _context.Refreshtokens
+					.FirstOrDefaultAsync(rt => rt.Token == refreshToken);
+
+				// Nếu có, tiến hành xóa để vô hiệu hóa nó vĩnh viễn
+				if (refreshTokenEntry != null)
+				{
+					_context.Refreshtokens.Remove(refreshTokenEntry);
+					await _context.SaveChangesAsync();
+				}
+			}
+
+			// 2. Ra lệnh cho trình duyệt xóa sạch Cookie bảo mật của Admin
+			var cookieOptions = new CookieOptions
+			{
+				Secure = true,
+				SameSite = SameSiteMode.Strict
+			};
+
+			Response.Cookies.Delete("adminAccessToken", cookieOptions);
+			Response.Cookies.Delete("adminRefreshToken", cookieOptions);
+
+			return Ok(new { success = true, message = "Đã đăng xuất an toàn khỏi thiết bị này." });
+		}
+
 
 		// ==========================================
 		// CÁC HÀM HỖ TRỢ (HELPER METHODS)
@@ -150,7 +181,7 @@ namespace MinhTamHair.Admin.Controllers
 			{
 				HttpOnly = true,
 				Secure = true, // Bắt buộc HTTPS
-				SameSite = SameSiteMode.Strict, // Admin site nên dùng Strict
+				SameSite = SameSiteMode.None, // Admin site nên dùng Strict
 				Expires = DateTime.UtcNow.AddMinutes(expireMinutes)
 			};
 			Response.Cookies.Append(cookieName, token, cookieOptions);
