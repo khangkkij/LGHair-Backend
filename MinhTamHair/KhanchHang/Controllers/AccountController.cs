@@ -46,9 +46,13 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             if (khachHang == null)
                 return Unauthorized(new { success = false, message = "Tài khoản hoặc mật khẩu không chính xác." });
+			if (khachHang.TrangThai == 0)
+			{
+				return BadRequest(new { success = false, message = "Tài khoản của bạn đã bị khóa. Vui lòng liên hệ quản trị viên." });
+			}
 
-            // Cập nhật lại Rank dựa trên điểm hiện tại trước khi trả về cho khách
-            khachHang.MaRank = await GetRankByPointsAsync(khachHang.DiemTichLuy);
+			// Cập nhật lại Rank dựa trên điểm hiện tại trước khi trả về cho khách
+			khachHang.MaRank = await GetRankByPointsAsync(khachHang.DiemTichLuy);
             await _context.SaveChangesAsync();
 
             var accessToken = GenerateJwtToken(khachHang);
@@ -254,8 +258,13 @@ namespace MinhTamHair.KhanchHang.Controllers
                 .Include(kh => kh.MaRankNavigation)
                     .FirstOrDefaultAsync(kh => kh.Email == payload.Email);
 
-                // 3. Nếu chưa có, tạo tài khoản mới tự động
-                if (khachHang == null)
+				if (khachHang != null && khachHang.TrangThai == 0)
+				{
+					return BadRequest(new { success = false, message = "Tài khoản Google này liên kết với một tài khoản đã bị khóa." });
+				}
+
+				// 3. Nếu chưa có, tạo tài khoản mới tự động
+				if (khachHang == null)
                 {
                     khachHang = new Khachhang
                     {
@@ -493,8 +502,12 @@ namespace MinhTamHair.KhanchHang.Controllers
                 return Unauthorized(new { message = "Phiên đăng nhập đã hết hạn." });
             }
 
+
+
             // 2. Tìm trong DB xem Token này có hợp lệ không
             var rtRecord = await _context.Refreshtokens.FirstOrDefaultAsync(rt => rt.Token == oldRefreshToken);
+
+
 
             if (rtRecord == null || rtRecord.ExpiredAt <= DateTime.UtcNow)
             {
@@ -505,9 +518,16 @@ namespace MinhTamHair.KhanchHang.Controllers
                 return Unauthorized(new { message = "Vui lòng đăng nhập lại." });
             }
 
-            // 3. Lấy thông tin khách hàng
-            var khachHang = await _context.Khachhangs.FirstOrDefaultAsync(kh => kh.MaKh == rtRecord.UserId);
-            if (khachHang == null || khachHang.TrangThai != 1) return Unauthorized();
+			// 3. Lấy thông tin khách hàng
+			var khachHang = await _context.Khachhangs.FirstOrDefaultAsync(kh => kh.MaKh == rtRecord.UserId);
+
+			// Sửa điều kiện kiểm tra trạng thái ở đây để có thông báo rõ hơn
+			if (khachHang == null) return Unauthorized();
+
+			if (khachHang.TrangThai == 0)
+			{
+				return Unauthorized(new { message = "Tài khoản đã bị khóa. Vui lòng đăng nhập lại hoặc liên hệ hỗ trợ." });
+			}
 
             // 4. Cấp bộ Token mới
             var newAccessToken = GenerateJwtToken(khachHang);
@@ -525,6 +545,8 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             return Ok(new { success = true, message = "Làm mới Token thành công." });
         }
+
+
     }
 }
 

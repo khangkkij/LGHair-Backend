@@ -1,4 +1,5 @@
 ﻿using System.Collections;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -42,15 +43,21 @@ namespace MinhTamHair.Admin.Controllers
 		[HttpGet("danh-sach")]
 		public async Task<IActionResult> GetLichLamViec([FromQuery] string? tuNgay, [FromQuery] string? denNgay, [FromQuery] int? trangThai)
 		{
+			var today = DateOnly.FromDateTime(DateTime.Now);
+			var sixtyDaysAgo = today.AddDays(-60); // Mốc giới hạn 2 tháng
+
 			var query = _context.Lichlamviecs
 				.Include(l => l.MaNvNavigation)
 				.ThenInclude(nv => nv.MaLoaiNvNavigation)
+				.Where(l => l.NgayLamViec >= sixtyDaysAgo) // Ràng buộc cứng: Chỉ lấy dữ liệu trong 60 ngày
 				.AsQueryable();
 
-			// Nếu có truyền ngày thì mới lọc theo ngày
+			// Lọc theo dải ngày người dùng chọn (nhưng vẫn nằm trong khoảng 60 ngày trên)
 			if (!string.IsNullOrEmpty(tuNgay) && DateOnly.TryParse(tuNgay, out DateOnly fromDate))
 			{
-				query = query.Where(l => l.NgayLamViec >= fromDate);
+				// Nếu ngày người dùng chọn cũ hơn 60 ngày, ta lấy mốc 60 ngày làm chuẩn
+				var actualFromDate = fromDate < sixtyDaysAgo ? sixtyDaysAgo : fromDate;
+				query = query.Where(l => l.NgayLamViec >= actualFromDate);
 			}
 
 			if (!string.IsNullOrEmpty(denNgay) && DateOnly.TryParse(denNgay, out DateOnly toDate))
@@ -139,43 +146,41 @@ namespace MinhTamHair.Admin.Controllers
 			return Ok(new { success = true, message = "Xóa ca làm thành công." });
 		}
 
-		[HttpPost("tao-moi")]
-		public async Task<IActionResult> CreateLichLamViec([FromBody] CreateLichLamViecRequest request)
+		[HttpPost("tao-moi")] // Hoặc đổi tên thành "cap-nhat-ca"
+		public async Task<IActionResult> UpdateTodayShift([FromBody] CreateLichLamViecRequest request)
 		{
-			if (!DateOnly.TryParse(request.NgayLamViec, out DateOnly ngayBatDau))
-				return BadRequest(new { success = false, message = "Ngày bắt đầu không hợp lệ." });
+			if (!DateOnly.TryParse(request.NgayLamViec, out DateOnly ngaySua))
+				return BadRequest(new { message = "Ngày không hợp lệ." });
 
-			DateOnly? ngayKetThuc = null;
-			if (!string.IsNullOrEmpty(request.NgayKetThuc) && DateOnly.TryParse(request.NgayKetThuc, out DateOnly parsedKetThuc))
+			// Tìm xem hôm nay đã có dòng dữ liệu (do tự động tạo hoặc có sẵn) chưa
+			var lichHienTai = await _context.Lichlamviecs
+				.FirstOrDefaultAsync(l => l.MaNv == request.MaNv && l.NgayLamViec == ngaySua);
+
+			if (lichHienTai != null)
 			{
-				ngayKetThuc = parsedKetThuc;
-				if (ngayKetThuc < ngayBatDau)
-					return BadRequest(new { success = false, message = "Ngày kết thúc không được nhỏ hơn ngày bắt đầu." });
+				// Nếu đã điểm danh rồi thì KHÔNG cho sửa ca nữa để tránh gian lận
+				if (lichHienTai.TrangThai == 2)
+					return BadRequest(new { message = "Không thể sửa ca khi nhân viên đã điểm danh xong." });
+
+				// Cập nhật ca làm mới
+				lichHienTai.CaLam = request.CaLam;
+				lichHienTai.TrangThai = 1; // Khi đã xếp ca thì chuyển từ 0 (Chưa xếp) sang 1 (Chờ điểm danh)
+				await _context.SaveChangesAsync();
+				return Ok(new { success = true, message = "Cập nhật ca làm thành công." });
 			}
 
-			// Kiểm tra chồng lấn lịch (Giao thoa dải ngày) để tránh một nhân viên có 2 lịch trùng nhau
-			var isOverlap = await _context.Lichlamviecs.AnyAsync(l =>
-				l.MaNv == request.MaNv &&
-				l.CaLam == request.CaLam &&
-				((ngayBatDau >= l.NgayLamViec && ngayBatDau <= (l.NgayKetThuc ?? l.NgayLamViec)) ||
-				 (ngayKetThuc >= l.NgayLamViec && ngayKetThuc <= (l.NgayKetThuc ?? l.NgayLamViec))));
-
-			if (isOverlap)
-				return BadRequest(new { success = false, message = "Lịch này bị chồng lấn với lịch đã có của nhân viên." });
-
+			// Nếu trường hợp hy hữu chưa có dòng dữ liệu thì mới tạo mới
 			var newLich = new Lichlamviec
 			{
 				MaNv = request.MaNv,
-				NgayLamViec = ngayBatDau,
-				NgayKetThuc = ngayKetThuc, // LƯU VÀO CỘT MỚI
+				NgayLamViec = ngaySua,
 				CaLam = request.CaLam,
 				TrangThai = 1
 			};
-
 			_context.Lichlamviecs.Add(newLich);
 			await _context.SaveChangesAsync();
 
-			return Ok(new { success = true, message = "Đã lưu lịch làm việc theo giai đoạn thành công." });
+			return Ok(new { success = true, message = "Đã xếp ca làm mới." });
 		}
 
 		// 5. CẬP NHẬT TRẠNG THÁI CA LÀM (Bật/Tắt)
@@ -197,7 +202,142 @@ namespace MinhTamHair.Admin.Controllers
 				newStatus = lich.TrangThai
 			});
 		}
+		// API Điểm danh ca làm
+		[HttpPatch("diem-danh/{maLich}")]
+		public async Task<IActionResult> CheckIn(int maLich)
+		{
+			var lich = await _context.Lichlamviecs.FindAsync(maLich);
+			if (lich == null) return NotFound();
+			if (lich.TrangThai == 2) return BadRequest(new { message = "Ca làm này đã được điểm danh." });
 
+			var now = DateTime.Now;
+			var today = DateOnly.FromDateTime(now);
+			var currentTime = TimeOnly.FromDateTime(now);
+
+			// 1. Kiểm tra ngày
+			if (lich.NgayLamViec != today)
+				return BadRequest(new { message = "Chỉ được điểm danh ca làm của ngày hôm nay." });
+
+			// 2. Xác định khung giờ ca làm
+			TimeOnly start, end;
+			switch (lich.CaLam)
+			{
+				case "Sáng": start = new TimeOnly(8, 0); end = new TimeOnly(12, 0); break;
+				case "Chiều": start = new TimeOnly(13, 0); end = new TimeOnly(17, 0); break;
+				case "Tối": start = new TimeOnly(17, 0); end = new TimeOnly(21, 0); break;
+				case "Cả ngày": start = new TimeOnly(8, 0); end = new TimeOnly(21, 0); break;
+				default: return BadRequest(new { message = "Ca làm không hợp lệ." });
+			}
+
+			// 3. Kiểm tra giờ hiện tại
+			if (currentTime < start)
+				return BadRequest(new { message = $"Chưa đến giờ làm. Ca {lich.CaLam} bắt đầu lúc {start}." });
+
+			if (currentTime > end)
+				return BadRequest(new { message = $"Đã quá giờ điểm danh của ca {lich.CaLam} ({end})." });
+
+			// Hợp lệ -> Chuyển trạng thái
+			lich.TrangThai = 2;
+			await _context.SaveChangesAsync();
+
+			return Ok(new { success = true, message = "Điểm danh thành công." });
+		}
+
+		[HttpPost("khoi-tao-ngay")]
+		public async Task<IActionResult> InitializeTodayShifts([FromBody] JsonElement body)
+		{
+			DateOnly targetDate;
+			if (body.TryGetProperty("date", out var dateProp) && DateOnly.TryParse(dateProp.GetString(), out var parsedDate))
+			{
+				targetDate = parsedDate;
+			}
+			else
+			{
+				targetDate = DateOnly.FromDateTime(DateTime.Now);
+			}
+
+			// --- BẮT ĐẦU LOGIC CLEAR TỰ ĐỘNG ---
+			try
+			{
+				var sixtyDaysAgo = targetDate.AddDays(-60); // Mốc 2 tháng trước
+
+				// Tìm những bản ghi cũ hơn 60 ngày
+				var oldRecords = _context.Lichlamviecs.Where(l => l.NgayLamViec < sixtyDaysAgo);
+
+				if (oldRecords.Any())
+				{
+					_context.Lichlamviecs.RemoveRange(oldRecords); // Xóa hàng loạt
+																   // Không cần SaveChanges ngay đây, nó sẽ được lưu cùng lúc với phần khởi tạo ở dưới
+				}
+			}
+			catch (Exception ex)
+			{
+				// Log lỗi nếu cần, nhưng không chặn quá trình khởi tạo ngày mới
+				Console.WriteLine($"Lỗi dọn dẹp DB: {ex.Message}");
+			}
+
+			var yesterday = targetDate.AddDays(-1);
+
+			// 2. Lấy danh sách thợ hợp lệ
+			var eligibleStaff = await _context.Nhanviens
+				.Where(nv => nv.TrangThai == 1 && nv.MaLoaiNvNavigation!.DuocDatLich == true)
+				.ToListAsync();
+
+			// 3. Kiểm tra xem ngày targetDate đã có lịch chưa
+			var existingMaNv = await _context.Lichlamviecs
+				.Where(l => l.NgayLamViec == targetDate)
+				.Select(l => l.MaNv)
+				.ToListAsync();
+
+			var staffToInit = eligibleStaff.Where(nv => !existingMaNv.Contains(nv.MaNv)).ToList();
+
+			if (staffToInit.Any())
+			{
+				// 2. SỬA LỖI TẠI ĐÂY: Lấy lịch ngày hôm trước nhưng xử lý trùng lặp nhân viên
+				var yesterdayShifts = await _context.Lichlamviecs
+					.Where(l => l.NgayLamViec == yesterday && l.MaNv != null)
+					.GroupBy(l => l.MaNv) // Nhóm tất cả các ca của cùng 1 người lại
+					.Select(g => new {
+						MaNv = g.Key,
+						CaLam = g.FirstOrDefault()!.CaLam // Chỉ lấy ca đầu tiên làm mẫu để tránh lỗi Duplicate Key
+					})
+					.ToDictionaryAsync(x => x.MaNv!, x => x.CaLam);
+
+				foreach (var nv in staffToInit)
+				{
+					var inheritedCaLam = yesterdayShifts.GetValueOrDefault(nv.MaNv) ?? "Chưa xếp";
+					_context.Lichlamviecs.Add(new Lichlamviec
+					{
+						MaNv = nv.MaNv,
+						NgayLamViec = targetDate,
+						// Sử dụng GetValueOrDefault để an toàn hơn
+						CaLam = inheritedCaLam,
+						TrangThai = inheritedCaLam == "Chưa xếp" ? 0 : 1
+					});
+				}
+			}
+				await _context.SaveChangesAsync();
+
+			return Ok(new { success = true, message = $"Đã khởi tạo cho ngày {targetDate}" });
+		}
+
+		[HttpPatch("roi-ca-som/{maLich}")]
+		public async Task<IActionResult> MarkAsLeftEarly(int maLich)
+		{
+			var lich = await _context.Lichlamviecs.FindAsync(maLich);
+			if (lich == null) return NotFound();
+
+			// Chỉ cho phép chuyển từ "Đã có mặt" (2) sang "Rời ca sớm" (3)
+			if (lich.TrangThai != 2)
+			{
+				return BadRequest(new { message = "Chỉ có thể đánh dấu rời ca cho nhân viên đã điểm danh có mặt." });
+			}
+
+			lich.TrangThai = 3; // Trạng thái mới: Rời ca sớm
+			await _context.SaveChangesAsync();
+
+			return Ok(new { success = true, message = "Đã ghi nhận nhân viên rời ca sớm." });
+		}
 
 	}
 }
