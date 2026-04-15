@@ -27,6 +27,8 @@ namespace MinhTamHair.KhanchHang.Controllers
         [HttpGet("bydv/{maDv}")]
         public async Task<IActionResult> GetByDichVu(string maDv)
         {
+            maDv = maDv?.Trim().ToUpper();
+
             var tieudes = await _context.TieudeDichvus
                 .Where(t => t.MaDv == maDv)
                 .OrderBy(t => t.SoThuTu)
@@ -54,6 +56,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         .ToList()
                 })
                 .ToListAsync();
+
             return Ok(tieudes);
         }
 
