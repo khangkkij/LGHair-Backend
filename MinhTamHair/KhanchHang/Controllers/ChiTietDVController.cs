@@ -20,7 +20,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             _context = context;
             _cache = cache;
         }
-
+         
         [HttpGet("{id}")]
         public async Task<IActionResult> GetServiceDetail(string id)
         {

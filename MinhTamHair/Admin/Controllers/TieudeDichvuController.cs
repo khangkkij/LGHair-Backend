@@ -171,16 +171,33 @@ namespace MinhTamHair.KhanchHang.Controllers
             if (tieude == null)
                 return NotFound(new { message = "Không tìm thấy tiêu đề." });
 
-            // Xóa chi tiết trước
+            // 🔥 Xóa ảnh của từng chi tiết
             if (tieude.ChitietTieudes != null && tieude.ChitietTieudes.Any())
             {
+                foreach (var ct in tieude.ChitietTieudes)
+                {
+                    if (!string.IsNullOrEmpty(ct.HinhAnh))
+                    {
+                        var path = Path.Combine(
+                            Directory.GetCurrentDirectory(),
+                            "wwwroot",
+                            ct.HinhAnh.TrimStart('/')
+                        );
+
+                        if (System.IO.File.Exists(path))
+                        {
+                            System.IO.File.Delete(path);
+                        }
+                    }
+                }
+
                 _context.ChitietTieudes.RemoveRange(tieude.ChitietTieudes);
             }
 
             _context.TieudeDichvus.Remove(tieude);
             await _context.SaveChangesAsync();
 
-            return Ok(new { message = "Đã xóa tiêu đề và chi tiết." });
+            return Ok(new { message = "Đã xóa tiêu đề và toàn bộ ảnh liên quan." });
         }
 
         // ═══════════════════════════════════════════
@@ -256,15 +273,32 @@ namespace MinhTamHair.KhanchHang.Controllers
             chitiet.MoTaTieuDe = dto.MoTaTieuDe?.Trim() ?? "";
             chitiet.SoThuTu = dto.SoThuTu ?? 0;
 
-            // Upload ảnh mới nếu có
+            // 🔥 Nếu có ảnh mới → xóa ảnh cũ + lưu ảnh mới
             if (dto.File != null && dto.File.Length > 0)
             {
+                // ✅ XÓA ẢNH CŨ
+                if (!string.IsNullOrEmpty(chitiet.HinhAnh))
+                {
+                    var oldPath = Path.Combine(
+                        Directory.GetCurrentDirectory(),
+                        "wwwroot",
+                        chitiet.HinhAnh.TrimStart('/')
+                    );
+
+                    if (System.IO.File.Exists(oldPath))
+                    {
+                        System.IO.File.Delete(oldPath);
+                    }
+                }
+
+                // ✅ LƯU ẢNH MỚI
                 var folder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot/assets/images");
                 if (!Directory.Exists(folder))
                     Directory.CreateDirectory(folder);
 
                 var fileName = Guid.NewGuid() + Path.GetExtension(dto.File.FileName);
                 var filePath = Path.Combine(folder, fileName);
+
                 using var stream = new FileStream(filePath, FileMode.Create);
                 await dto.File.CopyToAsync(stream);
 
@@ -298,7 +332,12 @@ namespace MinhTamHair.KhanchHang.Controllers
             // Xóa file ảnh trên server
             if (!string.IsNullOrEmpty(chitiet.HinhAnh))
             {
-                var path = Path.Combine("wwwroot", chitiet.HinhAnh.TrimStart('/'));
+                var path = Path.Combine(
+                    Directory.GetCurrentDirectory(),
+                    "wwwroot",
+                    chitiet.HinhAnh.TrimStart('/')
+                );
+
                 if (System.IO.File.Exists(path))
                     System.IO.File.Delete(path);
             }
