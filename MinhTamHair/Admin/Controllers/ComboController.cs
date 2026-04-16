@@ -131,8 +131,26 @@ namespace MinhTamHair.KhanchHang.Controllers
             combo.Gia = dto.Gia;
             combo.MoTa = dto.MoTa;
             combo.TrangThai = dto.TrangThai;
+
+            // 🔥 Nếu có ảnh mới → xóa ảnh cũ + lưu ảnh mới
             if (dto.File != null && dto.File.Length > 0)
             {
+                // ✅ XÓA ẢNH CŨ
+                if (!string.IsNullOrEmpty(combo.HinhAnh))
+                {
+                    var oldPath = Path.Combine(
+                        Directory.GetCurrentDirectory(),
+                        "wwwroot",
+                        combo.HinhAnh.TrimStart('/')
+                    );
+
+                    if (System.IO.File.Exists(oldPath))
+                    {
+                        System.IO.File.Delete(oldPath);
+                    }
+                }
+
+                // ✅ LƯU ẢNH MỚI
                 var folder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot/assets/images");
 
                 if (!Directory.Exists(folder))
@@ -141,7 +159,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                 }
 
                 var fileName = Guid.NewGuid().ToString() + Path.GetExtension(dto.File.FileName);
-
                 var filePath = Path.Combine(folder, fileName);
 
                 using (var stream = new FileStream(filePath, FileMode.Create))
@@ -149,7 +166,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     await dto.File.CopyToAsync(stream);
                 }
 
-                combo.HinhAnh = "/assets/images/"+ fileName;
+                combo.HinhAnh = "/assets/images/" + fileName;
             }
 
             // Xóa dịch vụ cũ
@@ -172,14 +189,32 @@ namespace MinhTamHair.KhanchHang.Controllers
         [HttpDelete("{id}")]
         public async Task<IActionResult> Delete(string id)
         {
-            var chiTiet = _context.Combo_DichVus.Where(x => x.MaCB == id);
-            _context.Combo_DichVus.RemoveRange(chiTiet);
             var combo = await _context.Combos.FindAsync(id);
             if (combo == null) return NotFound();
+
             if (combo.TrangThai == 1)
             {
                 return BadRequest("Combo đang được sử dụng, không thể xóa!");
             }
+
+            // 🔥 Xóa ảnh nếu có
+            if (!string.IsNullOrEmpty(combo.HinhAnh))
+            {
+                var filePath = Path.Combine(
+                    Directory.GetCurrentDirectory(),
+                    "wwwroot",
+                    combo.HinhAnh.TrimStart('/') // bỏ dấu /
+                );
+
+                if (System.IO.File.Exists(filePath))
+                {
+                    System.IO.File.Delete(filePath);
+                }
+            }
+
+            // Xóa chi tiết trước
+            var chiTiet = _context.Combo_DichVus.Where(x => x.MaCB == id);
+            _context.Combo_DichVus.RemoveRange(chiTiet);
 
             _context.Combos.Remove(combo);
             await _context.SaveChangesAsync();
