@@ -11,13 +11,11 @@ namespace MinhTamHair.Controllers
     public class DanhMucController : ControllerBase
     {
         private readonly MinhTamHairContext _context;
-        private readonly IWebHostEnvironment _env;
         private readonly IDistributedCache _cache;
 
-        public DanhMucController(MinhTamHairContext context, IWebHostEnvironment env, IDistributedCache cache)
+        public DanhMucController(MinhTamHairContext context, IDistributedCache cache)
         {
             _context = context;
-            _env = env;
             _cache = cache;
         }
 
@@ -98,19 +96,11 @@ namespace MinhTamHair.Controllers
             if (await _context.DanhMucs.AnyAsync(x => x.TenDanhMuc.ToLower() == dto.TenDanhMuc.Trim().ToLower()))
                 return BadRequest(new { message = "Tên danh mục đã tồn tại." });
 
-            string? hinhAnhPath = null;
-            if (dto.File != null)
-            {
-                hinhAnhPath = await SaveImageAsync(dto.File);
-                if (hinhAnhPath == null)
-                    return BadRequest(new { message = "File không hợp lệ. Chỉ nhận PNG, JPG, WEBP và ≤ 5MB." });
-            }
-
             var entity = new DanhMuc
             {
                 MaDm = dto.MaDM.Trim().ToUpper(),
                 TenDanhMuc = dto.TenDanhMuc.Trim(),
-                HinhAnh = hinhAnhPath,
+                HinhAnh = null,
                 NgayTao = DateOnly.FromDateTime(DateTime.Today),
                 TrangThai = dto.TrangThai
             };
@@ -133,26 +123,6 @@ namespace MinhTamHair.Controllers
 
             if (string.IsNullOrWhiteSpace(dto.TenDanhMuc))
                 return BadRequest(new { message = "Tên danh mục không được để trống." });
-
-            // Xử lý ảnh
-            if (dto.File != null)
-            {
-                // Xóa ảnh cũ
-                DeleteImageFile(entity.HinhAnh);
-
-                var newPath = await SaveImageAsync(dto.File);
-                if (newPath == null)
-                    return BadRequest(new { message = "File không hợp lệ. Chỉ nhận PNG, JPG, WEBP và ≤ 5MB." });
-
-                entity.HinhAnh = newPath;
-            }
-            else if (dto.XoaAnh == true)
-            {
-                // Người dùng bấm xóa ảnh nhưng không upload ảnh mới
-                DeleteImageFile(entity.HinhAnh);
-                entity.HinhAnh = null;
-            }
-            // Nếu không gửi File và XoaAnh != true → giữ nguyên ảnh cũ
 
             entity.TenDanhMuc = dto.TenDanhMuc.Trim();
             entity.TrangThai = dto.TrangThai;
@@ -180,7 +150,6 @@ namespace MinhTamHair.Controllers
                     message = $"Không thể xóa! Danh mục đang chứa {entity.Dichvus.Count} dịch vụ."
                 });
 
-            DeleteImageFile(entity.HinhAnh);
             _context.DanhMucs.Remove(entity);
             await _context.SaveChangesAsync();
 
@@ -202,34 +171,5 @@ namespace MinhTamHair.Controllers
             return Ok(new { message = "Cập nhật trạng thái thành công." });
         }
 
-        // ──────────────────────────────────────────────────────────
-        // Helpers
-        // ──────────────────────────────────────────────────────────
-        private async Task<string?> SaveImageAsync(IFormFile file)
-        {
-            var allowed = new[] { "image/jpeg", "image/jpg", "image/png", "image/webp" };
-            if (!allowed.Contains(file.ContentType.ToLower())) return null;
-            if (file.Length > 5 * 1024 * 1024) return null;
-
-            var folder = Path.Combine(_env.WebRootPath, "uploads", "danhmuc");
-            Directory.CreateDirectory(folder);
-
-            var ext = Path.GetExtension(file.FileName);
-            var fileName = $"{Guid.NewGuid()}{ext}";
-            var fullPath = Path.Combine(folder, fileName);
-
-            await using var stream = new FileStream(fullPath, FileMode.Create);
-            await file.CopyToAsync(stream);
-
-            return $"/uploads/danhmuc/{fileName}";
-        }
-
-        private void DeleteImageFile(string? relativePath)
-        {
-            if (string.IsNullOrEmpty(relativePath)) return;
-            var fullPath = Path.Combine(_env.WebRootPath, relativePath.TrimStart('/'));
-            if (System.IO.File.Exists(fullPath))
-                System.IO.File.Delete(fullPath);
-        }
     }
 }

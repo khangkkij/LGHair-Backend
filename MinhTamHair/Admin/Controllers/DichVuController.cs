@@ -193,6 +193,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             {
                 return BadRequest("Dịch vụ đang nằm trong combo, không thể xóa!");
             }
+
             var dv = await _context.Dichvus
                 .Include(x => x.Hinhanhs)
                 .Include(x => x.TieudeDichvus)
@@ -200,33 +201,61 @@ namespace MinhTamHair.KhanchHang.Controllers
                 .FirstOrDefaultAsync(x => x.MaDv == id);
 
             if (dv == null) return NotFound();
+
             if (dv.TrangThai == 1)
             {
                 return BadRequest("Dịch vụ đang được sử dụng, không thể xóa!");
             }
-            // Xóa file ảnh
+
+            // ✅ 1. XÓA ẢNH DỊCH VỤ
             foreach (var img in dv.Hinhanhs)
             {
-                var path = Path.Combine("wwwroot", img.DuongDan.TrimStart('/'));
+                var path = Path.Combine(
+                    Directory.GetCurrentDirectory(),
+                    "wwwroot",
+                    img.DuongDan.TrimStart('/')
+                );
+
                 if (System.IO.File.Exists(path))
                 {
                     System.IO.File.Delete(path);
                 }
             }
 
-            // Xóa chi tiết tiêu đề
+            // ✅ 2. XÓA ẢNH TRONG CHI TIẾT TIÊU ĐỀ (QUAN TRỌNG NHẤT)
+            foreach (var td in dv.TieudeDichvus)
+            {
+                foreach (var ct in td.ChitietTieudes)
+                {
+                    if (!string.IsNullOrEmpty(ct.HinhAnh))
+                    {
+                        var path = Path.Combine(
+                            Directory.GetCurrentDirectory(),
+                            "wwwroot",
+                            ct.HinhAnh.TrimStart('/')
+                        );
+
+                        if (System.IO.File.Exists(path))
+                        {
+                            System.IO.File.Delete(path);
+                        }
+                    }
+                }
+            }
+
+            // ✅ 3. XÓA CHI TIẾT TIÊU ĐỀ
             foreach (var td in dv.TieudeDichvus)
             {
                 _context.ChitietTieudes.RemoveRange(td.ChitietTieudes);
             }
 
-            // Xóa tiêu đề dịch vụ
+            // ✅ 4. XÓA TIÊU ĐỀ
             _context.TieudeDichvus.RemoveRange(dv.TieudeDichvus);
 
-            // Xóa ảnh
+            // ✅ 5. XÓA ẢNH DỊCH VỤ TRONG DB
             _context.Hinhanhs.RemoveRange(dv.Hinhanhs);
 
-            // Xóa dịch vụ
+            // ✅ 6. XÓA DỊCH VỤ
             _context.Dichvus.Remove(dv);
 
             await _context.SaveChangesAsync();

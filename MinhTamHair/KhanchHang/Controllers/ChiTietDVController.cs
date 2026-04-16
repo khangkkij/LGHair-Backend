@@ -20,7 +20,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             _context = context;
             _cache = cache;
         }
-
+         
         [HttpGet("{id}")]
         public async Task<IActionResult> GetServiceDetail(string id)
         {
@@ -209,7 +209,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             await _cache.SetStringAsync(cacheKey, json,
                 new DistributedCacheEntryOptions
                 {
-                    AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(1)
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(20)
                 });
             return Ok(result);
         }
