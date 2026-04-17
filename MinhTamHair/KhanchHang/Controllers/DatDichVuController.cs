@@ -7,6 +7,7 @@ using System.Text; // Để dùng Encoding
 using System.Security.Cryptography; // Để dùng HMACSHA256
 using System.Net.Http.Json; // Để dùng PostAsJsonAsync cho MoMo
 using MinhTamHair.Services;
+using MinhTamHair;
 
 namespace MinhTamHair.KhanchHang.Controllers
 {
@@ -63,30 +64,129 @@ namespace MinhTamHair.KhanchHang.Controllers
         }
 
         [HttpGet("get-my-vouchers/{maKH}")]
-        public IActionResult GetMyVouchers(string maKH, [FromQuery] decimal subTotal)
+        public async Task<IActionResult> GetMyVouchers(string maKH, [FromQuery] decimal subTotal,
+            [FromQuery] DateTime? ngayGioHen, [FromQuery] string? serviceIds)
         {
-            var now = DateTime.Now;
+            var kh = await _context.Khachhangs
+                .Include(k => k.MaCodes)
+                .FirstOrDefaultAsync(k => k.MaKh == maKH);
+            if (kh == null)
+                return Ok(Array.Empty<object>());
 
-            // Truy vấn thông qua thuộc tính điều hướng MaCodes của Khachhang
-            var vouchers = _context.Khachhangs
-                .Where(kh => kh.MaKh == maKH)
-                .SelectMany(kh => kh.MaCodes) // Đây là cách lấy danh sách Voucher của khách mà không cần gọi bảng trung gian
-                .Where(v => v.TrangThai == 1
-                            && v.NgayBatDau <= now
-                            && v.NgayKetThuc >= now
-                            && v.SoLuong > v.SoLuongDaDung
-                            && subTotal >= v.GiaTriToiThieu)
-                .Select(v => new {
+            var now = DateTime.Now;
+            var ngayDichVu = ngayGioHen ?? now;
+            var cartIds = string.IsNullOrWhiteSpace(serviceIds)
+                ? new List<string>()
+                : serviceIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+
+            string? maRank = kh.MaRank;
+            int? rankCap = null;
+            if (!string.IsNullOrWhiteSpace(maRank))
+            {
+                var rank = await _context.Hangthanhviens.AsNoTracking()
+                    .FirstOrDefaultAsync(r => r.MaRank == maRank && (r.TrangThai == null || r.TrangThai == 1));
+                rankCap = rank?.PhanTramGiamGia;
+            }
+
+            var codeList = kh.MaCodes.Select(v => v.MaCode).ToList();
+            var usageMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (var c in codeList)
+            {
+                var n = await _context.HoaDons.AsNoTracking()
+                    .CountAsync(h => h.MaKh == maKH && h.MaCode == c);
+                usageMap[c] = n;
+            }
+
+            var result = new List<object>();
+            foreach (var v in kh.MaCodes)
+            {
+                var uses = usageMap.GetValueOrDefault(v.MaCode, 0);
+                var err = VoucherCartLogic.ValidateAndCalculate(v, uses, subTotal, cartIds, ngayDichVu, now, maRank, rankCap,
+                    out var tienGiam, out _);
+                if (err != null)
+                    continue;
+
+                result.Add(new
+                {
                     id = v.MaCode,
                     code = v.MaCode,
-                    discount = v.SoTienGiam,
+                    discount = tienGiam,
                     desc = v.MoTa,
                     expiry = v.NgayKetThuc != null ? v.NgayKetThuc.Value.ToString("dd/MM/yyyy") : ""
-                })
-                .ToList();
+                });
+            }
 
-            return Ok(vouchers);
+            return Ok(result);
         }
+
+        /// <summary>Xem trước tổng giảm khi xếp chồng tối đa 2 mã (thứ tự trong <paramref name="codes"/>).</summary>
+        [HttpGet("preview-voucher-stack")]
+        public async Task<IActionResult> PreviewVoucherStack(
+            string maKH,
+            [FromQuery] string? codes,
+            [FromQuery] decimal subTotal,
+            [FromQuery] DateTime? ngayGioHen,
+            [FromQuery] string? serviceIds)
+        {
+            if (string.IsNullOrWhiteSpace(maKH))
+                return BadRequest(new { message = "Thiếu mã khách hàng." });
+
+            var parts = string.IsNullOrWhiteSpace(codes)
+                ? new List<string>()
+                : codes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(VoucherCartLogic.NormalizeMaCode)
+                    .Where(s => s.Length > 0)
+                    .Take(2)
+                    .ToList();
+
+            if (parts.Count == 0)
+                return Ok(new { totalDiscount = 0m, finalAmount = subTotal, codes = Array.Empty<string>() });
+
+            var kh = await _context.Khachhangs.AsNoTracking()
+                .Include(k => k.MaCodes)
+                .FirstOrDefaultAsync(k => k.MaKh == maKH);
+            if (kh == null)
+                return Ok(new { totalDiscount = 0m, finalAmount = subTotal, codes = parts });
+
+            var owned = new HashSet<string>(kh.MaCodes.Select(x => x.MaCode), StringComparer.OrdinalIgnoreCase);
+            foreach (var c in parts)
+            {
+                if (!owned.Contains(c))
+                    return BadRequest(new { message = $"Bạn không sở hữu mã: {c}" });
+            }
+
+            var now = DateTime.Now;
+            var ngayDichVu = ngayGioHen ?? now;
+            var cartIds = string.IsNullOrWhiteSpace(serviceIds)
+                ? new List<string>()
+                : serviceIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+
+            string? maRank = kh.MaRank;
+            int? rankCap = null;
+            if (!string.IsNullOrWhiteSpace(maRank))
+            {
+                var rank = await _context.Hangthanhviens.AsNoTracking()
+                    .FirstOrDefaultAsync(r => r.MaRank == maRank && (r.TrangThai == null || r.TrangThai == 1));
+                rankCap = rank?.PhanTramGiamGia;
+            }
+
+            var (err, totalGiam, sau) = await VoucherCartLogic.ValidateStackedAsync(
+                _context,
+                parts,
+                maKH,
+                subTotal,
+                cartIds,
+                ngayDichVu,
+                now,
+                maRank,
+                rankCap);
+
+            if (err != null)
+                return BadRequest(new { message = err });
+
+            return Ok(new { totalDiscount = totalGiam, finalAmount = sau, codes = parts });
+        }
+
         [HttpPost("create-payment")]
         public async Task<IActionResult> CreatePayment([FromBody] PaymentInformationRequest model)
         {
@@ -203,7 +303,82 @@ namespace MinhTamHair.KhanchHang.Controllers
                     ? model.BookingId.Substring(model.BookingId.Length - 10)
                     : model.BookingId;
 
-                decimal total = model.TotalAmount;
+                decimal subtotal = model.Services.Sum(s => s.Price);
+
+                var codesList = new List<string>();
+                if (model.MaCodes != null && model.MaCodes.Count > 0)
+                {
+                    foreach (var c in model.MaCodes.Take(2))
+                    {
+                        if (!string.IsNullOrWhiteSpace(c))
+                            codesList.Add(VoucherCartLogic.NormalizeMaCode(c));
+                    }
+                }
+                else if (!string.IsNullOrWhiteSpace(model.MaCode))
+                {
+                    codesList.Add(VoucherCartLogic.NormalizeMaCode(model.MaCode));
+                }
+
+                // Hóa đơn FK: chỉ gắn mã đầu (cột maCode); mã thứ 2 vẫn tăng lượt dùng bên dưới
+                string? maCodeNorm = codesList.Count > 0 ? codesList[0] : null;
+                decimal tongSauGiam = subtotal;
+
+                if (codesList.Count > 0)
+                {
+                    if (codesList.Count != codesList.Distinct(StringComparer.OrdinalIgnoreCase).Count())
+                    {
+                        await transaction.RollbackAsync();
+                        return BadRequest(new { message = "Không được dùng trùng một mã voucher." });
+                    }
+
+                    var khForRank = await _context.Khachhangs.AsNoTracking()
+                        .Include(k => k.MaCodes)
+                        .FirstOrDefaultAsync(k => k.MaKh == currentMaKh);
+                    if (khForRank == null)
+                    {
+                        await transaction.RollbackAsync();
+                        return BadRequest(new { message = "Không tìm thấy khách hàng." });
+                    }
+
+                    var ownedCodes = new HashSet<string>(khForRank.MaCodes.Select(x => x.MaCode), StringComparer.OrdinalIgnoreCase);
+                    foreach (var c in codesList)
+                    {
+                        if (!ownedCodes.Contains(c))
+                        {
+                            await transaction.RollbackAsync();
+                            return BadRequest(new { message = $"Bạn không sở hữu mã voucher: {c}" });
+                        }
+                    }
+
+                    string? maRank = khForRank.MaRank;
+                    int? rankCap = null;
+                    if (!string.IsNullOrWhiteSpace(maRank))
+                    {
+                        var rank = await _context.Hangthanhviens.AsNoTracking()
+                            .FirstOrDefaultAsync(r => r.MaRank == maRank && (r.TrangThai == null || r.TrangThai == 1));
+                        rankCap = rank?.PhanTramGiamGia;
+                    }
+
+                    var cartIds = model.Services.Select(s => s.Id).ToList();
+                    var (vErr, _, sau) = await VoucherCartLogic.ValidateStackedAsync(
+                        _context,
+                        codesList,
+                        currentMaKh,
+                        subtotal,
+                        cartIds,
+                        model.NgayHen,
+                        DateTime.Now,
+                        maRank,
+                        rankCap);
+                    if (vErr != null)
+                    {
+                        await transaction.RollbackAsync();
+                        return BadRequest(new { message = vErr });
+                    }
+                    tongSauGiam = sau;
+                }
+
+                decimal total = tongSauGiam;
                 decimal daThanhToan = (paymentMode == "10") ? (total * 0.1m) : total;
                 int trangThaiLichDat = (paymentMode == "10") ? 1 : 2;
 
@@ -227,10 +402,11 @@ namespace MinhTamHair.KhanchHang.Controllers
                     MaLd = shortMaLd,
                     MaKh = currentMaKh,
                     NgayTao = DateTime.Now,
-                    TongTien = total,
-                    TienDaTra = (paymentMode == "10") ? (total * 0.1m) : total,
+                    TongTien = subtotal,
+                    ThanhTien = tongSauGiam,
+                    TienDaTra = daThanhToan,
                     TrangThai = 0, // 0: Hóa đơn chưa hoàn tất (đang thực hiện)
-                    MaCode = string.IsNullOrEmpty(model.MaCode) ? null : model.MaCode
+                    MaCode = maCodeNorm
                 };
                 _context.HoaDons.Add(hoaDon);
 
@@ -268,6 +444,17 @@ namespace MinhTamHair.KhanchHang.Controllers
                 _context.Thanhtoans.Add(tt);
 
                 await _context.SaveChangesAsync();
+
+                foreach (var code in codesList)
+                {
+                    var (incOk, incErr) = await VoucherCartLogic.TryIncrementUsageAsync(_context, code);
+                    if (!incOk)
+                    {
+                        await transaction.RollbackAsync();
+                        return BadRequest(new { message = incErr ?? "Không thể ghi nhận lượt dùng voucher." });
+                    }
+                }
+
                 await transaction.CommitAsync();
                 try
                 {
