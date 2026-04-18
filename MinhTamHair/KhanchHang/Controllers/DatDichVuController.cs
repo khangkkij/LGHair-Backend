@@ -33,17 +33,19 @@ namespace MinhTamHair.KhanchHang.Controllers
                     id = s.MaDv,
                     name = s.TenDv,
                     price = s.Gia,
-                    icon = "fas fa-cut" // Icon mặc định
+                    duration = s.ThoiGianLam ?? 30, // Lấy thời gian làm từ bảng DICHVU
+                    icon = "fas fa-cut"
                 }).ToList();
 
-            // Lấy danh sách Combo đang hoạt động
             var combos = _context.Combos
                 .Where(c => c.TrangThai == 1)
                 .Select(c => new {
                     id = c.MaCb,
                     name = c.TenCombo,
                     price = c.Gia,
-                    icon = "fas fa-box-open"
+                    // Dùng Combo_DichVus theo đúng class C# của bạn
+                    duration = c.Combo_DichVus.Sum(ct => ct.DichVu.ThoiGianLam ?? 30),
+                    icon = "fas fa-layer-group"
                 }).ToList();
 
             return Ok(new { services, combos });
@@ -52,13 +54,20 @@ namespace MinhTamHair.KhanchHang.Controllers
         public IActionResult GetStylists()
         {
             var stylists = _context.Nhanviens
-                .Include(nv => nv.MaLoaiNvNavigation) // Thêm Include này
+                .Include(nv => nv.MaLoaiNvNavigation)
                 .Where(nv => nv.TrangThai == 1 && nv.MaLoaiNv == "LNV01")
                 .Select(nv => new {
                     id = nv.MaNv,
                     name = nv.HoTenNv,
-                    role = nv.MaLoaiNvNavigation.TenLoai, // Lấy tên thật: Stylist chính, Thợ cả...
-                    img = nv.HinhAnh ?? "https://i.pravatar.cc/150"
+                    role = nv.MaLoaiNvNavigation.TenLoai,
+                    img = nv.HinhAnh ?? "https://i.pravatar.cc/150",
+                    // Lọc số sao của thợ này từ bảng DanhGia -> HoaDon -> ChiTiet
+                    rating = Math.Round(_context.DanhgiaDichvus
+                        .Where(dg => _context.HoaDons
+                            .Where(hd => _context.ChitietLichdats.Any(ct => ct.MaLd == hd.MaLd && ct.MaNv == nv.MaNv))
+                            .Select(hd => hd.MaHd)
+                            .Contains(dg.MaHd))
+                        .Average(dg => (double?)dg.SoSao) ?? 5.0, 1) // Mặc định 5 sao nếu chưa có đánh giá
                 }).ToList();
             return Ok(stylists);
         }
@@ -492,6 +501,82 @@ namespace MinhTamHair.KhanchHang.Controllers
             {
                 byte[] hashmessage = hmacsha256.ComputeHash(messageBytes);
                 return BitConverter.ToString(hashmessage).Replace("-", "").ToLower();
+            }
+        }
+        // Class hứng dữ liệu gửi lên từ Vue
+        public class CheckStylistRequest
+        {
+            public string NgayHen { get; set; }
+            public string GioBatDau { get; set; }
+            public int TongThoiGian { get; set; } // Tổng số phút
+        }
+
+        [HttpPost("get-available-stylists")]
+        public async Task<IActionResult> GetAvailableStylists([FromBody] CheckStylistRequest request)
+        {
+            try
+            {
+                // 1. CHUẨN HÓA THỜI GIAN
+                DateOnly ngayHen = DateOnly.Parse(request.NgayHen);
+                TimeOnly start = TimeOnly.Parse(request.GioBatDau);
+                TimeOnly end = start.AddMinutes(request.TongThoiGian);
+
+                var caCanThiet = new List<string> { "Cả ngày" };
+                if (start >= new TimeOnly(8, 0) && end <= new TimeOnly(12, 0)) caCanThiet.Add("Sáng");
+                else if (start >= new TimeOnly(13, 0) && end <= new TimeOnly(17, 0)) caCanThiet.Add("Chiều");
+                else if (start >= new TimeOnly(17, 0) && end <= new TimeOnly(21, 0)) caCanThiet.Add("Tối");
+
+                // 2. LẤY THỢ ĐI LÀM (Bỏ Include để EF Core không bị ngáo)
+                var thoDiLam = await _context.Lichlamviecs
+                    .Where(l => l.NgayLamViec == ngayHen && caCanThiet.Contains(l.CaLam))
+                    .Select(l => l.MaNv)
+                    .Distinct()
+                    .ToListAsync();
+
+                // 3. LẤY THỢ ĐANG KẸT LỊCH (Bỏ Include, chọc thẳng vào MaLdNavigation)
+                var thoBan = await _context.ChitietLichdats
+                    .Where(ct => ct.MaLdNavigation.NgayHen == ngayHen
+                                 && ct.MaLdNavigation.TrangThai != 0
+                                 && ct.MaLdNavigation.GioBatDau < end
+                                 && ct.MaLdNavigation.GioKetThuc > start)
+                    .Select(ct => ct.MaNv)
+                    .Distinct()
+                    .ToListAsync();
+
+                // 4. LỌC THỢ RẢNH
+                var thoRanhIds = thoDiLam.Except(thoBan).ToList();
+
+                // 5. TRẢ DATA (Kiểm tra trạng thái nhân viên ở bước cuối cùng này cho an toàn)
+
+                var availableStylists = await _context.Nhanviens
+                    .Include(nv => nv.MaRoleNavigation)
+                    .Where(nv => thoRanhIds.Contains(nv.MaNv) && nv.TrangThai == 1)
+                    .Select(nv => new {
+                        id = nv.MaNv,
+                        name = nv.HoTenNv,
+                        role = nv.MaRoleNavigation.TenChucVu ?? "Stylist",
+                        img = nv.HinhAnh ?? "/assets/images/default.jpg",
+                        // Lọc số sao của thợ này từ bảng DanhGia -> HoaDon -> ChiTiet
+                        rating = Math.Round(_context.DanhgiaDichvus
+                            .Where(dg => _context.HoaDons
+                                .Where(hd => _context.ChitietLichdats.Any(ct => ct.MaLd == hd.MaLd && ct.MaNv == nv.MaNv))
+                                .Select(hd => hd.MaHd)
+                                .Contains(dg.MaHd))
+                            .Average(dg => (double?)dg.SoSao) ?? 5.0, 1)
+                    }).ToListAsync();
+
+                return Ok(availableStylists);
+            }
+            catch (Exception ex)
+            {
+                // GHI LOG RA MÀN HÌNH ĐEN VISUAL STUDIO
+                Console.WriteLine("============= LỖI API TÌM THỢ =============");
+                Console.WriteLine(ex.Message);
+                if (ex.InnerException != null) Console.WriteLine("Chi tiết: " + ex.InnerException.Message);
+                Console.WriteLine("===========================================");
+
+                // TRẢ LỖI VỀ VUE ĐỂ HIỂN THỊ
+                return StatusCode(500, new { message = "Lỗi Backend: " + ex.Message, detail = ex.InnerException?.Message });
             }
         }
     }

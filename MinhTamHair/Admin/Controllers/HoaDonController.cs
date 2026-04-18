@@ -30,21 +30,22 @@ namespace MinhTamHair.Admin.Controllers
 			if (!string.IsNullOrEmpty(search))
 				query = query.Where(h => h.MaHd.Contains(search) || h.MaKhNavigation!.HoTen!.Contains(search));
 
-			var data = await query.OrderByDescending(h => h.NgayTao)
-				.Select(h => new HoaDonResponse
-				{
-					MaHd = h.MaHd,
-					MaLd = h.MaLd,
-					TenKhachHang = h.MaKhNavigation!.HoTen,
-					TenNhanVien = h.MaNvNavigation!.HoTenNv,
-					NgayTao = h.NgayTao,
-					TongTien = h.TongTien,
-					ThanhTien = h.ThanhTien,
-					TienDaTra = h.TienDaTra,
-					TrangThai = h.TrangThai
-				}).ToListAsync();
+            var data = await query.OrderByDescending(h => h.NgayTao)
+                .Select(h => new HoaDonResponse
+                {
+                    MaHd = h.MaHd,
+                    MaLd = h.MaLd,
+                    TenKhachHang = h.MaKhNavigation!.HoTen,
+                    TenNhanVien = h.MaNvNavigation!.HoTenNv,
+                    NgayTao = h.NgayTao,
+                    TongTien = h.TongTien,
+                    // THÊM ĐOẠN NÀY: Nếu ThanhTien null thì lấy TongTien
+                    ThanhTien = h.ThanhTien ?? h.TongTien,
+                    TienDaTra = h.TienDaTra,
+                    TrangThai = h.TrangThai
+                }).ToListAsync();
 
-			return Ok(new { success = true, data });
+            return Ok(new { success = true, data });
 		}
 
 		[HttpPatch("doi-trang-thai/{maHd}")]
@@ -77,19 +78,20 @@ namespace MinhTamHair.Admin.Controllers
 
 			if (hd == null) return NotFound();
 
-			var result = new
-			{
-				hd.MaHd,
-				NgayTao = hd.NgayTao,
-				TenKh = hd.MaKhNavigation?.HoTen,
-				TenThuNgan = hd.MaNvNavigation?.HoTenNv,
-				TongTien = hd.TongTien,
-				GiamGiaVip = hd.PhanTramGiamVip,
-				ThanhTien = hd.ThanhTien,
-				TrangThai = hd.TrangThai,
+            var result = new
+            {
+                hd.MaHd,
+                NgayTao = hd.NgayTao,
+                TenKh = hd.MaKhNavigation?.HoTen,
+                TenThuNgan = hd.MaNvNavigation?.HoTenNv,
+                TongTien = hd.TongTien,
+                GiamGiaVip = hd.PhanTramGiamVip,
+                // THÊM ĐOẠN NÀY: Nếu ThanhTien null thì lấy TongTien
+                ThanhTien = hd.ThanhTien ?? hd.TongTien,
+                TrangThai = hd.TrangThai,
 
-				// Chi tiết từng món trong hóa đơn
-				ChiTietDichVu = hd.MaLdNavigation?.ChitietLichdats.Select(ct => new {
+                // Chi tiết từng món trong hóa đơn
+                ChiTietDichVu = hd.MaLdNavigation?.ChitietLichdats.Select(ct => new {
 					// Ưu tiên hiện tên Combo, nếu không có thì hiện tên Dịch vụ
 					TenHangMuc = ct.MaCbNavigation?.TenCombo ?? ct.MaDvNavigation?.TenDv,
 					ThoThucHien = ct.MaNvNavigation?.HoTenNv ?? "N/A",

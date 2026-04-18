@@ -17,6 +17,7 @@ namespace MinhTamHair.Admin.Controllers
         // Thêm khai báo này ở đầu class
         private readonly IConfiguration _configuration;
 
+
         // Sửa lại Constructor để nhận IConfiguration
         public CheckInController(MinhTamHairContext context, IConfiguration configuration)
         {
@@ -41,7 +42,7 @@ namespace MinhTamHair.Admin.Controllers
                     MaLd = ld.MaLd,
                     TenKhach = ld.MaKhNavigation.HoTen,
                     Sdt = ld.MaKhNavigation.Sdt,
-                    NgayHen = ld.NgayHen.ToString() + "T" + ld.GioBatDau.ToString(),
+                    NgayHen = ld.NgayHen.ToString() + "T" + ld.GioBatDau.ToString() + " - " + ld.GioKetThuc.ToString(),
                     TongTien = ld.TongTienDuKien ?? 0,
                     DaThanhToan = _context.Thanhtoans
                         .Where(tt => tt.MaHdNavigation.MaLd == ld.MaLd)
@@ -112,15 +113,20 @@ namespace MinhTamHair.Admin.Controllers
                 TenKhach = ld.MaKhNavigation.HoTen,
                 Sdt = ld.MaKhNavigation.Sdt,
                 // Sử dụng nội suy chuỗi để tránh lỗi TimeSpan.ToString()
-                NgayHen = $"{ld.NgayHen:yyyy-MM-dd}T{ld.GioBatDau:hh\\:mm}",
+                NgayHen = $"{ld.NgayHen:yyyy-MM-dd}T{ld.GioBatDau:HH\\:mm} - {ld.GioKetThuc:HH\\:mm}",
                 TongTien = ld.TongTienDuKien ?? 0,
                 DaThanhToan = _context.Thanhtoans
                     .Where(tt => tt.MaHdNavigation.MaLd == ld.MaLd)
                     .Sum(tt => tt.SoTien) ?? 0,
+                MaNv = _context.ChitietLichdats
+                    .Where(ct => ct.MaLd == ld.MaLd)
+                    .Select(ct => ct.MaNv)
+                    .FirstOrDefault(),
                 DichVus = _context.ChitietLichdats
                     .Where(ct => ct.MaLd == ld.MaLd)
                     .Select(ct => new ServiceItemDTO
                     {
+                        Id = ct.MaDv ?? ct.MaCb,
                         Ten = ct.MaDvNavigation.TenDv ?? ct.MaCbNavigation.TenCombo,
                         Gia = ct.GiaLucDat ?? 0
                     }).ToList()
@@ -298,6 +304,107 @@ namespace MinhTamHair.Admin.Controllers
                 return BitConverter.ToString(hashmessage).Replace("-", "").ToLower();
             }
         }
+        // API tạo lịch cho khách vãng lai (Walk-in) - LOGIC LỌC ĐỘNG TỪ DATABASE RỒI RANDOM
+        [HttpPost("create-walkin")]
+        public async Task<IActionResult> CreateWalkIn([FromBody] WalkInRequest request)
+        {
+            using var transaction = await _context.Database.BeginTransactionAsync();
+            try
+            {
+                string maKh = "";
+
+                // 1. VÀO DATABASE TÌM TẤT CẢ TÀI KHOẢN CÓ TÊN LÀ "Khách vãng lai"
+                // (Dùng Contains để quét luôn cả trường hợp gõ "Khách vãn lai" bị thiếu dấu)
+                var walkInAccounts = await _context.Khachhangs
+                    .Where(kh => kh.HoTen.Contains("Khách vãng lai") || kh.HoTen.Contains("Khách vãn lai"))
+                    .Select(kh => kh.MaKh)
+                    .ToListAsync();
+
+                // 2. KIỂM TRA SỐ LƯỢNG VÀ RANDOM
+                if (walkInAccounts.Count == 0)
+                {
+                    // Đề phòng trường hợp Database chưa có tài khoản nào: Tự tạo 1 cái để dùng tạm tránh lỗi
+                    maKh = "KVL" + DateTime.Now.ToString("ddHHmm");
+                    var newKh = new Khachhang
+                    {
+                        MaKh = maKh,
+                        HoTen = "Khách vãng lai",
+                        Sdt = "0000000000",
+                        Email = "khachvanglai@gmail.com",
+                        TrangThai = 1,
+                        NgayTao = DateTime.Now,
+                        MaRank = "RANK01",
+                        DiemTichLuy = 0
+                    };
+                    _context.Khachhangs.Add(newKh);
+                    await _context.SaveChangesAsync(); // Lưu ngay để Lịch đặt bên dưới có cái để nối vào
+                }
+                else
+                {
+                    // Nếu đã có (VD tìm thấy 4 tài khoản) -> QUAY RANDOM lấy 1 mã
+                    Random rnd = new Random();
+                    int index = rnd.Next(walkInAccounts.Count);
+                    maKh = walkInAccounts[index]; // Bốc trúng mã nào dùng mã đó
+                }
+
+                // 3. Tạo mã Lịch đặt (MaLD)
+                string maLd = "WLK" + DateTime.Now.ToString("HHmmss");
+
+                // 4. Lưu Lịch đặt (Trạng thái 1: Đang chờ phục vụ)
+                decimal tongTien = request.Services.Sum(s => s.Gia);
+                var ld = new Lichdat
+                {
+                    MaLd = maLd,
+                    MaKh = maKh, // <--- Gán cái mã ngẫu nhiên vừa bốc được vào đây
+                    NgayHen = DateOnly.FromDateTime(DateTime.Today),
+                    GioBatDau = TimeOnly.FromDateTime(DateTime.Now),
+                    TongTienDuKien = tongTien,
+                    TrangThai = 1 // 1: Đang chờ/Đang làm
+                };
+                _context.Lichdats.Add(ld);
+
+                // Mẹo: Vẫn lấy thông tin thật mà Lễ tân nhập vào (Tên/SĐT thực) nhét vào Ghi chú để dễ tìm kiếm sau này
+                string thongTinKhachThat = $"Tên thật: {request.TenKhach} - SĐT: {request.Sdt}";
+
+                // 5. Lưu Chi tiết dịch vụ & Gán thợ
+                foreach (var s in request.Services)
+                {
+                    var ct = new ChitietLichdat
+                    {
+                        MaLd = maLd,
+                        MaNv = request.MaStylist,
+                        GiaLucDat = s.Gia,
+                        GhiChu = thongTinKhachThat
+                    };
+                    if (s.Id.StartsWith("DV")) ct.MaDv = s.Id;
+                    else ct.MaCb = s.Id;
+                    _context.ChitietLichdats.Add(ct);
+                }
+
+                // 6. Tạo Hóa đơn tạm
+                var hd = new HoaDon
+                {
+                    MaHd = maLd,
+                    MaLd = maLd,
+                    MaKh = maKh, // <--- Gán cái mã ngẫu nhiên vào Hóa đơn
+                    NgayTao = DateTime.Now,
+                    TongTien = tongTien,
+                    TienDaTra = 0,
+                    TrangThai = 0
+                };
+                _context.HoaDons.Add(hd);
+
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+
+                return Ok(new { message = $"Đã thêm khách vãng lai thành công! (Lưu vào mã: {maKh})", maLd });
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+                return BadRequest("Lỗi: " + ex.InnerException?.Message ?? ex.Message);
+            }
+        }
     }
 
     public class CheckInConfirmRequest
@@ -311,5 +418,13 @@ namespace MinhTamHair.Admin.Controllers
         public string MaStylist { get; set; }
         public string PaymentMethod { get; set; }
         public List<ServiceItemDTO> UpdatedServices { get; set; }
+    }
+    // DTO hứng dữ liệu cho khách vãng lai
+    public class WalkInRequest
+    {
+        public string TenKhach { get; set; }
+        public string Sdt { get; set; }
+        public string MaStylist { get; set; }
+        public List<ServiceItemDTO> Services { get; set; }
     }
 }
