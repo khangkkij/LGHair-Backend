@@ -25,70 +25,74 @@ namespace MinhTamHair.Controllers
         {
             try
             {
-                // Nếu không truyền ngày, mặc định lấy từ đầu tháng đến hiện tại
                 var today = DateTime.Today;
                 var start = startDate ?? new DateTime(today.Year, today.Month, 1);
                 var end = endDate ?? today;
-
-                // Cộng thêm 1 ngày và trừ đi 1 tick để bao gồm trọn vẹn ngày endDate (đến 23:59:59)
                 end = end.Date.AddDays(1).AddTicks(-1);
 
-                // 1. Lọc chung theo ngày tháng
-                var baseQuery = _context.HoaDons.Where(h => h.NgayTao >= start && h.NgayTao <= end);
-
-                var doanhThu = await baseQuery.Where(h => h.TrangThai == 1).SumAsync(h => h.ThanhTien ?? 0);
-                var soHoaDon = await baseQuery.CountAsync();
-                var soVoucher = await baseQuery.Where(h => h.MaCode != null).CountAsync();
-
-                // 2. Top Nhân Viên theo khoảng thời gian đã lọc
-                var topNhanVien = await baseQuery
-                    .Where(h => h.TrangThai == 1 && h.MaNv != null)
+                // ===============================================================
+                // BƯỚC 1: LẤY DỮ LIỆU RA TRƯỚC (Theo đúng chuẩn DatDichVuController)
+                // Bỏ qua lỗi ngầm của EF Core bằng cách lấy data thẳng ra List
+                // ===============================================================
+                var danhSachHoaDon = await _context.HoaDons
+                    .Include(h => h.MaKhNavigation)
                     .Include(h => h.MaNvNavigation)
+                    .Where(h => h.NgayTao >= start && h.NgayTao <= end)
+                    .ToListAsync();
+
+                // Chỉ lấy những hóa đơn đã thanh toán xong
+                var hoaDonThanhToan = danhSachHoaDon.Where(h => h.TrangThai == 1).ToList();
+
+                // ===============================================================
+                // BƯỚC 2: TÍNH TOÁN CÁC CHỈ SỐ (Thay ThanhTien = TongTien)
+                // ===============================================================
+                var doanhThu = hoaDonThanhToan.Sum(h => h.TongTien ?? 0);
+                var soHoaDon = hoaDonThanhToan.Count();
+
+                // Đếm voucher: Hóa đơn nào có mã Code thì tính là đã dùng voucher
+                var soVoucher = hoaDonThanhToan.Count(h => !string.IsNullOrEmpty(h.MaCode));
+
+                // ===============================================================
+                // BƯỚC 3: TOP 3 NHÂN VIÊN XUẤT SẮC
+                // ===============================================================
+                var topNhanVien = hoaDonThanhToan
+                    .Where(h => h.MaNvNavigation != null)
                     .GroupBy(h => h.MaNvNavigation.HoTenNv)
                     .Select(g => new {
                         TenNhanVien = g.Key ?? "Chưa rõ",
-                        DoanhThuMangLai = g.Sum(h => h.ThanhTien ?? 0),
+                        DoanhThuMangLai = g.Sum(h => h.TongTien ?? 0), // Lấy TongTien
                         SoHoaDonPhuTrach = g.Count()
                     })
                     .OrderByDescending(x => x.DoanhThuMangLai)
                     .Take(3)
-                    .ToListAsync();
+                    .ToList();
 
-                // 3. Tìm kiếm theo Mã Hóa Đơn
-                var queryHoaDon = baseQuery.AsQueryable();
-                if (!string.IsNullOrEmpty(searchMaHd))
-                {
-                    // Lọc mã hóa đơn chứa chuỗi tìm kiếm (không phân biệt hoa thường do cấu hình DB)
-                    queryHoaDon = queryHoaDon.Where(h => h.MaHd.Contains(searchMaHd));
-                }
-
-                var hoaDonGanDay = await queryHoaDon
-                    .Include(h => h.MaKhNavigation)
+                // ===============================================================
+                // BƯỚC 4: DANH SÁCH 10 HÓA ĐƠN GẦN ĐÂY
+                // ===============================================================
+                var hoaDonGanDay = danhSachHoaDon
                     .OrderByDescending(h => h.NgayTao)
-                    .Take(10) // Lấy 10 hóa đơn để xem rõ kết quả tìm kiếm
+                    .Take(10)
                     .Select(h => new {
-                        h.MaHd,
+                        MaHd = h.MaHd,
                         KhachHang = h.MaKhNavigation != null ? h.MaKhNavigation.HoTen : "Khách vãng lai",
-                        h.NgayTao,
-                        h.ThanhTien,
-                        h.TrangThai
+                        NgayTao = h.NgayTao,
+                        TongTien = h.TongTien ?? 0, // Lấy TongTien
+                        TrangThai = h.TrangThai
                     })
-                    .ToListAsync();
+                    .ToList();
 
-                // 4. Dữ liệu cho BIỂU ĐỒ (Nhóm doanh thu theo từng ngày)
-                var rawData = await baseQuery
-                    .Where(h => h.TrangThai == 1 && h.NgayTao != null)
-                    .Select(h => new { Date = h.NgayTao.Value.Date, h.ThanhTien })
-                    .ToListAsync();
-
-                var doanhThuTheoNgay = rawData
-                    .GroupBy(x => x.Date)
+                // ===============================================================
+                // BƯỚC 5: BIỂU ĐỒ DOANH THU THEO NGÀY
+                // ===============================================================
+                var doanhThuTheoNgay = hoaDonThanhToan
+                    .Where(h => h.NgayTao != null)
+                    .GroupBy(x => x.NgayTao.Value.Date)
+                    .OrderBy(g => g.Key) // Sắp xếp theo ngày tháng trực tiếp
                     .Select(g => new {
-                        Ngay = g.Key.ToString("dd/MM"), // Trả về định dạng Ngày/Tháng
-                        DoanhThu = g.Sum(x => x.ThanhTien ?? 0)
+                        Ngay = g.Key.ToString("dd/MM"),
+                        DoanhThu = g.Sum(x => x.TongTien ?? 0) // Lấy TongTien
                     })
-                    // Sắp xếp tăng dần theo ngày
-                    .OrderBy(x => DateTime.ParseExact(x.Ngay + "/" + today.Year, "dd/MM/yyyy", null))
                     .ToList();
 
                 return Ok(new
@@ -98,7 +102,7 @@ namespace MinhTamHair.Controllers
                     soVoucherDaDung = soVoucher,
                     topNhanVien,
                     hoaDonGanDay,
-                    bieuDo = doanhThuTheoNgay // Gửi mảng này về Vue để vẽ
+                    bieuDo = doanhThuTheoNgay
                 });
             }
             catch (Exception ex)
@@ -108,3 +112,4 @@ namespace MinhTamHair.Controllers
         }
     }
 }
+

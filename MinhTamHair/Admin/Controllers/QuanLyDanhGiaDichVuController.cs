@@ -226,6 +226,80 @@ namespace MinhTamHair.Admin.Controllers
                 return StatusCode(500, ex.Message);
             }
         }
+        // ==========================================
+        // 6. THỐNG KÊ TRUNG BÌNH SAO THEO DỊCH VỤ
+        // ==========================================
+        [HttpGet("thong-ke")]
+        public async Task<IActionResult> GetThongKeSaoDichVu()
+        {
+            try
+            {
+                // Dùng Entity Framework để Group By trực tiếp dưới Database
+                var stats = await _context.DanhgiaDichvus
+                    .Include(dg => dg.MaDvNavigation)
+                    .Include(dg => dg.MaCbNavigation)
+                    .GroupBy(dg => new {
+                        // Nhóm theo Mã Dịch Vụ hoặc Mã Combo
+                        IdId = dg.MaDv ?? dg.MaCb,
+                        Ten = dg.MaDv != null ? dg.MaDvNavigation.TenDv : (dg.MaCb != null ? dg.MaCbNavigation.TenCombo : "Dịch vụ khác")
+                    })
+                    .Select(g => new
+                    {
+                        TenDichVu = g.Key.Ten,
+                        // Tính điểm trung bình và làm tròn 1 chữ số thập phân
+                        DiemTrungBinh = Math.Round(g.Average(x => (double)x.SoSao), 1),
+                        // Đếm số lượt đánh giá
+                        LuotDanhGia = g.Count()
+                    })
+                    // Sắp xếp: Ưu tiên điểm cao -> Ưu tiên lượt đánh giá nhiều
+                    .OrderByDescending(x => x.DiemTrungBinh)
+                    .ThenByDescending(x => x.LuotDanhGia)
+                    .ToListAsync();
+
+                // Trả về kết quả cho Frontend
+                return Ok(stats);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Lỗi khi lấy dữ liệu thống kê", error = ex.Message });
+            }
+        }
+        // ==========================================
+        // 7. THỐNG KÊ TRUNG BÌNH SAO THEO NHÂN VIÊN
+        // ==========================================
+        [HttpGet("thong-ke-nhan-vien")]
+        public async Task<IActionResult> GetThongKeSaoNhanVien()
+        {
+            try
+            {
+                // Dùng LINQ Query Syntax để JOIN các bảng: Đánh Giá -> Hóa Đơn -> Chi tiết -> Nhân viên
+                // Khớp chính xác Thợ nào làm Dịch vụ/Combo nào thì nhận sao của Dịch vụ/Combo đó
+                var stats = await (from dg in _context.DanhgiaDichvus
+                                   join hd in _context.HoaDons on dg.MaHd equals hd.MaHd
+                                   join ct in _context.ChitietLichdats
+                                        on new { hd.MaLd, Id = dg.MaDv ?? dg.MaCb }
+                                        equals new { ct.MaLd, Id = ct.MaDv ?? ct.MaCb }
+                                   join nv in _context.Nhanviens on ct.MaNv equals nv.MaNv
+                                   group dg by new { nv.MaNv, nv.HoTenNv } into g
+                                   select new
+                                   {
+                                       TenNhanVien = g.Key.HoTenNv,
+                                       // Tính điểm trung bình và làm tròn 1 chữ số
+                                       DiemTrungBinh = Math.Round(g.Average(x => (double)x.SoSao), 1),
+                                       // Đếm số lượt khách đánh giá thợ này
+                                       LuotDanhGia = g.Count()
+                                   })
+                                   .OrderByDescending(x => x.DiemTrungBinh)
+                                   .ThenByDescending(x => x.LuotDanhGia)
+                                   .ToListAsync();
+
+                return Ok(stats);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Lỗi khi lấy thống kê nhân viên", error = ex.Message });
+            }
+        }
     }
 
     // ==========================================
@@ -237,3 +311,4 @@ namespace MinhTamHair.Admin.Controllers
         public string Reply { get; set; } = string.Empty;
     }
 }
+ 

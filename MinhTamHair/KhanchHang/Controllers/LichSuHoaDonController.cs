@@ -115,5 +115,55 @@ namespace MinhTamHair.KhanchHang.Controllers
                 trangThai = detail.trangThai
             });
         }
+        // 1. Tạo Model hứng dữ liệu từ Form Vue gửi lên
+        public class RefundRequest
+        {
+            public string MaLd { get; set; }
+            public string Stk { get; set; }
+            public string NganHang { get; set; }
+            public string ChuTk { get; set; }
+        }
+
+        // 2. API Xử lý Lưu ra file Excel (CSV)
+        [HttpPost("submit-refund")]
+        public async Task<IActionResult> SubmitRefund([FromBody] RefundRequest req)
+        {
+            try
+            {
+                // A. Đổi trạng thái lịch đặt thành Hủy (0)
+                var booking = await _context.Lichdats.FindAsync(req.MaLd);
+                if (booking != null)
+                {
+                    booking.TrangThai = 0;
+                    var hoaDon = await _context.HoaDons.FirstOrDefaultAsync(h => h.MaLd == req.MaLd);
+                    if (hoaDon != null) hoaDon.TrangThai = 0;
+
+                    await _context.SaveChangesAsync();
+                }
+
+                // B. Ghi thông tin chuyển khoản ra file Excel (CSV)
+                // File này sẽ được lưu ngay trong thư mục gốc của Backend C#
+                string filePath = "DanhSachHoanTien.csv";
+
+                // C. Nếu file chưa tồn tại, tạo file và ghi dòng Tiêu đề cột
+                if (!System.IO.File.Exists(filePath))
+                {
+                    // Thêm BOM UTF-8 để Excel đọc không bị lỗi font tiếng Việt
+                    string header = "Mã Lịch Đặt,Ngân Hàng,Số Tài Khoản,Tên Chủ Tài Khoản,Ngày Yêu Cầu\n";
+                    await System.IO.File.WriteAllTextAsync(filePath, "\uFEFF" + header, System.Text.Encoding.UTF8);
+                }
+
+                // D. Ghi dữ liệu khách hàng vào dòng mới
+                // Dùng dấu phẩy (,) để Excel tự động chia cột. Dấu nháy đơn (') trước STK để Excel không làm mất số 0 ở đầu.
+                string newLine = $"{req.MaLd},\"{req.NganHang}\",'{req.Stk},\"{req.ChuTk}\",{DateTime.Now:dd/MM/yyyy HH:mm}\n";
+                await System.IO.File.AppendAllTextAsync(filePath, newLine, System.Text.Encoding.UTF8);
+
+                return Ok(new { message = "Hủy lịch thành công! Yêu cầu hoàn tiền đã được ghi nhận." });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest("Lỗi khi gửi yêu cầu: " + ex.Message);
+            }
+        }
     }
 }
