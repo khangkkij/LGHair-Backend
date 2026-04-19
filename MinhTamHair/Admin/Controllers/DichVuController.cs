@@ -88,8 +88,18 @@ namespace MinhTamHair.KhanchHang.Controllers
                 foreach (var file in dto.Files)
                 {
                     var fileName = Guid.NewGuid() + Path.GetExtension(file.FileName);
-                    var path = Path.Combine("wwwroot/assets/images", fileName);
 
+                    // 1. Lấy đường dẫn tuyệt đối đến thư mục chứa ảnh
+                    var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "assets", "images");
+
+                    // 2. Kiểm tra xem thư mục đã tồn tại chưa, chưa có thì tự động tạo mới
+                    if (!Directory.Exists(folderPath))
+                    {
+                        Directory.CreateDirectory(folderPath);
+                    }
+
+                    // 3. Tiến hành lưu file
+                    var path = Path.Combine(folderPath, fileName);
                     using var stream = new FileStream(path, FileMode.Create);
                     await file.CopyToAsync(stream);
 
