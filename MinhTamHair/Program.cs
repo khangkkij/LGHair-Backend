@@ -6,16 +6,33 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using MinhTamHair.Models;
 using MinhTamHair.Services;
+using MinhTamHair.Services.Gemini;
+using MinhTamHair.Services.LightX;
+using MinhTamHair.Services.UploadIMG;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 
+
+
+
 // Add services to the container.
 builder.Services.AddDbContext<MinhTamHairContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"),
+    sqlServerOptionsAction: sqlOptions =>
+    {
+        // BẬT TÍNH NĂNG TỰ ĐỘNG THỬ LẠI KHI MẤT KẾT NỐI (Lỗi Transient)
+        sqlOptions.EnableRetryOnFailure(
+            maxRetryCount: 5, // Thử lại tối đa 5 lần
+            maxRetryDelay: TimeSpan.FromSeconds(10), // Giữa mỗi lần thử cách nhau 10 giây
+            errorNumbersToAdd: null); // Nếu có mã lỗi SQL cụ thể muốn bắt thêm thì điền vào đây
+    }
+
+    ));
 // Cấu hình JSON để tránh lỗi vòng lặp khi truy vấn dữ liệu quan hệ (Voucher <-> KhachHang)
+builder.Services.AddHttpClient();
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
     {
@@ -114,12 +131,25 @@ builder.Services.AddAuthorization(options => {
 builder.Services.AddMemoryCache();
 builder.Services.AddTransient<IEmailService, EmailService>();
 
+
+builder.Services.Configure<CloudinarySetings>(builder.Configuration.GetSection("Cloudinary"));
+//                  DI CLOUDINARY
+builder.Services.AddScoped<IUploadIMG, UploadIMG>();
+builder.Services.AddScoped<ILightXService, LightXService>();
+builder.Services.AddHttpClient<GeminiService>();
+//                  DI CLOUDINARY
 var app = builder.Build();
-app.Use((context, next) =>
-{
-	context.Response.Headers.Append("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
-	return next();
-});
+
+//      Cấu hình CORS để cho phép Vue App truy cập API
+
+    app.Use((context, next) =>
+    {
+	    context.Response.Headers.Append("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
+	    return next();
+    });
+
+
+
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
@@ -129,6 +159,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+app.UseDefaultFiles(); 
 app.UseStaticFiles();
 
 var uploadDirectory = Path.Combine(builder.Environment.ContentRootPath, "UserUploads");
@@ -149,5 +180,5 @@ app.UseAuthentication();    // Bật Xác thực trước
 app.UseAuthorization();     // Bật Phân quyền sau
 
 app.MapControllers();
-
+app.MapFallbackToFile("/dist/index.html");
 app.Run();
