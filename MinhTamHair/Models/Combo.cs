@@ -24,4 +24,5 @@ public partial class Combo
     public virtual ICollection<DanhgiaDichvu> DanhgiaDichvus { get; set; } = new List<DanhgiaDichvu>();
 
     public virtual ICollection<Dichvu> MaDvs { get; set; } = new List<Dichvu>();
+    public ICollection<Combo_DichVu> Combo_DichVus { get; set; }
 }

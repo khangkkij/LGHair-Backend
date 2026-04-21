@@ -1,0 +1,121 @@
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using MinhTamHair.Models;
+using System.Security.Claims;
+namespace MinhTamHair.NhanVien.Controllers
+{
+	[Route("api/nhan-vien/ca-lam")]
+	[ApiController]
+	[Authorize] // Chỉ cần đăng nhập là gọi được, không cần check cứng R01, R02 ở đây
+	public class NhanVienCaLamController : ControllerBase
+	{
+		private readonly MinhTamHairContext _context;
+
+		public NhanVienCaLamController(MinhTamHairContext context)
+		{
+			_context = context;
+		}
+
+		// Hàm phụ để lấy MaNv từ Token đăng nhập
+		private string? GetCurrentMaNv() => User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+		[HttpGet("ca-lam-va-lich-su")]
+		public async Task<IActionResult> GetMyShifts([FromQuery] string maNv)
+		{
+			if (string.IsNullOrEmpty(maNv)) return BadRequest(new { message = "Thiếu mã nhân viên" });
+
+			var today = DateOnly.FromDateTime(DateTime.Now);
+			var yesterday = today.AddDays(-1); // Tạo thêm biến Ngày Hôm Qua
+			var sevenDaysAgo = today.AddDays(-7);
+
+			// 1. KIỂM TRA XEM HÔM NAY ĐÃ CÓ CA CHƯA
+			var todayShift = await _context.Lichlamviecs
+				.FirstOrDefaultAsync(l => l.MaNv == maNv && l.NgayLamViec == today);
+
+			if (todayShift == null)
+			{
+				// 2. TÌM LỊCH LÀM VIỆC CỦA NGÀY HÔM QUA
+				var yesterdayShift = await _context.Lichlamviecs
+					.FirstOrDefaultAsync(l => l.MaNv == maNv && l.NgayLamViec == yesterday);
+
+				// 3. LẤY TÊN CA: Nếu hôm qua có ca thì copy sang, nếu hôm qua nghỉ thì mới dùng "Ca Linh Động"
+				string tenCaMoi = (yesterdayShift != null && !string.IsNullOrEmpty(yesterdayShift.CaLam))
+									? yesterdayShift.CaLam
+									: "Chưa xếp";
+
+				// Tự tạo ca mới
+				var newShift = new Lichlamviec
+				{
+					MaNv = maNv,
+					NgayLamViec = today,
+					CaLam = tenCaMoi, // Gán tên ca vừa lấy được vào đây
+					TrangThai = 1 // 1: Trạng thái chờ điểm danh
+				};
+				_context.Lichlamviecs.Add(newShift);
+				await _context.SaveChangesAsync();
+			}
+
+			// 4. LẤY DANH SÁCH (Bao gồm cả ca vừa tạo)
+			var shifts = await _context.Lichlamviecs
+				.Where(l => l.MaNv == maNv && l.NgayLamViec >= sevenDaysAgo && l.NgayLamViec <= today)
+				.OrderByDescending(l => l.NgayLamViec)
+				.Select(l => new {
+					MaLich = l.MaLich,
+					NgayLamViec = l.NgayLamViec.Value.ToString("yyyy-MM-dd"),
+					CaLam = l.CaLam,
+					TrangThai = l.TrangThai
+				})
+				.ToListAsync();
+
+			return Ok(new { success = true, data = shifts });
+		}
+
+		// SỬA API ĐIỂM DANH
+		[HttpPatch("diem-danh/{maLich}")]
+		public async Task<IActionResult> CheckIn(int maLich, [FromQuery] string maNv) // THÊM maNv Ở ĐÂY
+		{
+			if (string.IsNullOrEmpty(maNv)) return BadRequest(new { message = "Thiếu mã nhân viên" });
+
+			// Tìm lịch theo maLich và maNv được truyền từ Vue.js xuống
+			var lich = await _context.Lichlamviecs.FirstOrDefaultAsync(l => l.MaLich == maLich && l.MaNv == maNv);
+
+			if (lich == null) return NotFound(new { message = "Không tìm thấy ca làm của bạn." });
+			if (lich.CaLam == "Chưa xếp") return BadRequest(new { message = "Ca làm chưa được xếp, không thể điểm danh." });
+			if (lich.TrangThai == 2) return BadRequest(new { message = "Bạn đã điểm danh rồi." });
+
+			lich.TrangThai = 2;
+			await _context.SaveChangesAsync();
+
+			return Ok(new { success = true, message = "Điểm danh thành công!" });
+		}
+
+		// LÀM TƯƠNG TỰ CHO API RỜI CA SỚM (NẾU CÓ)
+		[HttpPatch("roi-ca-som/{maLich}")]
+		public async Task<IActionResult> CheckOut(int maLich, [FromQuery] string maNv)
+		{
+			var lich = await _context.Lichlamviecs.FirstOrDefaultAsync(l => l.MaLich == maLich && l.MaNv == maNv);
+			if (lich == null) return NotFound(new { message = "Không tìm thấy ca làm của bạn." });
+
+			lich.TrangThai = 3;
+			await _context.SaveChangesAsync();
+
+			return Ok(new { success = true, message = "Đã đánh dấu rời ca sớm!" });
+		}
+		// 3. API GỬI YÊU CẦU ĐỔI CA (Trạng thái 4)
+		[HttpPatch("gui-yeu-cau/{maLich}")]
+		public async Task<IActionResult> RequestChange(int maLich, [FromBody] string lyDo)
+		{
+			var maNv = GetCurrentMaNv();
+			var lich = await _context.Lichlamviecs.FirstOrDefaultAsync(l => l.MaLich == maLich && l.MaNv == maNv);
+
+			if (lich == null) return NotFound();
+
+			lich.TrangThai = 4; // Trạng thái yêu cầu
+								// lich.GhiChu = lyDo;
+
+			await _context.SaveChangesAsync();
+			return Ok(new { success = true, message = "Yêu cầu đã được gửi tới quản lý." });
+		}
+	}
+}
