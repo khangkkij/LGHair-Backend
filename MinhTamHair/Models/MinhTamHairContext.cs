@@ -86,27 +86,39 @@ public partial class MinhTamHairContext : DbContext
                 .HasColumnName("tenMau");
             entity.Property(e => e.TrangThai).HasColumnName("trangThai");
         });
-
         modelBuilder.Entity<ChitietFlashsale>(entity =>
         {
-            entity.HasKey(e => new { e.MaFl, e.MaCb, e.MaDv }).HasName("PK__CHITIET___3DE7DAF3B787769A");
-
             entity.ToTable("CHITIET_FLASHSALE");
+
+            // 1. CHỖ QUAN TRỌNG NHẤT: Đổi sang Id làm Khóa chính
+            entity.HasKey(e => e.Id).HasName("PK_CHITIET_FLASHSALE");
+
+            // 2. Cấu hình Id tự tăng (Identity)
+            entity.Property(e => e.Id)
+                .ValueGeneratedOnAdd()
+                .HasColumnName("Id");
 
             entity.Property(e => e.MaFl)
                 .HasMaxLength(10)
                 .IsUnicode(false)
-                .HasColumnName("maFL");
+                .HasColumnName("maFL")
+                .IsRequired(); 
+
             entity.Property(e => e.MaCb)
                 .HasMaxLength(10)
                 .IsUnicode(false)
-                .HasColumnName("maCB");
+                .HasColumnName("maCB")
+                .IsRequired(false);
+
             entity.Property(e => e.MaDv)
                 .HasMaxLength(10)
                 .IsUnicode(false)
-                .HasColumnName("maDV");
+                .HasColumnName("maDV")
+                .IsRequired(false);
+
             entity.Property(e => e.PhanTramGiam).HasColumnName("phanTramGiam");
 
+      
             entity.HasOne(d => d.MaCbNavigation).WithMany(p => p.ChitietFlashsales)
                 .HasForeignKey(d => d.MaCb)
                 .OnDelete(DeleteBehavior.ClientSetNull)
@@ -119,10 +131,9 @@ public partial class MinhTamHairContext : DbContext
 
             entity.HasOne(d => d.MaFlNavigation).WithMany(p => p.ChitietFlashsales)
                 .HasForeignKey(d => d.MaFl)
-                .OnDelete(DeleteBehavior.ClientSetNull)
+                .OnDelete(DeleteBehavior.Cascade) 
                 .HasConstraintName("FK__CHITIET_FL__maFL__5629CD9C");
         });
-
         modelBuilder.Entity<ChitietLichdat>(entity =>
         {
             entity.HasKey(e => e.MaCtld).HasName("PK__CHITIET___FD279DF0AAB0864A");
