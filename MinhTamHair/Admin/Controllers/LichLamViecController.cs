@@ -338,67 +338,93 @@ namespace MinhTamHair.Admin.Controllers
 
             return Ok(new { success = true, message = "Đã ghi nhận nhân viên rời ca sớm." });
         }
-        [HttpPost("tao-lich-30-ngay")]
-        public async Task<IActionResult> Generate30DaysShifts()
-        {
-            try
-            {
-                // 1. Xác định mốc thời gian: Từ hôm nay đến 30 ngày sau
-                DateOnly today = DateOnly.FromDateTime(DateTime.Now);
-                DateOnly endDate = today.AddDays(30);
+		[HttpPost("tao-lich-30-ngay")]
+		public async Task<IActionResult> Generate30DaysShifts()
+		{
+			try
+			{
+				// 1. Xác định mốc thời gian: Từ hôm nay đến 30 ngày sau
+				DateOnly today = DateOnly.FromDateTime(DateTime.Now);
+				DateOnly endDate = today.AddDays(30);
 
-                // 2. Lấy danh sách thợ hợp lệ (Được phép đặt lịch)
-                var danhSachTho = await _context.Nhanviens
-                    .Include(nv => nv.MaLoaiNvNavigation)
-                    .Where(nv => nv.TrangThai == 1 && nv.MaLoaiNvNavigation!.DuocDatLich == true)
-                    .ToListAsync();
+				// 2. Lấy danh sách thợ hợp lệ (Được phép đặt lịch)
+				var danhSachTho = await _context.Nhanviens
+					.Include(nv => nv.MaLoaiNvNavigation)
+					.Where(nv => nv.TrangThai == 1 && nv.MaLoaiNvNavigation!.DuocDatLich == true)
+					.ToListAsync();
 
-                // 3. Lấy ca làm gần nhất của từng thợ để làm "Mẫu" (Tránh việc ai cũng bị gán mặc định)
-                var caLamGiaoDien = await _context.Lichlamviecs
-                    .Where(l => l.NgayLamViec <= today && l.MaNv != null)
-                    .OrderByDescending(l => l.NgayLamViec)
-                    .ToListAsync();
+				// 3. Lấy ca làm gần nhất của từng thợ để làm "Mẫu"
+				var caLamGiaoDien = await _context.Lichlamviecs
+					.Where(l => l.NgayLamViec <= today && l.MaNv != null)
+					.OrderByDescending(l => l.NgayLamViec)
+					.ToListAsync();
 
-                var mauCaLam = caLamGiaoDien
-                    .GroupBy(l => l.MaNv)
-                    .ToDictionary(g => g.Key!, g => g.FirstOrDefault()?.CaLam ?? "Cả ngày");
+				var mauCaLam = caLamGiaoDien
+					.GroupBy(l => l.MaNv)
+					.ToDictionary(g => g.Key!, g => g.FirstOrDefault()?.CaLam ?? "Chưa xếp"); // Sửa fallback mặc định thành "Chưa xếp"
 
-                int soCaMoi = 0;
+				// --- BƯỚC KIỂM TRA MỚI ---
+				// Lọc ra danh sách mã nhân viên đang bị "Chưa xếp" ca
+				var dsMaNvChuaXep = mauCaLam
+					.Where(x => x.Value == "Chưa xếp" || string.IsNullOrWhiteSpace(x.Value))
+					.Select(x => x.Key)
+					.ToList();
 
-                // 4. Vòng lặp chạy từ hôm nay đến 30 ngày sau
-                for (var date = today; date <= endDate; date = date.AddDays(1))
-                {
-                    // Lấy các ca ĐÃ CÓ trong ngày này để KHÔNG bị tạo trùng lặp
-                    var caDaCo = await _context.Lichlamviecs
-                        .Where(l => l.NgayLamViec == date)
-                        .Select(l => l.MaNv)
-                        .ToListAsync();
+				// Kiểm tra xem những người chưa xếp ca này có nằm trong danh sách thợ hợp lệ không
+				var thoChuaXepLich = danhSachTho
+					.Where(nv => dsMaNvChuaXep.Contains(nv.MaNv))
+					.ToList();
 
-                    foreach (var nv in danhSachTho)
-                    {
-                        // Nếu thợ này chưa có lịch trong ngày hôm đó -> Tạo mới
-                        if (!caDaCo.Contains(nv.MaNv))
-                        {
-                            var caMacDinh = mauCaLam.GetValueOrDefault(nv.MaNv, "Cả ngày");
-                            _context.Lichlamviecs.Add(new Lichlamviec
-                            {
-                                MaNv = nv.MaNv,
-                                NgayLamViec = date,
-                                CaLam = caMacDinh,
-                                TrangThai = 1 // 1: Có đi làm
-                            });
-                            soCaMoi++;
-                        }
-                    }
-                }
+				if (thoChuaXepLich.Any())
+				{
+					// Lấy tên những thợ chưa được xếp lịch để báo lỗi cụ thể
+					// (Lưu ý: Thay 'HoTenNv' bằng đúng tên cột trong DB của bạn nếu khác)
+					string tenCacTho = string.Join(", ", thoChuaXepLich.Select(nv => nv.HoTenNv));
 
-                await _context.SaveChangesAsync();
-                return Ok(new { success = true, message = $"Tuyệt vời! Đã tự động tạo {soCaMoi} ca làm việc mới cho 30 ngày tới." });
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(500, new { success = false, message = "Lỗi khi tạo lịch: " + ex.Message });
-            }
-        }
-    }
+					return BadRequest(new
+					{
+						success = false,
+						message = $"Không thể tự động tạo lịch! Vui lòng xếp ca cụ thể cho các nhân viên sau trước khi tạo 30 ngày"
+					});
+				}
+				// -------------------------
+
+				int soCaMoi = 0;
+
+				// 4. Vòng lặp chạy từ hôm nay đến 30 ngày sau
+				for (var date = today; date <= endDate; date = date.AddDays(1))
+				{
+					// Lấy các ca ĐÃ CÓ trong ngày này để KHÔNG bị tạo trùng lặp
+					var caDaCo = await _context.Lichlamviecs
+						.Where(l => l.NgayLamViec == date)
+						.Select(l => l.MaNv)
+						.ToListAsync();
+
+					foreach (var nv in danhSachTho)
+					{
+						// Nếu thợ này chưa có lịch trong ngày hôm đó -> Tạo mới
+						if (!caDaCo.Contains(nv.MaNv))
+						{
+							var caMacDinh = mauCaLam.GetValueOrDefault(nv.MaNv, "Cả ngày");
+							_context.Lichlamviecs.Add(new Lichlamviec
+							{
+								MaNv = nv.MaNv,
+								NgayLamViec = date,
+								CaLam = caMacDinh,
+								TrangThai = 1 // 1: Chờ điểm danh
+							});
+							soCaMoi++;
+						}
+					}
+				}
+
+				await _context.SaveChangesAsync();
+				return Ok(new { success = true, message = $"Tuyệt vời! Đã tự động tạo {soCaMoi} ca làm việc mới cho 30 ngày tới." });
+			}
+			catch (Exception ex)
+			{
+				return StatusCode(500, new { success = false, message = "Lỗi khi tạo lịch: " + ex.Message });
+			}
+		}
+	}
 }
