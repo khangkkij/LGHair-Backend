@@ -49,10 +49,19 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             var query = _context.Vouchers.AsQueryable();
 
-            if (rankDiscountPercent.HasValue)
-            {
-                query = query.Where(v => !v.PhanTramGiam.HasValue || v.PhanTramGiam <= rankDiscountPercent.Value);
-            }
+            // Không lọc theo rank ở bước hiển thị (ưu đãi rank xử lý khi Collect).
+
+            var now = DateTime.Now;
+            // Chỉ đưa vào danh sách công khai: còn hiệu lực + trong thời gian + còn lượt.
+            // Vẫn trả về các mã khách đã nhận (kể cả hết hạn/hết lượt) để tab "Của tôi" hoạt động.
+            query = query.Where(v =>
+                (
+                    (v.TrangThai == null || v.TrangThai == 1)
+                    && (!v.NgayBatDau.HasValue || v.NgayBatDau <= now)
+                    && (!v.NgayKetThuc.HasValue || v.NgayKetThuc >= now)
+                    && (!v.SoLuong.HasValue || (v.SoLuongDaDung ?? 0) < v.SoLuong)
+                )
+                || (collectedCodes.Count > 0 && collectedCodes.Contains(v.MaCode)));
 
             var vouchers = await query
                 .OrderByDescending(v => v.NgayBatDau ?? DateTime.MinValue)
@@ -168,16 +177,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 return BadRequest(new { message = "Voucher đã hết lượt." });
             }
 
-            if (!string.IsNullOrWhiteSpace(khachHang.MaRank) && voucher.PhanTramGiam.HasValue)
-            {
-                var rank = await _context.Hangthanhviens
-                    .FirstOrDefaultAsync(r => r.MaRank == khachHang.MaRank && (r.TrangThai == null || r.TrangThai == 1));
-
-                if (rank?.PhanTramGiamGia != null && voucher.PhanTramGiam > rank.PhanTramGiamGia)
-                {
-                    return BadRequest(new { message = "Voucher này vượt mức ưu đãi của hạng thành viên hiện tại." });
-                }
-            }
+            // Không chặn nhận mã theo trần % hạng — trần chỉ áp khi áp dụng đơn (VoucherCartLogic).
 
             khachHang.MaCodes.Add(voucher);
             await _context.SaveChangesAsync();
