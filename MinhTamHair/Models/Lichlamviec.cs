@@ -10,7 +10,7 @@ public partial class Lichlamviec
     public string? MaNv { get; set; }
 
     public DateOnly? NgayLamViec { get; set; }
-	public DateOnly? NgayKetThuc { get; set; }
+	
 
 	public string? CaLam { get; set; }
 

@@ -79,7 +79,6 @@ namespace MinhTamHair.Admin.Controllers
                     HoTenNv = l.MaNvNavigation!.HoTenNv ?? "",
                     TenLoaiNv = l.MaNvNavigation.MaLoaiNvNavigation!.TenLoai,
                     NgayLamViec = l.NgayLamViec.Value.ToString("yyyy-MM-dd"),
-                    NgayKetThuc = l.NgayKetThuc.HasValue ? l.NgayKetThuc.Value.ToString("yyyy-MM-dd") : null,
                     CaLam = l.CaLam ?? "",
                     TrangThai = l.TrangThai
                 })
@@ -94,7 +93,6 @@ namespace MinhTamHair.Admin.Controllers
             var lich = await _context.Lichlamviecs.FindAsync(maLich);
             if (lich == null) return NotFound(new { success = false, message = "Không tìm thấy lịch làm việc." });
             DateOnly start = lich.NgayLamViec.Value;
-            DateOnly end = lich.NgayKetThuc ?? start;
 
             // 1. Định nghĩa khung giờ cho từng loại Ca làm (Phải khớp với lúc bạn thêm ca)
             TimeOnly caStart, caEnd;
@@ -125,7 +123,6 @@ namespace MinhTamHair.Admin.Controllers
         .AnyAsync(ct =>
             ct.MaNv == lich.MaNv &&
             ct.MaLdNavigation!.NgayHen >= start && // Từ ngày bắt đầu dải
-            ct.MaLdNavigation!.NgayHen <= end &&   // Đến ngày kết thúc dải
             ct.MaLdNavigation.TrangThai != 0 &&
             caStart < ct.MaLdNavigation.GioKetThuc &&
             ct.MaLdNavigation.GioBatDau < caEnd
