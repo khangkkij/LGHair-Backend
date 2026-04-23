@@ -8,7 +8,7 @@ using System.Linq;
 
 namespace MinhTamHair.Controllers
 {
-    // DTO gom chung để xài cho Create và Update
+   
     public class SaleRequestPayload : SaleRequest
     {
         public List<SaleRequestDetails> ChiTietFlashSales { get; set; } = new List<SaleRequestDetails>();
@@ -48,20 +48,20 @@ namespace MinhTamHair.Controllers
                 {
                     if (s.NgayKetThuc < dateNow && s.TrangThai != 2)
                     {
-                        s.TrangThai = 2; // Đã kết thúc
+                        s.TrangThai = 2; 
                         statusChanged = true;
                     }
                     else if (s.NgayBatDau <= dateNow && s.NgayKetThuc >= dateNow)
                     {
                         if (s.TrangThai != 1)
                         {
-                            s.TrangThai = 1; 
+                            s.TrangThai = 1;
                             statusChanged = true;
                         }
                     }
                     else if (s.NgayBatDau > dateNow && s.TrangThai != 0)
                     {
-                        s.TrangThai = 0; // Chưa bắt đầu
+                        s.TrangThai = 0; 
                         statusChanged = true;
                     }
                 }
@@ -114,6 +114,10 @@ namespace MinhTamHair.Controllers
 
                         ChiTietFlashSales = g.Select(x => new SaleResponseDetails
                         {
+                          
+                            MaDV = x.ct.MaDv,
+                            MaCB = x.ct.MaCb,
+
                             TenDv = x.dv != null ? x.dv.TenDv : null,
                             TenCb = x.cb != null ? x.cb.TenCombo : null,
 
@@ -214,6 +218,10 @@ namespace MinhTamHair.Controllers
 
                         ChiTietFlashSales = g.Select(x => new SaleResponseDetails
                         {
+                            // SỬA Ở ĐÂY: Trả về MaDV và MaCB cho FE
+                            MaDV = x.ct.MaDv,
+                            MaCB = x.ct.MaCb,
+
                             TenDv = x.dv != null ? x.dv.TenDv : null,
                             TenCb = x.cb != null ? x.cb.TenCombo : null,
                             PhanTramGiam = (int)(x.ct.PhanTramGiam ?? 0),
@@ -239,7 +247,6 @@ namespace MinhTamHair.Controllers
             }
         }
 
-     
         [HttpPost]
         public async Task<IActionResult> CreateSale([FromBody] SaleRequestPayload addSale)
         {
@@ -250,6 +257,15 @@ namespace MinhTamHair.Controllers
                 if (addSale.NgayBatDau >= addSale.NgayKetThuc)
                     return BadRequest(new { message = "Ngày kết thúc phải lớn hơn ngày bắt đầu!" });
 
+               
+                bool isOverlap = await _context.Flashsales.AnyAsync(x =>
+                    x.TrangThai != 2 && 
+                    addSale.NgayBatDau < x.NgayKetThuc &&
+                    addSale.NgayKetThuc > x.NgayBatDau);
+
+                if (isOverlap)
+                    return BadRequest(new { message = "Khoảng thời gian này bị trùng với một chương trình Flash Sale khác đang hoặc sắp diễn ra. Vui lòng chọn thời gian khác!" });
+
                 if (addSale.ChiTietFlashSales == null || !addSale.ChiTietFlashSales.Any())
                     return BadRequest(new { message = "Phải có ít nhất 1 dịch vụ hoặc combo để sale!" });
 
@@ -257,7 +273,7 @@ namespace MinhTamHair.Controllers
                     (!string.IsNullOrEmpty(x.MaDV) && !string.IsNullOrEmpty(x.MaCB)) ||
                     (string.IsNullOrEmpty(x.MaDV) && string.IsNullOrEmpty(x.MaCB))))
                 {
-                    return BadRequest(new { message = " chỉ được chọn DUY NHẤT Dịch Vụ HOẶC Combo. Không được chọn cả 2 hoặc để trống." });
+                    return BadRequest(new { message = "Chỉ được chọn DUY NHẤT Dịch Vụ HOẶC Combo. Không được chọn cả 2 hoặc để trống." });
                 }
 
                 string createSaleId;
@@ -272,7 +288,7 @@ namespace MinhTamHair.Controllers
                     MaFl = createSaleId,
                     NgayBatDau = addSale.NgayBatDau,
                     NgayKetThuc = addSale.NgayKetThuc,
-                    TrangThai = addSale.TrangThai =1,
+                    TrangThai = addSale.TrangThai = 1,
                 };
                 _context.Flashsales.Add(objSale);
 
@@ -294,61 +310,78 @@ namespace MinhTamHair.Controllers
                 return BadRequest(new { message = "Lỗi khi tạo Flash Sale: " + ex.Message });
             }
         }
+
         [HttpPut("{id}")]
         public async Task<IActionResult> UpdateSale(string id, [FromBody] SaleRequestPayload updateDto)
         {
-            using var transaction = await _context.Database.BeginTransactionAsync();
-            try
+            var strategy = _context.Database.CreateExecutionStrategy();
+
+            return await strategy.ExecuteAsync(async () =>
             {
-                var saleExisting = await _context.Flashsales
-                    .FirstOrDefaultAsync(x => x.MaFl == id);
-
-                if (saleExisting == null)
-                    return NotFound(new { message = "Không tìm thấy chương trình khuyến mãi." });
-
-                if (updateDto.NgayBatDau >= updateDto.NgayKetThuc)
-                    return BadRequest(new { message = "Ngày kết thúc phải lớn hơn ngày bắt đầu." });
-
-                if (updateDto.ChiTietFlashSales == null || !updateDto.ChiTietFlashSales.Any())
-                    return BadRequest(new { message = "Danh sách áp dụng không được để trống." });
-
-                if (updateDto.ChiTietFlashSales.Any(x => x.PhanTramGiam <= 0 || x.PhanTramGiam > 100))
-                    return BadRequest(new { message = "Mức giảm giá không hợp lệ (1-100%)." });
-                if (updateDto.ChiTietFlashSales.Any(x =>
-                   (!string.IsNullOrEmpty(x.MaDV) && !string.IsNullOrEmpty(x.MaCB)) ||
-                   (string.IsNullOrEmpty(x.MaDV) && string.IsNullOrEmpty(x.MaCB))))
+                using var transaction = await _context.Database.BeginTransactionAsync();
+                try
                 {
-                    return BadRequest(new { message = " chỉ được chọn DUY NHẤT Dịch Vụ HOẶC Combo. Không được chọn cả 2 hoặc để trống." });
+                    var saleExisting = await _context.Flashsales
+                        .FirstOrDefaultAsync(x => x.MaFl == id);
+
+                    if (saleExisting == null)
+                        return NotFound(new { message = "Không tìm thấy chương trình khuyến mãi." });
+
+                    if (updateDto.NgayBatDau >= updateDto.NgayKetThuc)
+                        return BadRequest(new { message = "Ngày kết thúc phải lớn hơn ngày bắt đầu." });
+
+                   
+                    bool isOverlap = await _context.Flashsales.AnyAsync(x =>
+                        x.MaFl != id &&     
+                        x.TrangThai != 2 && 
+                        updateDto.NgayBatDau < x.NgayKetThuc &&
+                        updateDto.NgayKetThuc > x.NgayBatDau);
+
+                    if (isOverlap)
+                        return BadRequest(new { message = "Khoảng thời gian này bị trùng với một chương trình Flash Sale khác đang hoặc sắp diễn ra. Vui lòng chọn thời gian khác!" });
+
+                    if (updateDto.ChiTietFlashSales == null || !updateDto.ChiTietFlashSales.Any())
+                        return BadRequest(new { message = "Danh sách áp dụng không được để trống." });
+
+                    if (updateDto.ChiTietFlashSales.Any(x => x.PhanTramGiam <= 0 || x.PhanTramGiam > 100))
+                        return BadRequest(new { message = "Mức giảm giá không hợp lệ (1-100%)." });
+
+                    if (updateDto.ChiTietFlashSales.Any(x =>
+                       (!string.IsNullOrEmpty(x.MaDV) && !string.IsNullOrEmpty(x.MaCB)) ||
+                       (string.IsNullOrEmpty(x.MaDV) && string.IsNullOrEmpty(x.MaCB))))
+                    {
+                        return BadRequest(new { message = "Chỉ được chọn DUY NHẤT Dịch Vụ HOẶC Combo. Không được chọn cả 2 hoặc để trống." });
+                    }
+
+                    saleExisting.NgayBatDau = updateDto.NgayBatDau;
+                    saleExisting.NgayKetThuc = updateDto.NgayKetThuc;
+                    saleExisting.TrangThai = updateDto.TrangThai;
+
+                    await _context.ChitietFlashsales
+                        .Where(x => x.MaFl == id)
+                        .ExecuteDeleteAsync();
+
+                    var newDetails = updateDto.ChiTietFlashSales.Select(x => new ChitietFlashsale
+                    {
+                        MaFl = id,
+                        MaDv = string.IsNullOrEmpty(x.MaDV) ? null : x.MaDV,
+                        MaCb = string.IsNullOrEmpty(x.MaCB) ? null : x.MaCB,
+                        PhanTramGiam = (int?)x.PhanTramGiam
+                    });
+
+                    await _context.ChitietFlashsales.AddRangeAsync(newDetails);
+
+                    await _context.SaveChangesAsync();
+                    await transaction.CommitAsync();
+
+                    return Ok(new { message = "Cập nhật FlashSale thành công" });
                 }
-                saleExisting.NgayBatDau = updateDto.NgayBatDau;
-                saleExisting.NgayKetThuc = updateDto.NgayKetThuc;
-                saleExisting.TrangThai = updateDto.TrangThai;
-
-           
-                await _context.ChitietFlashsales
-                    .Where(x => x.MaFl == id)
-                    .ExecuteDeleteAsync();
-
-                var newDetails = updateDto.ChiTietFlashSales.Select(x => new ChitietFlashsale
+                catch (Exception ex)
                 {
-                    MaFl = id,
-                    MaDv = string.IsNullOrEmpty(x.MaDV) ? null : x.MaDV,
-                    MaCb = string.IsNullOrEmpty(x.MaCB) ? null : x.MaCB,
-                    PhanTramGiam = (int?)x.PhanTramGiam
-                });
-
-                await _context.ChitietFlashsales.AddRangeAsync(newDetails);
-
-                await _context.SaveChangesAsync();
-                await transaction.CommitAsync();
-
-                return Ok(new { message = "Cập nhật FlashSale thành công" });
-            }
-            catch (Exception ex)
-            {
-                await transaction.RollbackAsync();
-                return StatusCode(500, new { message = "Lỗi hệ thống khi cập nhật FlashSale: " + ex.Message });
-            }
+                    await transaction.RollbackAsync();
+                    return StatusCode(500, new { message = "Lỗi hệ thống khi cập nhật FlashSale: " + ex.Message });
+                }
+            });
         }
 
         [HttpDelete("{id}")]
