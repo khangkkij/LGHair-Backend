@@ -35,29 +35,32 @@ namespace MinhTamHair.Admin.Controllers
 
             var data = await _context.Lichdats
                 .Include(ld => ld.MaKhNavigation)
-                // QUY ƯỚC: Chỉ lấy trạng thái 1 (Cọc 10%) và 2 (Cọc 100%)
                 .Where(ld => ld.NgayHen == targetDateOnly && (ld.TrangThai == 1 || ld.TrangThai == 2))
-                .Select(ld => new CheckInViewDTO
+                .Select(ld => new
                 {
-                    MaLd = ld.MaLd,
-                    TenKhach = ld.MaKhNavigation.HoTen,
-                    Sdt = ld.MaKhNavigation.Sdt,
-                    NgayHen = ld.NgayHen.ToString() + "T" + ld.GioBatDau.ToString() + " - " + ld.GioKetThuc.ToString(),
-                    TongTien = ld.TongTienDuKien ?? 0,
-                    DaThanhToan = _context.Thanhtoans
+                    maLd = ld.MaLd,
+                    tenKhach = ld.MaKhNavigation.HoTen,
+                    sdt = ld.MaKhNavigation.Sdt,
+                    ngayHen = ld.NgayHen.ToString() + "T" + ld.GioBatDau.ToString() + " - " + ld.GioKetThuc.ToString(),
+                    tongTien = ld.TongTienDuKien ?? 0,
+
+                    // TÍNH TOÁN SỐ TIỀN THỰC TẾ ĐÃ VÀO TÚI TIỆM
+                    daThanhToan = _context.Thanhtoans
                         .Where(tt => tt.MaHdNavigation.MaLd == ld.MaLd)
                         .Sum(tt => tt.SoTien) ?? 0,
-                    MaNv = _context.ChitietLichdats
+
+                    maNv = _context.ChitietLichdats
                         .Where(ct => ct.MaLd == ld.MaLd)
                         .Select(ct => ct.MaNv)
                         .FirstOrDefault(),
-                    DichVus = _context.ChitietLichdats
+                    dichVus = _context.ChitietLichdats
                         .Where(ct => ct.MaLd == ld.MaLd)
-                        .Select(ct => new ServiceItemDTO
+                        .Select(ct => new
                         {
-                            Id = ct.MaDv ?? ct.MaCb,
-                            Ten = ct.MaDvNavigation.TenDv ?? ct.MaCbNavigation.TenCombo,
-                            Gia = ct.GiaLucDat ?? 0
+                            id = ct.MaDv ?? ct.MaCb,
+                            ten = ct.MaDvNavigation.TenDv ?? ct.MaCbNavigation.TenCombo,
+                            gia = ct.GiaLucDat ?? 0,
+                            originalPrice = ct.MaDv != null ? ct.MaDvNavigation.Gia : ct.MaCbNavigation.Gia
                         }).ToList()
                 })
                 .ToListAsync();
@@ -93,42 +96,35 @@ namespace MinhTamHair.Admin.Controllers
         [HttpGet("get-by-qrcode/{maLd}")]
         public async Task<IActionResult> GetByQrCode(string maLd)
         {
-            // Loại bỏ khoảng trắng thừa
             var cleanId = maLd.Trim();
-
             var ld = await _context.Lichdats
                 .Include(x => x.MaKhNavigation)
-                // Dùng .Trim() trong SQL để so sánh chính xác tuyệt đối
                 .FirstOrDefaultAsync(x => x.MaLd.Trim() == cleanId);
 
-            if (ld == null)
-            {
-                return NotFound($"Mã ID '{cleanId}' không tồn tại.");
-            }
+            if (ld == null) return NotFound($"Mã ID '{cleanId}' không tồn tại.");
 
-            // 3. Trình bày dữ liệu chuẩn DTO cho Vue
-            var result = new CheckInViewDTO
+            var result = new
             {
-                MaLd = ld.MaLd,
-                TenKhach = ld.MaKhNavigation.HoTen,
-                Sdt = ld.MaKhNavigation.Sdt,
-                // Sử dụng nội suy chuỗi để tránh lỗi TimeSpan.ToString()
-                NgayHen = $"{ld.NgayHen:yyyy-MM-dd}T{ld.GioBatDau:HH\\:mm} - {ld.GioKetThuc:HH\\:mm}",
-                TongTien = ld.TongTienDuKien ?? 0,
-                DaThanhToan = _context.Thanhtoans
+                maLd = ld.MaLd,
+                tenKhach = ld.MaKhNavigation.HoTen,
+                sdt = ld.MaKhNavigation.Sdt,
+                ngayHen = $"{ld.NgayHen:yyyy-MM-dd}T{ld.GioBatDau:HH\\:mm} - {ld.GioKetThuc:HH\\:mm}",
+                tongTien = ld.TongTienDuKien ?? 0,
+                daThanhToan = _context.Thanhtoans
                     .Where(tt => tt.MaHdNavigation.MaLd == ld.MaLd)
                     .Sum(tt => tt.SoTien) ?? 0,
-                MaNv = _context.ChitietLichdats
+                maNv = _context.ChitietLichdats
                     .Where(ct => ct.MaLd == ld.MaLd)
                     .Select(ct => ct.MaNv)
                     .FirstOrDefault(),
-                DichVus = _context.ChitietLichdats
+                dichVus = _context.ChitietLichdats
                     .Where(ct => ct.MaLd == ld.MaLd)
-                    .Select(ct => new ServiceItemDTO
+                    .Select(ct => new
                     {
-                        Id = ct.MaDv ?? ct.MaCb,
-                        Ten = ct.MaDvNavigation.TenDv ?? ct.MaCbNavigation.TenCombo,
-                        Gia = ct.GiaLucDat ?? 0
+                        id = ct.MaDv ?? ct.MaCb,
+                        ten = ct.MaDvNavigation.TenDv ?? ct.MaCbNavigation.TenCombo,
+                        gia = ct.GiaLucDat ?? 0,
+                        originalPrice = ct.MaDv != null ? ct.MaDvNavigation.Gia : ct.MaCbNavigation.Gia
                     }).ToList()
             };
 
@@ -138,27 +134,47 @@ namespace MinhTamHair.Admin.Controllers
         [HttpGet("all-services-combos")]
         public async Task<IActionResult> GetAllServicesAndCombos()
         {
-            // Lấy danh sách Dịch vụ
-            var services = await _context.Dichvus
+            var now = DateTime.Now;
+
+            // 1. LẤY DỊCH VỤ & TÍNH FLASH SALE
+            var servicesRaw = await _context.Dichvus
                 .Where(s => s.TrangThai == 1)
-                .Select(s => new {
+                .Include(x => x.ChitietFlashsales)
+                    .ThenInclude(fs => fs.MaFlNavigation)
+                .ToListAsync();
+
+            var services = servicesRaw.Select(s => {
+                var flash = s.ChitietFlashsales
+                    .FirstOrDefault(fs =>
+                        fs.MaFlNavigation.TrangThai == 1 &&
+                        fs.MaFlNavigation.NgayBatDau <= now &&
+                        fs.MaFlNavigation.NgayKetThuc >= now);
+
+                decimal finalPrice = (decimal)s.Gia;
+                if (flash != null && flash.PhanTramGiam.HasValue)
+                    finalPrice = (decimal)s.Gia - ((decimal)s.Gia * (decimal)flash.PhanTramGiam.Value / 100m);
+
+                return new
+                {
                     Id = s.MaDv,
                     Name = s.TenDv,
-                    Price = s.Gia,
+                    Price = finalPrice,       // Giá đã giảm
+                    OriginalPrice = s.Gia,    // Giá gốc
                     Type = "DV"
-                }).ToListAsync();
+                };
+            }).ToList();
 
-            // Lấy danh sách Combo
+            // 2. LẤY COMBO
             var combos = await _context.Combos
                 .Where(c => c.TrangThai == 1)
                 .Select(c => new {
                     Id = c.MaCb,
                     Name = c.TenCombo,
                     Price = c.Gia,
+                    OriginalPrice = c.Gia,
                     Type = "CB"
                 }).ToListAsync();
 
-            // Gộp chung lại để Frontend dễ tìm kiếm
             var result = services.Cast<object>().Concat(combos.Cast<object>()).ToList();
             return Ok(result);
         }
@@ -166,72 +182,77 @@ namespace MinhTamHair.Admin.Controllers
         [HttpPost("create-payment-checkin")]
         public async Task<IActionResult> CreatePaymentCheckIn([FromBody] PaymentCheckInRequest request)
         {
-            using var transaction = await _context.Database.BeginTransactionAsync();
-            try
+            var strategy = _context.Database.CreateExecutionStrategy();
+
+            return await strategy.ExecuteAsync<IActionResult>(async () =>
             {
-                var ld = await _context.Lichdats.FirstOrDefaultAsync(x => x.MaLd == request.MaLd);
-                if (ld == null) return NotFound("Không tìm thấy lịch đặt");
-
-                // BƯỚC 1: Chốt trạng thái Hoàn thành (3)
-                ld.TrangThai = 3;
-
-                // BƯỚC 2: Cập nhật lại danh sách dịch vụ thực tế làm tại quầy
-                var oldDetails = await _context.ChitietLichdats.Where(ct => ct.MaLd == request.MaLd).ToListAsync();
-                _context.ChitietLichdats.RemoveRange(oldDetails);
-
-                foreach (var item in request.UpdatedServices)
+                using var transaction = await _context.Database.BeginTransactionAsync();
+                try
                 {
-                    var newDetail = new ChitietLichdat
+                    var ld = await _context.Lichdats.FirstOrDefaultAsync(x => x.MaLd == request.MaLd);
+                    if (ld == null) return NotFound("Không tìm thấy lịch đặt");
+
+                    // BƯỚC 1: Chốt trạng thái Hoàn thành (3)
+                    ld.TrangThai = 3;
+
+                    // BƯỚC 2: Cập nhật lại danh sách dịch vụ thực tế làm tại quầy
+                    var oldDetails = await _context.ChitietLichdats.Where(ct => ct.MaLd == request.MaLd).ToListAsync();
+                    _context.ChitietLichdats.RemoveRange(oldDetails);
+
+                    foreach (var item in request.UpdatedServices)
                     {
-                        MaLd = request.MaLd,
-                        MaNv = request.MaStylist, // Gán thợ làm thực tế
-                        GiaLucDat = item.Gia
-                    };
-                    if (item.Id.StartsWith("DV")) newDetail.MaDv = item.Id;
-                    else newDetail.MaCb = item.Id;
-                    _context.ChitietLichdats.Add(newDetail);
+                        var newDetail = new ChitietLichdat
+                        {
+                            MaLd = request.MaLd,
+                            MaNv = request.MaStylist, // Gán thợ làm thực tế
+                            GiaLucDat = item.Gia
+                        };
+                        if (item.Id.StartsWith("DV")) newDetail.MaDv = item.Id;
+                        else newDetail.MaCb = item.Id;
+                        _context.ChitietLichdats.Add(newDetail);
+                    }
+
+                    // BƯỚC 3: Cập nhật tổng tiền mới vào Hóa đơn
+                    decimal tongTienMoi = request.UpdatedServices.Sum(s => s.Gia);
+                    ld.TongTienDuKien = tongTienMoi;
+
+                    var hoaDon = await _context.HoaDons.FirstOrDefaultAsync(hd => hd.MaLd == request.MaLd);
+                    if (hoaDon != null)
+                    {
+                        hoaDon.TongTien = tongTienMoi;
+                        hoaDon.TienDaTra = tongTienMoi;
+                        hoaDon.TrangThai = 1; // Đánh dấu hóa đơn đã xong
+                    }
+
+                    await _context.SaveChangesAsync();
+
+                    // BƯỚC 4: Tính toán khoản tiền cần thu thêm
+                    decimal daTra = await _context.Thanhtoans
+                        .Where(tt => tt.MaHdNavigation.MaLd == request.MaLd)
+                        .SumAsync(tt => tt.SoTien) ?? 0;
+
+                    decimal soTienThuThem = tongTienMoi - daTra;
+
+                    await transaction.CommitAsync();
+
+                    // BƯỚC 5: Trả về link thanh toán cho khoản phát sinh
+                    if (soTienThuThem > 0)
+                    {
+                        if (request.PaymentMethod == "vnpay")
+                            return Ok(new { payUrl = CreateVNPayLink(request.MaLd, (double)soTienThuThem) });
+
+                        var momoUrl = await CreateMoMoLink(request.MaLd, (long)soTienThuThem);
+                        return Ok(new { payUrl = momoUrl });
+                    }
+
+                    return Ok(new { message = "Hoàn tất phục vụ không phát sinh thêm phí" });
                 }
-
-                // BƯỚC 3: Cập nhật tổng tiền mới vào Hóa đơn
-                decimal tongTienMoi = request.UpdatedServices.Sum(s => s.Gia);
-                ld.TongTienDuKien = tongTienMoi;
-
-                var hoaDon = await _context.HoaDons.FirstOrDefaultAsync(hd => hd.MaLd == request.MaLd);
-                if (hoaDon != null)
+                catch (Exception ex)
                 {
-                    hoaDon.TongTien = tongTienMoi;
-                    hoaDon.TienDaTra = tongTienMoi;
-                    hoaDon.TrangThai = 1; // Đánh dấu hóa đơn đã xong
+                    await transaction.RollbackAsync();
+                    return BadRequest("Lỗi xử lý: " + ex.Message);
                 }
-
-                await _context.SaveChangesAsync();
-
-                // BƯỚC 4: Tính toán khoản tiền cần thu thêm
-                decimal daTra = await _context.Thanhtoans
-                    .Where(tt => tt.MaHdNavigation.MaLd == request.MaLd)
-                    .SumAsync(tt => tt.SoTien) ?? 0;
-
-                decimal soTienThuThem = tongTienMoi - daTra;
-
-                await transaction.CommitAsync();
-
-                // BƯỚC 5: Trả về link thanh toán cho khoản phát sinh
-                if (soTienThuThem > 0)
-                {
-                    if (request.PaymentMethod == "vnpay")
-                        return Ok(new { payUrl = CreateVNPayLink(request.MaLd, (double)soTienThuThem) });
-
-                    var momoUrl = await CreateMoMoLink(request.MaLd, (long)soTienThuThem);
-                    return Ok(new { payUrl = momoUrl });
-                }
-
-                return Ok(new { message = "Hoàn tất phục vụ không phát sinh thêm phí" });
-            }
-            catch (Exception ex)
-            {
-                await transaction.RollbackAsync();
-                return BadRequest("Lỗi xử lý: " + ex.Message);
-            }
+            });
         }
 
         // Hàm tạo link VNPay (Tái sử dụng logic từ VnPayLibrary)
@@ -308,105 +329,144 @@ namespace MinhTamHair.Admin.Controllers
         [HttpPost("create-walkin")]
         public async Task<IActionResult> CreateWalkIn([FromBody] WalkInRequest request)
         {
-            using var transaction = await _context.Database.BeginTransactionAsync();
-            try
+            var strategy = _context.Database.CreateExecutionStrategy();
+
+            return await strategy.ExecuteAsync<IActionResult>(async () =>
             {
-                string maKh = "";
-
-                // 1. VÀO DATABASE TÌM TẤT CẢ TÀI KHOẢN CÓ TÊN LÀ "Khách vãng lai"
-                // (Dùng Contains để quét luôn cả trường hợp gõ "Khách vãn lai" bị thiếu dấu)
-                var walkInAccounts = await _context.Khachhangs
-                    .Where(kh => kh.HoTen.Contains("Khách vãng lai") || kh.HoTen.Contains("Khách vãn lai"))
-                    .Select(kh => kh.MaKh)
-                    .ToListAsync();
-
-                // 2. KIỂM TRA SỐ LƯỢNG VÀ RANDOM
-                if (walkInAccounts.Count == 0)
+                using var transaction = await _context.Database.BeginTransactionAsync();
+                try
                 {
-                    // Đề phòng trường hợp Database chưa có tài khoản nào: Tự tạo 1 cái để dùng tạm tránh lỗi
-                    maKh = "KVL" + DateTime.Now.ToString("ddHHmm");
-                    var newKh = new Khachhang
+                    string maKh = "";
+
+                    var walkInAccounts = await _context.Khachhangs
+                        .Where(kh => kh.HoTen.Contains("Khách vãng lai") || kh.HoTen.Contains("Khách vãn lai"))
+                        .Select(kh => kh.MaKh)
+                        .ToListAsync();
+
+                    if (walkInAccounts.Count == 0)
                     {
-                        MaKh = maKh,
-                        HoTen = "Khách vãng lai",
-                        Sdt = "0000000000",
-                        Email = "khachvanglai@gmail.com",
-                        TrangThai = 1,
-                        NgayTao = DateTime.Now,
-                        MaRank = "RANK01",
-                        DiemTichLuy = 0
-                    };
-                    _context.Khachhangs.Add(newKh);
-                    await _context.SaveChangesAsync(); // Lưu ngay để Lịch đặt bên dưới có cái để nối vào
-                }
-                else
-                {
-                    // Nếu đã có (VD tìm thấy 4 tài khoản) -> QUAY RANDOM lấy 1 mã
-                    Random rnd = new Random();
-                    int index = rnd.Next(walkInAccounts.Count);
-                    maKh = walkInAccounts[index]; // Bốc trúng mã nào dùng mã đó
-                }
+                        maKh = "KVL" + DateTime.Now.ToString("ddHHmm");
+                        var newKh = new Khachhang
+                        {
+                            MaKh = maKh,
+                            HoTen = "Khách vãng lai",
+                            Sdt = "0000000000",
+                            Email = "khachvanglai@gmail.com",
+                            TrangThai = 1,
+                            NgayTao = DateTime.Now,
+                            MaRank = "RANK01",
+                            DiemTichLuy = 0
+                        };
+                        _context.Khachhangs.Add(newKh);
+                        await _context.SaveChangesAsync();
+                    }
+                    else
+                    {
+                        Random rnd = new Random();
+                        int index = rnd.Next(walkInAccounts.Count);
+                        maKh = walkInAccounts[index];
+                    }
 
-                // 3. Tạo mã Lịch đặt (MaLD)
-                string maLd = "WLK" + DateTime.Now.ToString("HHmmss");
+                    string maLd = "WLK" + DateTime.Now.ToString("HHmmss");
+                    decimal tongTien = request.Services.Sum(s => s.Gia);
 
-                // 4. Lưu Lịch đặt (Trạng thái 1: Đang chờ phục vụ)
-                decimal tongTien = request.Services.Sum(s => s.Gia);
-                var ld = new Lichdat
-                {
-                    MaLd = maLd,
-                    MaKh = maKh, // <--- Gán cái mã ngẫu nhiên vừa bốc được vào đây
-                    NgayHen = DateOnly.FromDateTime(DateTime.Today),
-                    GioBatDau = TimeOnly.FromDateTime(DateTime.Now),
-                    TongTienDuKien = tongTien,
-                    TrangThai = 1 // 1: Đang chờ/Đang làm
-                };
-                _context.Lichdats.Add(ld);
-
-                // Mẹo: Vẫn lấy thông tin thật mà Lễ tân nhập vào (Tên/SĐT thực) nhét vào Ghi chú để dễ tìm kiếm sau này
-                string thongTinKhachThat = $"Tên thật: {request.TenKhach} - SĐT: {request.Sdt}";
-
-                // 5. Lưu Chi tiết dịch vụ & Gán thợ
-                foreach (var s in request.Services)
-                {
-                    var ct = new ChitietLichdat
+                    var ld = new Lichdat
                     {
                         MaLd = maLd,
-                        MaNv = request.MaStylist,
-                        GiaLucDat = s.Gia,
-                        GhiChu = thongTinKhachThat
+                        MaKh = maKh,
+                        NgayHen = DateOnly.FromDateTime(DateTime.Today),
+                        GioBatDau = TimeOnly.FromDateTime(DateTime.Now),
+                        TongTienDuKien = tongTien,
+                        TrangThai = 1
                     };
-                    if (s.Id.StartsWith("DV")) ct.MaDv = s.Id;
-                    else ct.MaCb = s.Id;
-                    _context.ChitietLichdats.Add(ct);
+                    _context.Lichdats.Add(ld);
+
+                    string thongTinKhachThat = $"Tên thật: {request.TenKhach} - SĐT: {request.Sdt}";
+
+                    foreach (var s in request.Services)
+                    {
+                        var ct = new ChitietLichdat
+                        {
+                            MaLd = maLd,
+                            MaNv = request.MaStylist,
+                            GiaLucDat = s.Gia,
+                            GhiChu = thongTinKhachThat
+                        };
+                        if (s.Id.StartsWith("DV")) ct.MaDv = s.Id;
+                        else ct.MaCb = s.Id;
+                        _context.ChitietLichdats.Add(ct);
+                    }
+
+                    var hd = new HoaDon
+                    {
+                        MaHd = maLd,
+                        MaLd = maLd,
+                        MaKh = maKh,
+                        NgayTao = DateTime.Now,
+                        TongTien = tongTien,
+                        TienDaTra = 0,
+                        TrangThai = 0
+                    };
+                    _context.HoaDons.Add(hd);
+
+                    await _context.SaveChangesAsync();
+                    await transaction.CommitAsync();
+
+                    return Ok(new { message = $"Đã thêm khách vãng lai thành công! (Lưu vào mã: {maKh})", maLd });
+                }
+                catch (Exception ex)
+                {
+                    await transaction.RollbackAsync();
+                    return BadRequest("Lỗi: " + (ex.InnerException?.Message ?? ex.Message));
+                }
+            });
+        }
+        [HttpPost("confirm-final-payment")]
+        public async Task<IActionResult> ConfirmFinalPayment([FromBody] FinalPaymentRequest req)
+        {
+            // Tìm lịch đặt
+            var ld = await _context.Lichdats.FirstOrDefaultAsync(x => x.MaLd == req.MaLd);
+            if (ld == null) return NotFound("Không tìm thấy lịch đặt");
+
+            // Nếu số tiền thu thêm > 0, chúng ta sẽ tạo Link thanh toán (VNPay/MoMo)
+            if (req.AmountToPay > 0)
+            {
+                // A. NẾU LÀ VNPAY
+                if (req.PaymentMethod.ToLower() == "vnpay")
+                {
+                    string vnpayUrl = CreateVNPayLink(req.MaLd, (double)req.AmountToPay);
+                    return Ok(new { payUrl = vnpayUrl });
                 }
 
-                // 6. Tạo Hóa đơn tạm
-                var hd = new HoaDon
-                {
-                    MaHd = maLd,
-                    MaLd = maLd,
-                    MaKh = maKh, // <--- Gán cái mã ngẫu nhiên vào Hóa đơn
-                    NgayTao = DateTime.Now,
-                    TongTien = tongTien,
-                    TienDaTra = 0,
-                    TrangThai = 0
-                };
-                _context.HoaDons.Add(hd);
-
-                await _context.SaveChangesAsync();
-                await transaction.CommitAsync();
-
-                return Ok(new { message = $"Đã thêm khách vãng lai thành công! (Lưu vào mã: {maKh})", maLd });
+                // B. NẾU LÀ MOMO
+                var momoUrl = await CreateMoMoLink(req.MaLd, (long)req.AmountToPay);
+                return Ok(new { payUrl = momoUrl });
             }
-            catch (Exception ex)
-            {
-                await transaction.RollbackAsync();
-                return BadRequest("Lỗi: " + ex.InnerException?.Message ?? ex.Message);
-            }
+
+            // Nếu không còn tiền cần thu, thì hoàn tất luôn tại đây
+            ld.TrangThai = 3;
+            await _context.SaveChangesAsync();
+            return Ok(new { message = "Hoàn tất phục vụ" });
         }
+
+        // Thêm Model này vào cuối file CheckinController.cs để tránh lỗi đỏ
+
+    }
+    // ĐỊNH NGHĨA CLASS NÀY Ở NGOÀI CÙNG CỦA FILE ĐỂ HẾT LỖI CS0246
+    public class FinalPaymentRequest
+    {
+        public string MaLd { get; set; }
+        public string MaStylist { get; set; }
+        public string PaymentMethod { get; set; }
+        public decimal AmountToPay { get; set; }
+        public List<SimpleServiceItem> UpdatedServices { get; set; }
     }
 
+    public class SimpleServiceItem
+    {
+        public string Id { get; set; }
+        public decimal Gia { get; set; }
+    }
     public class CheckInConfirmRequest
     {
         public string MaLd { get; set; }

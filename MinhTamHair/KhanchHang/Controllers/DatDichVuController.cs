@@ -27,26 +27,50 @@ namespace MinhTamHair.KhanchHang.Controllers
         [HttpGet("data-booking")]
         public IActionResult GetAll()
         {
+            var now = DateTime.Now;
             var services = _context.Dichvus
                 .Where(s => s.TrangThai == 1)
-                .Select(s => new {
-                    id = s.MaDv,
-                    name = s.TenDv,
-                    price = s.Gia,
-                    duration = s.ThoiGianLam ?? 30, // Lấy thời gian làm từ bảng DICHVU
-                    icon = "fas fa-cut"
+                .Include(x => x.ChitietFlashsales)
+                    .ThenInclude(fs => fs.MaFlNavigation)
+                .ToList() // Load vào RAM để xử lý
+                .Select(s => {
+                    var flash = s.ChitietFlashsales
+                        .FirstOrDefault(fs =>
+                            fs.MaFlNavigation.TrangThai == 1 &&
+                            fs.MaFlNavigation.NgayBatDau <= now &&
+                            fs.MaFlNavigation.NgayKetThuc >= now);
+
+                    decimal finalPrice = (decimal)s.Gia;
+                    if (flash != null && flash.PhanTramGiam.HasValue)
+                    {
+                        // Thêm chữ 'm' sau số 100 để C# tự động hiểu đó là số decimal
+                        finalPrice = (decimal)s.Gia - ((decimal)s.Gia * (decimal)flash.PhanTramGiam.Value / 100m);
+                    }
+
+                    return new
+                    {
+                        id = s.MaDv,
+                        name = s.TenDv,
+                        price = finalPrice,       // Giá đã giảm chuẩn decimal
+                        originalPrice = s.Gia,    // Giá gốc
+                        duration = s.ThoiGianLam ?? 30,
+                        icon = "fas fa-cut"
+                    };
                 }).ToList();
 
             var combos = _context.Combos
-                .Where(c => c.TrangThai == 1)
-                .Select(c => new {
-                    id = c.MaCb,
-                    name = c.TenCombo,
-                    price = c.Gia,
-                    // Dùng Combo_DichVus theo đúng class C# của bạn
-                    duration = c.Combo_DichVus.Sum(ct => ct.DichVu.ThoiGianLam ?? 30),
-                    icon = "fas fa-layer-group"
-                }).ToList();
+            .Where(c => c.TrangThai == 1)
+            .Select(c => new {
+                id = c.MaCb,
+                name = c.TenCombo,
+
+                price = c.Gia,
+                originalPrice = c.Gia, // THÊM DÒNG NÀY: Để đồng bộ cấu trúc với Frontend
+
+                // Dùng Combo_DichVus theo đúng class C# của bạn
+                duration = c.Combo_DichVus.Sum(ct => ct.DichVu.ThoiGianLam ?? 30),
+                icon = "fas fa-layer-group"
+            }).ToList();
 
             return Ok(new { services, combos });
         }
@@ -128,7 +152,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             return Ok(result);
         }
 
-        /// <summary>Xem trước tổng giảm với tối đa 1 mã voucher.</summary>
+        /// <summary>Xem trước tổng giảm khi xếp chồng tối đa 2 mã (thứ tự trong <paramref name="codes"/>).</summary>
         [HttpGet("preview-voucher-stack")]
         public async Task<IActionResult> PreviewVoucherStack(
             string maKH,
@@ -145,7 +169,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 : codes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                     .Select(VoucherCartLogic.NormalizeMaCode)
                     .Where(s => s.Length > 0)
-                    .Take(1)
+                    .Take(2)
                     .ToList();
 
             if (parts.Count == 0)
@@ -266,232 +290,235 @@ namespace MinhTamHair.KhanchHang.Controllers
             return BadRequest(result?.message ?? "Lỗi MoMo");
         }
         [HttpPost("save-booking-final")]
-        public async Task<IActionResult> SaveBooking([FromBody] BookingRequest model, [FromQuery] string paymentMode, [FromQuery] string maStylist) // Nhận thêm mã Stylist
+        public async Task<IActionResult> SaveBooking([FromBody] BookingRequest model, [FromQuery] string paymentMode, [FromQuery] string maStylist)
         {
-            using var transaction = _context.Database.BeginTransaction();
-            try
+            // Tạo chiến lược thực thi để chống lỗi mất kết nối DB
+            var strategy = _context.Database.CreateExecutionStrategy();
+
+            // BẮT BUỘC PHẢI CÓ <IActionResult> Ở ĐÂY ĐỂ C# KHÔNG BÁO LỖI CS8031
+            return await strategy.ExecuteAsync<IActionResult>(async () =>
             {
-                string currentMaKh = model.MaKh;
-
-                // Nếu người đặt là khách vãng lai (GUEST)
-                if (currentMaKh == "GUEST" && !string.IsNullOrEmpty(model.Phone))
+                // Khởi tạo Transaction bằng hàm Async bên trong ExecutionStrategy
+                using var transaction = await _context.Database.BeginTransactionAsync();
+                try
                 {
-                    // Kiểm tra xem SĐT này đã từng đặt lịch hoặc có trong DB chưa
-                    var existingKhach = await _context.Khachhangs.FirstOrDefaultAsync(x => x.Sdt == model.Phone);
+                    string currentMaKh = model.MaKh;
 
-                    if (existingKhach != null)
+                    // 1. XỬ LÝ KHÁCH HÀNG VÃNG LAI
+                    if (currentMaKh == "GUEST" && !string.IsNullOrEmpty(model.Phone))
                     {
-                        currentMaKh = existingKhach.MaKh; // Đã có thì dùng lại mã cũ
-                    }
-                    else
-                    {
-                        // Tạo mã KH mới: Lấy chữ "KH" ghép với 4 số đầu SĐT + Random 3 số để tránh trùng lặp nếu 2 người chung đầu số
-                        string prefixSdt = model.Phone.Length >= 4 ? model.Phone.Substring(0, 4) : "0000";
-                        string newMaKh = "KH" + prefixSdt + new Random().Next(100, 999).ToString();
+                        var existingKhach = await _context.Khachhangs.FirstOrDefaultAsync(x => x.Sdt == model.Phone);
 
-                        var newKhachHang = new Khachhang
+                        if (existingKhach != null)
                         {
-                            MaKh = newMaKh,
-                            HoTen = model.HoTen,
-                            Sdt = model.Phone,
-                            Email = model.Email,
-                            MatKhau = null, // Mật khẩu null theo đúng ý bạn
-                            TrangThai = 1,
-                            NgayTao = DateTime.Now,
-                            DiemTichLuy = 0,
-                            MaRank = "RANK01" // Gán rank Đồng mặc định
-                        };
-
-                        _context.Khachhangs.Add(newKhachHang);
-                        await _context.SaveChangesAsync(); // Lưu ngay để có khách hàng trước khi tạo Hóa đơn
-
-                        currentMaKh = newMaKh; // Gán lại mã mới cho quy trình chạy phía dưới
-                    }
-                }
-                string shortMaLd = model.BookingId.Length > 10
-                    ? model.BookingId.Substring(model.BookingId.Length - 10)
-                    : model.BookingId;
-
-                decimal subtotal = model.Services.Sum(s => s.Price);
-
-                var codesList = new List<string>();
-                if (model.MaCodes != null && model.MaCodes.Count > 0)
-                {
-                    foreach (var c in model.MaCodes.Take(1))
-                    {
-                        if (!string.IsNullOrWhiteSpace(c))
-                            codesList.Add(VoucherCartLogic.NormalizeMaCode(c));
-                    }
-                }
-                else if (!string.IsNullOrWhiteSpace(model.MaCode))
-                {
-                    codesList.Add(VoucherCartLogic.NormalizeMaCode(model.MaCode));
-                }
-
-                // Hóa đơn FK: cột maCode = mã voucher áp dụng (tối đa 1 mã)
-                string? maCodeNorm = codesList.Count > 0 ? codesList[0] : null;
-                decimal tongSauGiam = subtotal;
-
-                if (codesList.Count > 0)
-                {
-                    if (codesList.Count != codesList.Distinct(StringComparer.OrdinalIgnoreCase).Count())
-                    {
-                        await transaction.RollbackAsync();
-                        return BadRequest(new { message = "Không được dùng trùng một mã voucher." });
-                    }
-
-                    var khForRank = await _context.Khachhangs.AsNoTracking()
-                        .Include(k => k.MaCodes)
-                        .FirstOrDefaultAsync(k => k.MaKh == currentMaKh);
-                    if (khForRank == null)
-                    {
-                        await transaction.RollbackAsync();
-                        return BadRequest(new { message = "Không tìm thấy khách hàng." });
-                    }
-
-                    var ownedCodes = new HashSet<string>(khForRank.MaCodes.Select(x => x.MaCode), StringComparer.OrdinalIgnoreCase);
-                    foreach (var c in codesList)
-                    {
-                        if (!ownedCodes.Contains(c))
+                            currentMaKh = existingKhach.MaKh;
+                        }
+                        else
                         {
-                            await transaction.RollbackAsync();
-                            return BadRequest(new { message = $"Bạn không sở hữu mã voucher: {c}" });
+                            string prefixSdt = model.Phone.Length >= 4 ? model.Phone.Substring(0, 4) : "0000";
+                            string newMaKh = "KH" + prefixSdt + new Random().Next(100, 999).ToString();
+
+                            var newKhachHang = new Khachhang
+                            {
+                                MaKh = newMaKh,
+                                HoTen = model.HoTen,
+                                Sdt = model.Phone,
+                                Email = model.Email,
+                                MatKhau = null,
+                                TrangThai = 1,
+                                NgayTao = DateTime.Now,
+                                DiemTichLuy = 0,
+                                MaRank = "RANK01"
+                            };
+
+                            _context.Khachhangs.Add(newKhachHang);
+                            await _context.SaveChangesAsync();
+                            currentMaKh = newMaKh;
                         }
                     }
 
-                    string? maRank = khForRank.MaRank;
-                    int? rankCap = null;
-                    if (!string.IsNullOrWhiteSpace(maRank))
+                    string shortMaLd = model.BookingId.Length > 10
+                        ? model.BookingId.Substring(model.BookingId.Length - 10)
+                        : model.BookingId;
+
+                    decimal subtotal = model.Services.Sum(s => s.Price);
+
+                    // 2. XỬ LÝ VOUCHER
+                    var codesList = new List<string>();
+                    if (model.MaCodes != null && model.MaCodes.Count > 0)
                     {
-                        var rank = await _context.Hangthanhviens.AsNoTracking()
-                            .FirstOrDefaultAsync(r => r.MaRank == maRank && (r.TrangThai == null || r.TrangThai == 1));
-                        rankCap = rank?.PhanTramGiamGia;
+                        foreach (var c in model.MaCodes.Take(2))
+                        {
+                            if (!string.IsNullOrWhiteSpace(c))
+                                codesList.Add(VoucherCartLogic.NormalizeMaCode(c));
+                        }
+                    }
+                    else if (!string.IsNullOrWhiteSpace(model.MaCode))
+                    {
+                        codesList.Add(VoucherCartLogic.NormalizeMaCode(model.MaCode));
                     }
 
-                    var cartIds = model.Services.Select(s => s.Id).ToList();
-                    var (vErr, _, sau) = await VoucherCartLogic.ValidateStackedAsync(
-                        _context,
-                        codesList,
-                        currentMaKh,
-                        subtotal,
-                        cartIds,
-                        model.NgayHen,
-                        DateTime.Now,
-                        maRank,
-                        rankCap);
-                    if (vErr != null)
+                    string? maCodeNorm = codesList.Count > 0 ? codesList[0] : null;
+                    decimal tongSauGiam = subtotal;
+
+                    if (codesList.Count > 0)
                     {
-                        await transaction.RollbackAsync();
-                        return BadRequest(new { message = vErr });
+                        if (codesList.Count != codesList.Distinct(StringComparer.OrdinalIgnoreCase).Count())
+                        {
+                            await transaction.RollbackAsync();
+                            return BadRequest(new { message = "Không được dùng trùng một mã voucher." });
+                        }
+
+                        var khForRank = await _context.Khachhangs.AsNoTracking()
+                            .Include(k => k.MaCodes)
+                            .FirstOrDefaultAsync(k => k.MaKh == currentMaKh);
+
+                        if (khForRank == null)
+                        {
+                            await transaction.RollbackAsync();
+                            return BadRequest(new { message = "Không tìm thấy khách hàng." });
+                        }
+
+                        var ownedCodes = new HashSet<string>(khForRank.MaCodes.Select(x => x.MaCode), StringComparer.OrdinalIgnoreCase);
+                        foreach (var c in codesList)
+                        {
+                            if (!ownedCodes.Contains(c))
+                            {
+                                await transaction.RollbackAsync();
+                                return BadRequest(new { message = $"Bạn không sở hữu mã voucher: {c}" });
+                            }
+                        }
+
+                        string? maRank = khForRank.MaRank;
+                        int? rankCap = null;
+                        if (!string.IsNullOrWhiteSpace(maRank))
+                        {
+                            var rank = await _context.Hangthanhviens.AsNoTracking()
+                                .FirstOrDefaultAsync(r => r.MaRank == maRank && (r.TrangThai == null || r.TrangThai == 1));
+                            rankCap = rank?.PhanTramGiamGia;
+                        }
+
+                        var cartIds = model.Services.Select(s => s.Id).ToList();
+                        var (vErr, _, sau) = await VoucherCartLogic.ValidateStackedAsync(
+                            _context, codesList, currentMaKh, subtotal, cartIds,
+                            model.NgayHen, DateTime.Now, maRank, rankCap);
+
+                        if (vErr != null)
+                        {
+                            await transaction.RollbackAsync();
+                            return BadRequest(new { message = vErr });
+                        }
+                        tongSauGiam = sau;
                     }
-                    tongSauGiam = sau;
-                }
 
-                decimal total = tongSauGiam;
-                decimal daThanhToan = (paymentMode == "10") ? (total * 0.1m) : total;
-                int trangThaiLichDat = (paymentMode == "10") ? 1 : 2;
+                    // 3. TÍNH TOÁN THANH TOÁN
+                    decimal total = tongSauGiam;
+                    decimal daThanhToan = (paymentMode == "10") ? (total * 0.1m) : total;
+                    int trangThaiLichDat = (paymentMode == "10") ? 1 : 2;
 
-                // 1. LƯU BẢNG LICHDAT
-                var lichDat = new Lichdat
-                {
-                    MaLd = shortMaLd,
-                    MaKh = currentMaKh,
-                    NgayHen = DateOnly.FromDateTime(model.NgayHen),
-                    GioBatDau = TimeOnly.FromDateTime(model.NgayHen), // Lấy giờ từ NgayHen
-                    TongTienDuKien = total,
-                    TrangThai = trangThaiLichDat
-                };
-                _context.Lichdats.Add(lichDat);
-
-                // 2. TẠO HÓA ĐƠN TẠM (Để tránh lỗi khóa ngoại bảng THANHTOAN)
-                string maHdTạm = shortMaLd;
-                var hoaDon = new HoaDon
-                {
-                    MaHd = shortMaLd,
-                    MaLd = shortMaLd,
-                    MaKh = currentMaKh,
-                    NgayTao = DateTime.Now,
-                    TongTien = subtotal,
-                    ThanhTien = tongSauGiam,
-                    TienDaTra = daThanhToan,
-                    TrangThai = 0, // 0: Hóa đơn chưa hoàn tất (đang thực hiện)
-                    MaCode = maCodeNorm
-                };
-                _context.HoaDons.Add(hoaDon);
-
-                // 3. LƯU CHI TIẾT DỊCH VỤ
-                foreach (var item in model.Services)
-                {
-                    var chiTiet = new ChitietLichdat
+                    // 4. LƯU BẢNG LỊCH ĐẶT
+                    var lichDat = new Lichdat
                     {
                         MaLd = shortMaLd,
-                        MaNv = maStylist, // Gán mã thợ đã chọn
-                        GiaLucDat = item.Price
+                        MaKh = currentMaKh,
+                        NgayHen = DateOnly.FromDateTime(model.NgayHen),
+                        GioBatDau = TimeOnly.FromDateTime(model.NgayHen),
+                        TongTienDuKien = total,
+                        TrangThai = trangThaiLichDat
                     };
+                    _context.Lichdats.Add(lichDat);
 
-                    if (item.Id.StartsWith("DV"))
+                    // 5. LƯU BẢNG HÓA ĐƠN
+                    string maHdTạm = shortMaLd;
+                    var hoaDon = new HoaDon
                     {
-                        chiTiet.MaDv = item.Id;
-                        chiTiet.MaCb = null;
-                    }
-                    else if (item.Id.StartsWith("CB"))
+                        MaHd = shortMaLd,
+                        MaLd = shortMaLd,
+                        MaKh = currentMaKh,
+                        NgayTao = DateTime.Now,
+                        TongTien = subtotal,
+                        ThanhTien = tongSauGiam,
+                        TienDaTra = daThanhToan,
+                        TrangThai = 0,
+                        MaCode = maCodeNorm
+                    };
+                    _context.HoaDons.Add(hoaDon);
+
+                    // 6. LƯU CHI TIẾT LỊCH ĐẶT
+                    foreach (var item in model.Services)
                     {
-                        chiTiet.MaCb = item.Id;
-                        chiTiet.MaDv = null;
+                        var chiTiet = new ChitietLichdat
+                        {
+                            MaLd = shortMaLd,
+                            MaNv = maStylist,
+                            GiaLucDat = item.Price
+                        };
+
+                        if (item.Id.StartsWith("DV"))
+                        {
+                            chiTiet.MaDv = item.Id;
+                            chiTiet.MaCb = null;
+                        }
+                        else if (item.Id.StartsWith("CB"))
+                        {
+                            chiTiet.MaCb = item.Id;
+                            chiTiet.MaDv = null;
+                        }
+                        _context.ChitietLichdats.Add(chiTiet);
                     }
-                    _context.ChitietLichdats.Add(chiTiet);
-                }
 
-                // 4. LƯU BẢNG THANHTOAN
-                var tt = new Thanhtoan
-                {
-                    MaHd = maHdTạm, // Gán mã hóa đơn tạm vừa tạo
-                    PhuongThuc = (paymentMode == "10") ? "Coc 10%" : "Full 100%",
-                    SoTien = daThanhToan,
-                    TrangThai = 1
-                };
-                _context.Thanhtoans.Add(tt);
-
-                await _context.SaveChangesAsync();
-
-                foreach (var code in codesList)
-                {
-                    var (incOk, incErr) = await VoucherCartLogic.TryIncrementUsageAsync(_context, code);
-                    if (!incOk)
+                    // 7. LƯU BẢNG THANH TOÁN
+                    var tt = new Thanhtoan
                     {
-                        await transaction.RollbackAsync();
-                        return BadRequest(new { message = incErr ?? "Không thể ghi nhận lượt dùng voucher." });
-                    }
-                }
+                        MaHd = maHdTạm,
+                        PhuongThuc = (paymentMode == "10") ? "Coc 10%" : "Full 100%",
+                        SoTien = daThanhToan,
+                        TrangThai = 1
+                    };
+                    _context.Thanhtoans.Add(tt);
 
-                await transaction.CommitAsync();
-                try
-                {
-                    var khachHang = await _context.Khachhangs.FindAsync(model.MaKh);
-                    string tenKhach = khachHang?.HoTen ?? "Khách hàng";
+                    await _context.SaveChangesAsync();
 
-                    // LOGIC VÀNG: Ưu tiên lấy Email từ Vue gửi lên (model.Email). 
-                    // Nếu khách không nhập gì trên web thì mới moi từ Database ra (khachHang?.Email)
-                    string emailNhan = !string.IsNullOrEmpty(model.Email) ? model.Email : khachHang?.Email;
-
-                    if (!string.IsNullOrEmpty(emailNhan))
+                    // 8. TRỪ LƯỢT DÙNG VOUCHER
+                    foreach (var code in codesList)
                     {
-                        // Gọi qua _qrEmailService và truyền đúng emailNhan vào
-                        await _qrEmailService.SendBookingEmailAsync(emailNhan, tenKhach, shortMaLd, model.NgayHen, total);
-                        Console.WriteLine("Đã gửi mã QR thành công tới email: " + emailNhan);
+                        var (incOk, incErr) = await VoucherCartLogic.TryIncrementUsageAsync(_context, code);
+                        if (!incOk)
+                        {
+                            await transaction.RollbackAsync();
+                            return BadRequest(new { message = incErr ?? "Không thể ghi nhận lượt dùng voucher." });
+                        }
                     }
+
+                    // 9. LƯU VÀO DATABASE CHÍNH THỨC
+                    await transaction.CommitAsync();
+
+                    // 10. GỬI EMAIL QR SAU KHI LƯU THÀNH CÔNG
+                    try
+                    {
+                        var khachHang = await _context.Khachhangs.FindAsync(currentMaKh);
+                        string tenKhach = khachHang?.HoTen ?? "Khách hàng";
+                        string emailNhan = !string.IsNullOrEmpty(model.Email) ? model.Email : khachHang?.Email;
+
+                        if (!string.IsNullOrEmpty(emailNhan))
+                        {
+                            await _qrEmailService.SendBookingEmailAsync(emailNhan, tenKhach, shortMaLd, model.NgayHen, total);
+                            Console.WriteLine("Đã gửi mã QR thành công tới email: " + emailNhan);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("LỖI GỬI EMAIL: " + ex.Message);
+                    }
+
+                    return Ok(new { message = "Thành công", maLd = shortMaLd });
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine("LỖI GỬI EMAIL: " + ex.Message);
+                    await transaction.RollbackAsync();
+                    return BadRequest("Lỗi: " + (ex.InnerException?.Message ?? ex.Message));
                 }
-                return Ok(new { message = "Thành công", maLd = shortMaLd });
-            }
-            catch (Exception ex)
-            {
-                await transaction.RollbackAsync();
-                return BadRequest("Lỗi: " + ex.InnerException?.Message ?? ex.Message);
-            }
+            }); // Kết thúc ExecuteAsync<IActionResult>
         }
         private string SignHmacSHA256(string message, string key)
         {

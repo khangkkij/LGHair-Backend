@@ -68,29 +68,27 @@ namespace MinhTamHair.KhanchHang.Controllers
                     ngayHen = ld.NgayHen,
                     gioHen = ld.GioBatDau,
 
-                    // 1. Lấy danh sách dịch vụ cụ thể
+                    // 1. Lấy danh sách dịch vụ + Giá gốc (OriginalPrice)
                     items = _context.ChitietLichdats
                         .Where(ct => ct.MaLd == ld.MaLd)
                         .Select(ct => new {
                             name = ct.MaDvNavigation.TenDv ?? ct.MaCbNavigation.TenCombo,
-                            price = ct.GiaLucDat
+                            price = ct.GiaLucDat ?? 0m, // Giá thực thu lúc đặt (đã giảm sale)
+                            originalPrice = ct.MaDv != null ? (ct.MaDvNavigation.Gia ?? 0m) : (ct.MaCbNavigation.Gia ?? 0m)
                         }).ToList(),
 
-                    // 2. Tính tổng tiền dịch vụ (chưa giảm)
-                    totalOriginal = _context.ChitietLichdats
+                    // 2. Tổng tiền thực tế của các món (sau Sale, nhưng chưa trừ Voucher)
+                    subTotal = _context.ChitietLichdats
                         .Where(ct => ct.MaLd == ld.MaLd)
-                        .Sum(ct => ct.GiaLucDat),
+                        .Sum(ct => ct.GiaLucDat) ?? 0m,
 
-                    // 3. Lấy CHÍNH XÁC số tiền giảm từ bảng VOUCHER trong Database
+                    // 3. Lấy thông tin Voucher đã dùng
                     voucherGiam = _context.HoaDons
-                        .Where(hd => hd.MaLd == ld.MaLd && hd.MaCode != null && hd.MaCode != "")
+                        .Where(hd => hd.MaLd == ld.MaLd && !string.IsNullOrEmpty(hd.MaCode))
                         .Select(hd => new {
                             code = hd.MaCode,
-                            amount = _context.Vouchers
-                                .Where(v => v.MaCode == hd.MaCode)
-                                .Select(v => v.SoTienGiam > 0 ? v.SoTienGiam :
-                                            (v.PhanTramGiam > 0 ? (_context.ChitietLichdats.Where(ct => ct.MaLd == ld.MaLd).Sum(ct => ct.GiaLucDat) * v.PhanTramGiam / 100) : 0))
-                                .FirstOrDefault()
+                            // Số tiền Voucher giảm = Tổng tiền hàng - Số tiền phải trả trên hóa đơn
+                            amount = (hd.TongTien - hd.ThanhTien) > 0 ? (hd.TongTien - hd.ThanhTien) : 0m
                         }).FirstOrDefault(),
 
                     trangThai = ld.TrangThai
@@ -99,20 +97,29 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             if (detail == null) return NotFound();
 
-            decimal discount = detail.voucherGiam != null ? (detail.voucherGiam.amount ?? 0) : 0;
-            decimal finalAmount = (detail.totalOriginal ?? 0) - discount;
+            // FIX LỖI CASTING: Ép kiểu sang decimal và xử lý null bằng ?? 0m
+            decimal totalOriginal = detail.items.Sum(i => (decimal)i.originalPrice);
 
-            // Trả về dữ liệu đã được tính toán kỹ lưỡng
+            // Tiết kiệm từ Flash Sale = Tổng giá gốc ban đầu - Tổng giá sau sale
+            decimal flashSaleDiscount = totalOriginal - detail.subTotal;
+
+            // Voucher giảm giá
+            decimal voucherAmount = detail.voucherGiam?.amount ?? 0m;
+
+            // Tổng thanh toán cuối cùng = Giá sau sale - Tiền Voucher
+            decimal finalAmount = detail.subTotal - voucherAmount;
+
             return Ok(new
             {
-                maLd = detail.maLd,
-                ngayHen = detail.ngayHen,
-                gioHen = detail.gioHen,
-                items = detail.items,
-                totalOriginal = detail.totalOriginal,
+                detail.maLd,
+                detail.ngayHen,
+                detail.gioHen,
+                detail.items,
+                totalOriginal,         // Tổng giá gốc (chưa sale, chưa voucher)
+                flashSaleDiscount,     // Số tiền hời từ Flash Sale
                 voucherGiam = detail.voucherGiam,
-                finalAmount = finalAmount,
-                trangThai = detail.trangThai
+                finalAmount,           // Con số khách đã trả cuối cùng
+                detail.trangThai
             });
         }
         // 1. Tạo Model hứng dữ liệu từ Form Vue gửi lên
