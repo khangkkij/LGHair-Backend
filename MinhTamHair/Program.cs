@@ -12,8 +12,10 @@ using MinhTamHair.Services.UploadIMG;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Configuration.AddJsonFile("appsettings.Zalo.local.json", optional: true, reloadOnChange: true);
 
 
 
@@ -48,15 +50,22 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowVueApp", policy =>
     {
-        //Tuyệt dổi ko được sửa cổng mặt dịnh là 5173 vì Vite/Vue sẽ chạy ở cổng này, nếu sửa sẽ bị lỗi CORS
-        // thành viên nghe theo
-        policy.WithOrigins("http://localhost:5173") // Cổng mặc định của Vite/Vue
+        // Mỗi origin (cổng Vite khác nhau) phải được liệt kê — nếu thiếu, trình duyệt chặn CORS.
+        policy.WithOrigins(
+                  "http://localhost:5173", // Vite mặc định
+                  "http://localhost:5174") // Vite khi 5173 đã bị chiếm
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials(); // Bắt buộc để gửi AuthToken qua Cookie
     });
 });
-
+// cấu hình redis
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = builder.Configuration.GetValue<string>("Redis");
+    options.InstanceName = "MyApp:";
+});
+//builder.Services.AddDistributedMemoryCache();
 // --- 4. Cấu hình Authentication (JWT + Cookie ) ---
 builder.Services.AddAuthentication(options =>
 {
@@ -78,15 +87,33 @@ builder.Services.AddAuthentication(options =>
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]))
     };
 
-    // QUAN TRỌNG: Tự động lấy Token từ Cookie "AuthToken" để xác thực người dùng
     options.Events = new JwtBearerEvents
     {
         OnMessageReceived = context =>
         {
-            var accessToken = context.Request.Cookies["AuthToken"];
-            if (!string.IsNullOrEmpty(accessToken))
+            // Kiểm tra đường dẫn Request để biết đang là Admin hay Khách hàng
+            var path = context.Request.Path.Value!;
+
+            if (path.Contains("/api/admin"))
             {
-                context.Token = accessToken;
+                // Nếu là Admin: Phải tìm đúng cái "túi" tên adminAccessToken
+                if (context.Request.Cookies.ContainsKey("adminAccessToken"))
+                {
+                    context.Token = context.Request.Cookies["adminAccessToken"];
+                }
+            }
+            else
+            {
+                // Nếu là Khách hàng: Tìm cái túi tên accessToken
+                if (context.Request.Cookies.ContainsKey("accessToken"))
+                {
+                    context.Token = context.Request.Cookies["accessToken"];
+                }
+                // Dự phòng trường hợp bạn dùng tên cũ AuthToken
+                else if (context.Request.Cookies.ContainsKey("AuthToken"))
+                {
+                    context.Token = context.Request.Cookies["AuthToken"];
+                }
             }
             return Task.CompletedTask;
         }
@@ -94,42 +121,50 @@ builder.Services.AddAuthentication(options =>
 });
 builder.Services.AddSwaggerGen(c =>
 {
-	c.SwaggerDoc("v1", new OpenApiInfo { Title = "Minh Tam Hair API", Version = "v1" });
+    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Minh Tam Hair API", Version = "v1" });
 
-	// 1. Thêm nút Authorize (Định nghĩa kiểu bảo mật là Bearer Token)
-	c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
-	{
-		Description = "Vui lòng nhập token theo định dạng: Bearer {chuỗi_token_của_bạn}",
-		Name = "Authorization",
-		In = ParameterLocation.Header,
-		Type = SecuritySchemeType.ApiKey,
-		Scheme = "Bearer"
-	});
+    // 1. Thêm nút Authorize (Định nghĩa kiểu bảo mật là Bearer Token)
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Description = "Vui lòng nhập token theo định dạng: Bearer {chuỗi_token_của_bạn}",
+        Name = "Authorization",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.ApiKey,
+        Scheme = "Bearer"
+    });
 
-	// 2. Yêu cầu Swagger áp dụng Token này cho tất cả các API
-	c.AddSecurityRequirement(new OpenApiSecurityRequirement
-	{
-		{
-			new OpenApiSecurityScheme
-			{
-				Reference = new OpenApiReference
-				{
-					Type = ReferenceType.SecurityScheme,
-					Id = "Bearer"
-				}
-			},
-			new string[] {}
-		}
-	});
+    // 2. Yêu cầu Swagger áp dụng Token này cho tất cả các API
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference
+                {
+                    Type = ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            new string[] {}
+        }
+    });
 });
 // --- 5. Cấu hình Phân quyền (Authorization) ---
-builder.Services.AddAuthorization(options => {
+builder.Services.AddAuthorization(options =>
+{
     options.AddPolicy("AdminPolicy", policy => policy.RequireRole("Admin"));
     options.AddPolicy("StaffPolicy", policy => policy.RequireRole("Admin", "NhanVien"));
     options.AddPolicy("CustomerPolicy", policy => policy.RequireRole("KhachHang"));
 });
 builder.Services.AddMemoryCache();
 builder.Services.AddTransient<IEmailService, EmailService>();
+builder.Services.AddScoped<IQrEmailService, QrEmailService>();
+builder.Services.AddHttpClient("ZaloPersonalBridgeProbe", client => client.Timeout = TimeSpan.FromSeconds(4));
+
+builder.Services.AddHttpClient<IZaloService, ZaloService>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(60);
+});
 
 
 builder.Services.Configure<CloudinarySetings>(builder.Configuration.GetSection("Cloudinary"));
@@ -175,7 +210,6 @@ app.UseStaticFiles(new StaticFileOptions
 });
 
 app.UseCors("AllowVueApp"); // Bật CORS trước
-app.UseStaticFiles();
 app.UseAuthentication();    // Bật Xác thực trước
 app.UseAuthorization();     // Bật Phân quyền sau
 
