@@ -121,7 +121,8 @@ public class AdminKhachHangController : ControllerBase
                 TrangThai = x.TrangThai,
                 NgayTao = x.NgayTao,
                 GioiTinh = x.GioiTinh,
-                HinhAnh = x.HinhAnh
+                HinhAnh = x.HinhAnh,
+                MatKhau = x.MatKhau
             })
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -146,9 +147,12 @@ public class AdminKhachHangController : ControllerBase
                 return BadRequest(new { message = "Số điện thoại đã được khách khác sử dụng." });
         }
 
-        if (!string.IsNullOrWhiteSpace(dto.Email) && dto.Email.Trim() != (entity.Email ?? ""))
+        if (string.IsNullOrWhiteSpace(dto.Email))
+            return BadRequest(new { message = "Email không được để trống." });
+
+        var emailTrim = dto.Email.Trim();
+        if (emailTrim != (entity.Email ?? ""))
         {
-            var emailTrim = dto.Email.Trim();
             var dupEmail = await _context.Khachhangs.AnyAsync(
                 x => x.MaKh != maKh && x.Email == emailTrim, cancellationToken);
             if (dupEmail)
@@ -156,7 +160,7 @@ public class AdminKhachHangController : ControllerBase
         }
 
         if (dto.HoTen != null) entity.HoTen = dto.HoTen.Trim();
-        if (dto.Email != null) entity.Email = string.IsNullOrWhiteSpace(dto.Email) ? null : dto.Email.Trim();
+        entity.Email = emailTrim;
         if (dto.Sdt != null) entity.Sdt = dto.Sdt.Trim();
         if (dto.GioiTinh != null) entity.GioiTinh = string.IsNullOrWhiteSpace(dto.GioiTinh) ? null : dto.GioiTinh.Trim();
         if (dto.HinhAnh != null) entity.HinhAnh = string.IsNullOrWhiteSpace(dto.HinhAnh) ? null : dto.HinhAnh.Trim();
@@ -165,11 +169,15 @@ public class AdminKhachHangController : ControllerBase
 
         entity.MaRank = await GetRankByPointsAsync(entity.DiemTichLuy, cancellationToken);
 
+        string? matKhauTraVe = null;
         if (!string.IsNullOrWhiteSpace(dto.MatKhauMoi))
+        {
             entity.MatKhau = dto.MatKhauMoi.Trim();
+            matKhauTraVe = entity.MatKhau;
+        }
 
         await _context.SaveChangesAsync(cancellationToken);
-        return Ok(new { message = "Cập nhật khách hàng thành công." });
+        return Ok(new { message = "Cập nhật khách hàng thành công.", matKhau = matKhauTraVe });
     }
 
     [HttpPost]
@@ -179,9 +187,16 @@ public class AdminKhachHangController : ControllerBase
         if (await _context.Khachhangs.AnyAsync(x => x.Sdt == sdt, cancellationToken))
             return BadRequest(new { message = "Số điện thoại đã tồn tại." });
 
-        var emailTrim = string.IsNullOrWhiteSpace(dto.Email) ? null : dto.Email.Trim();
-        if (emailTrim != null && await _context.Khachhangs.AnyAsync(x => x.Email == emailTrim, cancellationToken))
+        var emailTrim = dto.Email.Trim();
+        if (await _context.Khachhangs.AnyAsync(x => x.Email == emailTrim, cancellationToken))
             return BadRequest(new { message = "Email đã tồn tại." });
+
+        var gioiTinhTrim = dto.GioiTinh.Trim();
+        var hinhAnhTrim = dto.HinhAnh.Trim();
+        if (string.IsNullOrEmpty(gioiTinhTrim))
+            return BadRequest(new { message = "Vui lòng chọn giới tính." });
+        if (string.IsNullOrEmpty(hinhAnhTrim))
+            return BadRequest(new { message = "Vui lòng tải ảnh đại diện." });
 
         string newMaKh;
         do
@@ -199,19 +214,22 @@ public class AdminKhachHangController : ControllerBase
             HoTen = dto.HoTen.Trim(),
             Sdt = sdt,
             Email = emailTrim,
-            GioiTinh = string.IsNullOrWhiteSpace(dto.GioiTinh) ? null : dto.GioiTinh.Trim(),
+            GioiTinh = gioiTinhTrim,
             MatKhau = matKhau,
             NgayTao = DateTime.Now,
             TrangThai = 1,
             DiemTichLuy = 0,
             MaRank = await GetRankByPointsAsync(0, cancellationToken),
-            HinhAnh = string.IsNullOrWhiteSpace(dto.HinhAnh) ? null : dto.HinhAnh.Trim()
+            HinhAnh = hinhAnhTrim
         };
 
         _context.Khachhangs.Add(entity);
         await _context.SaveChangesAsync(cancellationToken);
 
-        return CreatedAtAction(nameof(GetByMa), new { maKh = entity.MaKh }, new { maKh = entity.MaKh, message = "Đã tạo khách hàng." });
+        return CreatedAtAction(
+            nameof(GetByMa),
+            new { maKh = entity.MaKh },
+            new { maKh = entity.MaKh, message = "Đã tạo khách hàng.", matKhau });
     }
 
     private async Task<string> GetRankByPointsAsync(int? points, CancellationToken cancellationToken)

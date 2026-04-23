@@ -128,7 +128,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             return Ok(result);
         }
 
-        /// <summary>Xem trước tổng giảm khi xếp chồng tối đa 2 mã (thứ tự trong <paramref name="codes"/>).</summary>
+        /// <summary>Xem trước tổng giảm với tối đa 1 mã voucher.</summary>
         [HttpGet("preview-voucher-stack")]
         public async Task<IActionResult> PreviewVoucherStack(
             string maKH,
@@ -145,7 +145,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 : codes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                     .Select(VoucherCartLogic.NormalizeMaCode)
                     .Where(s => s.Length > 0)
-                    .Take(2)
+                    .Take(1)
                     .ToList();
 
             if (parts.Count == 0)
@@ -317,7 +317,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 var codesList = new List<string>();
                 if (model.MaCodes != null && model.MaCodes.Count > 0)
                 {
-                    foreach (var c in model.MaCodes.Take(2))
+                    foreach (var c in model.MaCodes.Take(1))
                     {
                         if (!string.IsNullOrWhiteSpace(c))
                             codesList.Add(VoucherCartLogic.NormalizeMaCode(c));
@@ -328,7 +328,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     codesList.Add(VoucherCartLogic.NormalizeMaCode(model.MaCode));
                 }
 
-                // Hóa đơn FK: chỉ gắn mã đầu (cột maCode); mã thứ 2 vẫn tăng lượt dùng bên dưới
+                // Hóa đơn FK: cột maCode = mã voucher áp dụng (tối đa 1 mã)
                 string? maCodeNorm = codesList.Count > 0 ? codesList[0] : null;
                 decimal tongSauGiam = subtotal;
 

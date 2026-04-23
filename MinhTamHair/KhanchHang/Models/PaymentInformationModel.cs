@@ -19,7 +19,7 @@
         public string Phone { get; set; } = string.Empty;
         public string HoTen { get; set; } = string.Empty;
         public string MaCode { get; set; } = string.Empty;
-        /// <summary>Tối đa 2 mã, áp dụng lần lượt. Ưu tiên hơn <see cref="MaCode"/> khi có phần tử.</summary>
+        /// <summary>Tối đa 1 mã voucher. Ưu tiên hơn <see cref="MaCode"/> khi có phần tử.</summary>
         public List<string> MaCodes { get; set; } = new();
     }
 
