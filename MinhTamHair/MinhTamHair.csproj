@@ -7,10 +7,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Remove="DTO\test.cs" />
-  </ItemGroup>
-
-  <ItemGroup>
     <Content Include="bin\Debug\net8.0\appsettings.Development.json" />
     <Content Include="bin\Debug\net8.0\appsettings.json" />
     <Content Include="bin\Debug\net8.0\MinhTamHair.deps.json" />
