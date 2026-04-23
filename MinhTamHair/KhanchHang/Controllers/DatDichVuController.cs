@@ -416,13 +416,44 @@ namespace MinhTamHair.KhanchHang.Controllers
                     decimal daThanhToan = (paymentMode == "10") ? (total * 0.1m) : total;
                     int trangThaiLichDat = (paymentMode == "10") ? 1 : 2;
 
+
                     // 4. LƯU BẢNG LỊCH ĐẶT
+                    int tongPhut = 0;
+                    foreach (var item in model.Services)
+                    {
+                        if (item.Id.StartsWith("DV"))
+                        {
+                            var dv = await _context.Dichvus.FindAsync(item.Id);
+                            tongPhut += dv?.ThoiGianLam ?? 30; // Mặc định 30p nếu không có dữ liệu
+                        }
+                        else if (item.Id.StartsWith("CB"))
+                        {
+                            // ĐÃ SỬA LỖI TẠI ĐÂY: Tính thời gian bằng cách cộng dồn các dịch vụ con trong Combo
+                            var cb = await _context.Combos
+                                .Include(c => c.Combo_DichVus)
+                                .ThenInclude(cd => cd.DichVu)
+                                .FirstOrDefaultAsync(c => c.MaCb == item.Id);
+
+                            if (cb != null)
+                            {
+                                int comboDuration = cb.Combo_DichVus.Sum(ct => ct.DichVu.ThoiGianLam ?? 30);
+                                tongPhut += comboDuration > 0 ? comboDuration : 60; // Mặc định 60p nếu Combo rỗng
+                            }
+                        }
+                    }
+
+
+                    var localTime = model.NgayHen.ToLocalTime();
                     var lichDat = new Lichdat
                     {
                         MaLd = shortMaLd,
                         MaKh = currentMaKh,
-                        NgayHen = DateOnly.FromDateTime(model.NgayHen),
-                        GioBatDau = TimeOnly.FromDateTime(model.NgayHen),
+                        NgayHen = DateOnly.FromDateTime(localTime),
+                        GioBatDau = TimeOnly.FromDateTime(localTime),
+
+                        // Tính giờ kết thúc (Dựa trên tổng thời gian làm đã tính ở bước trước)
+                        GioKetThuc = TimeOnly.FromDateTime(localTime).AddMinutes(tongPhut),
+
                         TongTienDuKien = total,
                         TrangThai = trangThaiLichDat
                     };

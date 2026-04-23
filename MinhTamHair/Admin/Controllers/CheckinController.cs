@@ -36,32 +36,34 @@ namespace MinhTamHair.Admin.Controllers
             var data = await _context.Lichdats
                 .Include(ld => ld.MaKhNavigation)
                 .Where(ld => ld.NgayHen == targetDateOnly && (ld.TrangThai == 1 || ld.TrangThai == 2))
+                // TRONG HÀM GetAppointments (CheckinController.cs)
                 .Select(ld => new
                 {
                     maLd = ld.MaLd,
                     tenKhach = ld.MaKhNavigation.HoTen,
                     sdt = ld.MaKhNavigation.Sdt,
-                    ngayHen = ld.NgayHen.ToString() + "T" + ld.GioBatDau.ToString() + " - " + ld.GioKetThuc.ToString(),
+
+                    // Giờ bắt đầu và kết thúc không bị lệch múi giờ
+                    ngayHen = $"{ld.NgayHen:yyyy-MM-dd}T{(ld.GioBatDau.HasValue ? ld.GioBatDau.Value.ToString("HH:mm") : "00:00")} - {(ld.GioKetThuc.HasValue ? ld.GioKetThuc.Value.ToString("HH:mm") : "??:??")}",
+
                     tongTien = ld.TongTienDuKien ?? 0,
+                    daThanhToan = _context.Thanhtoans.Where(tt => tt.MaHdNavigation.MaLd == ld.MaLd).Sum(tt => tt.SoTien) ?? 0,
 
-                    // TÍNH TOÁN SỐ TIỀN THỰC TẾ ĐÃ VÀO TÚI TIỆM
-                    daThanhToan = _context.Thanhtoans
-                        .Where(tt => tt.MaHdNavigation.MaLd == ld.MaLd)
-                        .Sum(tt => tt.SoTien) ?? 0,
-
+                    // ĐÂY LÀ DÒNG LẤY MÃ NHÂN VIÊN (Đã được khôi phục)
                     maNv = _context.ChitietLichdats
-                        .Where(ct => ct.MaLd == ld.MaLd)
-                        .Select(ct => ct.MaNv)
-                        .FirstOrDefault(),
+                    .Where(ct => ct.MaLd == ld.MaLd)
+                    .Select(ct => ct.MaNv)
+                    .FirstOrDefault(),
+
+                    // Lấy danh sách dịch vụ (Khôi phục thêm cả originalPrice để Vue không lỗi)
                     dichVus = _context.ChitietLichdats
-                        .Where(ct => ct.MaLd == ld.MaLd)
-                        .Select(ct => new
-                        {
-                            id = ct.MaDv ?? ct.MaCb,
-                            ten = ct.MaDvNavigation.TenDv ?? ct.MaCbNavigation.TenCombo,
-                            gia = ct.GiaLucDat ?? 0,
-                            originalPrice = ct.MaDv != null ? ct.MaDvNavigation.Gia : ct.MaCbNavigation.Gia
-                        }).ToList()
+                    .Where(ct => ct.MaLd == ld.MaLd)
+                    .Select(ct => new {
+                        id = ct.MaDv ?? ct.MaCb,
+                        ten = ct.MaDvNavigation.TenDv ?? ct.MaCbNavigation.TenCombo,
+                        gia = ct.GiaLucDat ?? 0,
+                        originalPrice = ct.MaDv != null ? ct.MaDvNavigation.Gia : ct.MaCbNavigation.Gia
+                    }).ToList()
                 })
                 .ToListAsync();
 
@@ -376,6 +378,7 @@ namespace MinhTamHair.Admin.Controllers
                         MaKh = maKh,
                         NgayHen = DateOnly.FromDateTime(DateTime.Today),
                         GioBatDau = TimeOnly.FromDateTime(DateTime.Now),
+                        GioKetThuc = TimeOnly.FromDateTime(DateTime.Now).AddMinutes(60),
                         TongTienDuKien = tongTien,
                         TrangThai = 1
                     };
@@ -424,29 +427,41 @@ namespace MinhTamHair.Admin.Controllers
         [HttpPost("confirm-final-payment")]
         public async Task<IActionResult> ConfirmFinalPayment([FromBody] FinalPaymentRequest req)
         {
-            // Tìm lịch đặt
+            // 1. Tìm cả Lịch đặt và Hóa đơn
             var ld = await _context.Lichdats.FirstOrDefaultAsync(x => x.MaLd == req.MaLd);
+            var hoaDon = await _context.HoaDons.FirstOrDefaultAsync(hd => hd.MaLd == req.MaLd);
+
             if (ld == null) return NotFound("Không tìm thấy lịch đặt");
 
-            // Nếu số tiền thu thêm > 0, chúng ta sẽ tạo Link thanh toán (VNPay/MoMo)
+            // 2. CẬP NHẬT DỮ LIỆU ĐỂ THỐNG KÊ (Phải làm trước khi tạo link)
+            if (hoaDon != null)
+            {
+                hoaDon.MaNv = req.MaStylist;  // Để Dashboard hiện Top Nhân Viên
+                hoaDon.TrangThai = 1;         // Để Dashboard cộng doanh thu
+                hoaDon.TongTien = (hoaDon.TongTien ?? 0) + req.AmountToPay; // Cập nhật tổng tiền cuối cùng
+                hoaDon.NgayTao = DateTime.Now; // Để lên biểu đồ đúng ngày hôm nay
+            }
+
+            // 3. Nếu số tiền thu thêm > 0, tạo Link thanh toán
             if (req.AmountToPay > 0)
             {
-                // A. NẾU LÀ VNPAY
+                await _context.SaveChangesAsync(); // Lưu trạng thái trước khi đi thanh toán
+
                 if (req.PaymentMethod.ToLower() == "vnpay")
                 {
                     string vnpayUrl = CreateVNPayLink(req.MaLd, (double)req.AmountToPay);
-                    return Ok(new { payUrl = vnpayUrl });
+                    return Ok(new { payUrl = vnpayUrl }); // Trả về link VNPay
                 }
 
-                // B. NẾU LÀ MOMO
                 var momoUrl = await CreateMoMoLink(req.MaLd, (long)req.AmountToPay);
-                return Ok(new { payUrl = momoUrl });
+                return Ok(new { payUrl = momoUrl }); // Trả về link MoMo
             }
 
-            // Nếu không còn tiền cần thu, thì hoàn tất luôn tại đây
-            ld.TrangThai = 3;
+            // 4. Nếu không nợ tiền (Trả tiền mặt hoặc đã trả đủ)
+            ld.TrangThai = 3; // Hoàn thành lịch đặt
             await _context.SaveChangesAsync();
-            return Ok(new { message = "Hoàn tất phục vụ" });
+
+            return Ok(new { message = "Hoàn tất phục vụ và đã ghi nhận doanh thu" });
         }
 
         // Thêm Model này vào cuối file CheckinController.cs để tránh lỗi đỏ
