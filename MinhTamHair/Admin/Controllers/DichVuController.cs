@@ -203,6 +203,12 @@ namespace MinhTamHair.KhanchHang.Controllers
             {
                 return BadRequest("Dịch vụ đang nằm trong combo, không thể xóa!");
             }
+            var usedInFlashSale = await _context.ChitietFlashsales.AnyAsync(x => x.MaDv == id);
+
+            if (usedInFlashSale)
+            {
+                return BadRequest("Dịch vụ đang nằm trong Flash Sale, không thể xóa!");
+            }
 
             var dv = await _context.Dichvus
                 .Include(x => x.Hinhanhs)

@@ -107,7 +107,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             await _cache.SetStringAsync(cacheKey, json,
                 new DistributedCacheEntryOptions
                 {
-                    AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(20)
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(1)
                 });
 
             return Ok(result);
@@ -210,7 +210,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             await _cache.SetStringAsync(cacheKey, json,
                 new DistributedCacheEntryOptions
                 {
-                    AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(20)
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(1)
                 });
 
             return Ok(result);
