@@ -44,18 +44,37 @@ namespace MinhTamHair.KhanchHang.Controllers
             var servicesRaw = await _context.Dichvus
                 .Where(x => x.TrangThai == 1)
                 .Include(x => x.Hinhanhs)
+                .Include(x => x.ChitietFlashsales)
+                    .ThenInclude(fs => fs.MaFlNavigation)
                 .ToListAsync();
-
-            var services = servicesRaw.Select(x => new
+            var now = DateTime.Now;
+            var services = servicesRaw.Select(x =>
             {
-                x.MaDv,
-                x.TenDv,
-                x.Gia,
-                x.ThoiGianLam,
-                x.MoTa,
-                MaDm = x.MaDm,
+                // KIỂM TRA DỊCH VỤ CÓ ĐANG TRONG THỜI GIAN SALE KHÔNG
+                var flash = x.ChitietFlashsales
+                    .FirstOrDefault(fs =>
+                        fs.MaFlNavigation.TrangThai == 1 &&
+                        fs.MaFlNavigation.NgayBatDau <= now &&
+                        fs.MaFlNavigation.NgayKetThuc >= now);
 
-                HinhAnh = x.Hinhanhs.FirstOrDefault()?.DuongDan
+                return new
+                {
+                    x.MaDv,
+                    x.TenDv,
+                    x.Gia,
+                    x.ThoiGianLam,
+                    x.MoTa,
+                    MaDm = x.MaDm,
+
+                    HinhAnh = x.Hinhanhs.FirstOrDefault()?.DuongDan,
+
+                    // BƠM DỮ LIỆU SALE RA CHUẨN NHƯ HÀM FILTER
+                    FlashSale = flash == null ? null : new
+                    {
+                        flash.PhanTramGiam,
+                        flash.MaFlNavigation.NgayKetThuc
+                    }
+                };
             }).ToList();
 
             // ================= COMBOS =================
