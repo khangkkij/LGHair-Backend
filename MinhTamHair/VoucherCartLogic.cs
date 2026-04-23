@@ -122,7 +122,7 @@ public static class VoucherCartLogic
         return (err, giam, sau);
     }
 
-    /// <summary>Áp dụng lần lượt tối đa 2 mã: mã sau tính trên số tiền còn lại sau mã trước.</summary>
+    /// <summary>Áp dụng tối đa 1 mã voucher trên đơn.</summary>
     public static async Task<(string? Error, decimal TotalGiam, decimal TongSauGiam)> ValidateStackedAsync(
         MinhTamHairContext ctx,
         IReadOnlyList<string> codesNormalized,
@@ -137,8 +137,8 @@ public static class VoucherCartLogic
     {
         if (codesNormalized == null || codesNormalized.Count == 0)
             return (null, 0m, subtotal);
-        if (codesNormalized.Count > 2)
-            return ("Chỉ áp dụng tối đa 2 voucher.", 0m, subtotal);
+        if (codesNormalized.Count > 1)
+            return ("Chỉ áp dụng một mã voucher trên mỗi đơn.", 0m, subtotal);
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var c in codesNormalized)

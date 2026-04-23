@@ -19,6 +19,9 @@ public class AdminKhachHangDetailDto : AdminKhachHangListItemDto
 {
     public string? GioiTinh { get; set; }
     public string? HinhAnh { get; set; }
+
+    /// <summary>Mật khẩu đăng nhập hiện tại (chỉ API admin; hệ thống đang lưu dạng plain text).</summary>
+    public string? MatKhau { get; set; }
 }
 
 public class AdminKhachHangUpdateDto
@@ -58,17 +61,21 @@ public class AdminKhachHangCreateDto
     [MaxLength(15)]
     public string Sdt { get; set; } = null!;
 
+    [Required(ErrorMessage = "Email không được để trống.")]
+    [EmailAddress(ErrorMessage = "Email không hợp lệ.")]
     [MaxLength(100)]
-    public string? Email { get; set; }
+    public string Email { get; set; } = null!;
 
+    [Required(ErrorMessage = "Vui lòng chọn giới tính.")]
     [MaxLength(10)]
-    public string? GioiTinh { get; set; }
+    public string GioiTinh { get; set; } = null!;
 
     [MaxLength(255)]
     public string? MatKhau { get; set; }
 
+    [Required(ErrorMessage = "Vui lòng tải ảnh đại diện.")]
     [MaxLength(255)]
-    public string? HinhAnh { get; set; }
+    public string HinhAnh { get; set; } = null!;
 }
 
 public class AdminKhachHangListResponse
