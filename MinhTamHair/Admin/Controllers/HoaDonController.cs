@@ -20,6 +20,8 @@ namespace MinhTamHair.Admin.Controllers
 			var query = _context.HoaDons
 				.Include(h => h.MaKhNavigation)
 				.Include(h => h.MaNvNavigation)
+				// 1. THÊM INCLUDE BẢNG LỊCH ĐẶT ĐỂ LẤY TRẠNG THÁI
+				.Include(h => h.MaLdNavigation)
 				.AsQueryable();
 
 			// Lọc theo ngày
@@ -30,22 +32,24 @@ namespace MinhTamHair.Admin.Controllers
 			if (!string.IsNullOrEmpty(search))
 				query = query.Where(h => h.MaHd.Contains(search) || h.MaKhNavigation!.HoTen!.Contains(search));
 
-            var data = await query.OrderByDescending(h => h.NgayTao)
-                .Select(h => new HoaDonResponse
-                {
-                    MaHd = h.MaHd,
-                    MaLd = h.MaLd,
-                    TenKhachHang = h.MaKhNavigation!.HoTen,
-                    TenNhanVien = h.MaNvNavigation!.HoTenNv,
-                    NgayTao = h.NgayTao,
-                    TongTien = h.TongTien,
-                    // THÊM ĐOẠN NÀY: Nếu ThanhTien null thì lấy TongTien
-                    ThanhTien = h.ThanhTien ?? h.TongTien,
-                    TienDaTra = h.TienDaTra,
-                    TrangThai = h.TrangThai
-                }).ToListAsync();
+			var data = await query.OrderByDescending(h => h.NgayTao)
+				.Select(h => new HoaDonResponse
+				{
+					MaHd = h.MaHd,
+					MaLd = h.MaLd,
+					TenKhachHang = h.MaKhNavigation!.HoTen,
+					TenNhanVien = h.MaNvNavigation!.HoTenNv,
+					NgayTao = h.NgayTao,
+					TongTien = h.TongTien,
+					ThanhTien = h.ThanhTien ?? h.TongTien,
+					TienDaTra = h.TienDaTra,
 
-            return Ok(new { success = true, data });
+					// 2. MOCK TRẠNG THÁI: Lấy từ Lịch Đặt thay vì Hóa Đơn
+					// (Lưu ý: Nếu cột trạng thái trong bảng LichDat của bạn tên khác, ví dụ TrangThaiLd, hãy đổi lại cho khớp nhé)
+					TrangThai = h.MaLdNavigation != null ? h.MaLdNavigation.TrangThai : 0
+				}).ToListAsync();
+
+			return Ok(new { success = true, data });
 		}
 
 		[HttpPatch("doi-trang-thai/{maHd}")]

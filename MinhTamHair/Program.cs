@@ -87,37 +87,27 @@ builder.Services.AddAuthentication(options =>
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]))
     };
 
-    options.Events = new JwtBearerEvents
-    {
-        OnMessageReceived = context =>
-        {
-            // Kiểm tra đường dẫn Request để biết đang là Admin hay Khách hàng
-            var path = context.Request.Path.Value!;
+	options.Events = new JwtBearerEvents
+	{
+		OnMessageReceived = context =>
+		{
+			// 1. Ưu tiên tìm Cookie của Admin/Nhân viên trước
+			var token = context.Request.Cookies["adminAccessToken"];
 
-            if (path.Contains("/api/admin"))
-            {
-                // Nếu là Admin: Phải tìm đúng cái "túi" tên adminAccessToken
-                if (context.Request.Cookies.ContainsKey("adminAccessToken"))
-                {
-                    context.Token = context.Request.Cookies["adminAccessToken"];
-                }
-            }
-            else
-            {
-                // Nếu là Khách hàng: Tìm cái túi tên accessToken
-                if (context.Request.Cookies.ContainsKey("accessToken"))
-                {
-                    context.Token = context.Request.Cookies["accessToken"];
-                }
-                // Dự phòng trường hợp bạn dùng tên cũ AuthToken
-                else if (context.Request.Cookies.ContainsKey("AuthToken"))
-                {
-                    context.Token = context.Request.Cookies["AuthToken"];
-                }
-            }
-            return Task.CompletedTask;
-        }
-    };
+			// 2. Nếu không có, tìm tiếp Cookie của Khách hàng (bạn check lại tên cookie khách hàng của bạn là gì để thay vào chữ "accessToken" nhé)
+			if (string.IsNullOrEmpty(token))
+			{
+				token = context.Request.Cookies["accessToken"];
+			}
+
+			// 3. Đưa Token cho C# đọc
+			if (!string.IsNullOrEmpty(token))
+			{
+				context.Token = token;
+			}
+			return Task.CompletedTask;
+		}
+	};
 });
 builder.Services.AddSwaggerGen(c =>
 {
