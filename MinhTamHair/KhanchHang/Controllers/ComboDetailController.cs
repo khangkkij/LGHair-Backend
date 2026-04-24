@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Distributed;
+using System.Text.Json;
 using MinhTamHair.Models;
 
 namespace MinhTamHair.Controllers
@@ -9,15 +11,28 @@ namespace MinhTamHair.Controllers
     public class ComboDetailController : ControllerBase
     {
         private readonly MinhTamHairContext _context;
+        private readonly IDistributedCache _cache;
 
-        public ComboDetailController(MinhTamHairContext context)
+        public ComboDetailController(MinhTamHairContext context, IDistributedCache cache)
         {
             _context = context;
+            _cache = cache;
         }
 
         [HttpGet("{id}")]
         public async Task<IActionResult> GetComboDetail(string id)
         {
+            var cacheKey = $"combo_detail_{id}";
+
+            // ================= CHECK REDIS =================
+            var cachedData = await _cache.GetStringAsync(cacheKey);
+
+            if (cachedData != null)
+            {
+                var cachedResult = JsonSerializer.Deserialize<object>(cachedData);
+                return Ok(cachedResult);
+            }
+
             var now = DateTime.Now;
 
             // ================= COMBO =================
@@ -76,10 +91,7 @@ namespace MinhTamHair.Controllers
                 };
             }).ToList();
 
-            // ================= TOTAL TIME =================
             int tongThoiGian = dichVuTrongCombo.Sum(x => x.thoiGianLam ?? 0);
-
-            // ================= PRICE BASE =================
             decimal giaGocCombo = dichVuTrongCombo.Sum(x => x.giaGoc);
 
             // ================= FLASH SALE COMBO =================
@@ -163,7 +175,7 @@ namespace MinhTamHair.Controllers
                 .Distinct()
                 .ToListAsync();
 
-            var suggestedRaw = await _context.Dichvus
+            var suggestedServices = await _context.Dichvus
                 .Where(dv =>
                     maDmList.Contains(dv.MaDm) &&
                     !maDvTrongCombo.Contains(dv.MaDv) &&
@@ -182,41 +194,10 @@ namespace MinhTamHair.Controllers
                     hinhAnh = _context.Hinhanhs
                         .Where(h => h.MaDv == dv.MaDv)
                         .Select(h => h.DuongDan)
-                        .FirstOrDefault(),
-
-                    flashGiam = _context.ChitietFlashsales
-                        .Where(cf =>
-                            cf.MaDv == dv.MaDv &&
-                            cf.MaFlNavigation.TrangThai == 1 &&
-                            cf.MaFlNavigation.NgayBatDau <= now &&
-                            cf.MaFlNavigation.NgayKetThuc >= now)
-                        .Select(cf => (int?)cf.PhanTramGiam)
                         .FirstOrDefault()
                 })
                 .ToListAsync();
 
-            var suggestedServices = suggestedRaw.Select(s =>
-            {
-                var giaGoc = s.gia ?? 0;
-
-                decimal gia = s.flashGiam.HasValue
-                    ? giaGoc * (100 - s.flashGiam.Value) / 100
-                    : giaGoc;
-
-                return new
-                {
-                    s.id,
-                    s.tenDv,
-                    gia,
-                    giaGoc,
-                    phanTramGiam = s.flashGiam,
-                    s.moTa,
-                    s.thoiGianLam,
-                    s.hinhAnh
-                };
-            }).ToList();
-
-            // ================= RESULT =================
             var result = new
             {
                 maCb = combo.MaCb,
@@ -239,6 +220,18 @@ namespace MinhTamHair.Controllers
                 relatedCombos = relatedCombosFormatted,
                 suggestedServices
             };
+
+            // ================= SAVE CACHE =================
+            var options = new DistributedCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(20)
+            };
+
+            await _cache.SetStringAsync(
+                cacheKey,
+                JsonSerializer.Serialize(result),
+                options
+            );
 
             return Ok(result);
         }
