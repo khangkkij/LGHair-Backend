@@ -1,8 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Caching.Distributed;
 using MinhTamHair.Models;
-using System.Text.Json;
 
 namespace MinhTamHair.Controllers
 {
@@ -11,6 +9,7 @@ namespace MinhTamHair.Controllers
     public class ComboDetailController : ControllerBase
     {
         private readonly MinhTamHairContext _context;
+
         public ComboDetailController(MinhTamHairContext context)
         {
             _context = context;
@@ -19,6 +18,8 @@ namespace MinhTamHair.Controllers
         [HttpGet("{id}")]
         public async Task<IActionResult> GetComboDetail(string id)
         {
+            var now = DateTime.Now;
+
             // ================= COMBO =================
             var combo = await _context.Combos
                 .FirstOrDefaultAsync(c => c.MaCb == id && c.TrangThai == 1);
@@ -27,7 +28,7 @@ namespace MinhTamHair.Controllers
                 return NotFound(new { message = "Combo không tồn tại hoặc đã bị ẩn." });
 
             // ================= SERVICES IN COMBO =================
-            var dichVuTrongCombo = await _context.Combo_DichVus
+            var dichVuRaw = await _context.Combo_DichVus
                 .Where(cd => cd.MaCB == id)
                 .Include(cd => cd.DichVu)
                 .Select(cd => new
@@ -37,22 +38,51 @@ namespace MinhTamHair.Controllers
                     thoiGianLam = cd.DichVu.ThoiGianLam,
                     gia = cd.DichVu.Gia,
                     moTa = cd.DichVu.MoTa,
+
                     hinhAnh = _context.Hinhanhs
                         .Where(h => h.MaDv == cd.DichVu.MaDv)
                         .Select(h => h.DuongDan)
+                        .FirstOrDefault(),
+
+                    flashGiam = _context.ChitietFlashsales
+                        .Where(cf =>
+                            cf.MaDv == cd.DichVu.MaDv &&
+                            cf.MaFlNavigation.TrangThai == 1 &&
+                            cf.MaFlNavigation.NgayBatDau <= now &&
+                            cf.MaFlNavigation.NgayKetThuc >= now)
+                        .Select(cf => (int?)cf.PhanTramGiam)
                         .FirstOrDefault()
                 })
                 .ToListAsync();
+
+            var dichVuTrongCombo = dichVuRaw.Select(d =>
+            {
+                var giaGoc = d.gia ?? 0;
+
+                decimal gia = d.flashGiam.HasValue
+                    ? giaGoc * (100 - d.flashGiam.Value) / 100
+                    : giaGoc;
+
+                return new
+                {
+                    d.maDv,
+                    d.tenDv,
+                    gia,
+                    giaGoc,
+                    phanTramGiam = d.flashGiam,
+                    d.thoiGianLam,
+                    d.moTa,
+                    d.hinhAnh
+                };
+            }).ToList();
 
             // ================= TOTAL TIME =================
             int tongThoiGian = dichVuTrongCombo.Sum(x => x.thoiGianLam ?? 0);
 
             // ================= PRICE BASE =================
-            decimal giaGocCombo = dichVuTrongCombo.Sum(x => x.gia ?? 0);
+            decimal giaGocCombo = dichVuTrongCombo.Sum(x => x.giaGoc);
 
-            // ================= FLASH SALE =================
-            var now = DateTime.Now;
-
+            // ================= FLASH SALE COMBO =================
             var flashSale = await _context.ChitietFlashsales
                 .Where(cf => cf.MaCb == id)
                 .Include(cf => cf.MaFlNavigation)
@@ -64,7 +94,9 @@ namespace MinhTamHair.Controllers
                 .OrderByDescending(cf => cf.PhanTramGiam)
                 .FirstOrDefaultAsync();
 
-            decimal giaSauCombo = combo.Gia ?? giaGocCombo;
+            var basePrice = combo.Gia ?? giaGocCombo;
+
+            decimal giaSauCombo = basePrice;
             int? phanTramFlash = null;
             DateTime? ngayKetThucFlash = null;
 
@@ -73,16 +105,7 @@ namespace MinhTamHair.Controllers
                 phanTramFlash = flashSale.PhanTramGiam;
                 ngayKetThucFlash = flashSale.MaFlNavigation.NgayKetThuc;
 
-                giaSauCombo = giaGocCombo * (100 - phanTramFlash.Value) / 100;
-            }
-
-            // ================= DISCOUNT % =================
-            int? phanTramGiam = null;
-            if (giaGocCombo > 0 && giaSauCombo < giaGocCombo)
-            {
-                phanTramGiam = (int)Math.Round(
-                    (1 - (double)giaSauCombo / (double)giaGocCombo) * 100
-                );
+                giaSauCombo = basePrice * (100 - phanTramFlash.Value) / 100;
             }
 
             // ================= REVIEWS =================
@@ -114,6 +137,7 @@ namespace MinhTamHair.Controllers
                 var gia = c.Gia ?? 0;
 
                 int? pt = null;
+
                 if (giaGoc > 0 && gia < giaGoc)
                 {
                     pt = (int)Math.Round((1 - (double)gia / (double)giaGoc) * 100);
@@ -128,9 +152,7 @@ namespace MinhTamHair.Controllers
                     phanTramGiam = pt,
                     moTa = c.MoTa,
                     hinhAnh = c.HinhAnh,
-                    items = c.Combo_DichVus
-                        .Select(x => x.DichVu.TenDv)
-                        .ToList()
+                    items = c.Combo_DichVus.Select(x => x.DichVu.TenDv).ToList()
                 };
             }).ToList();
 
@@ -141,7 +163,7 @@ namespace MinhTamHair.Controllers
                 .Distinct()
                 .ToListAsync();
 
-            var suggestedServices = await _context.Dichvus
+            var suggestedRaw = await _context.Dichvus
                 .Where(dv =>
                     maDmList.Contains(dv.MaDm) &&
                     !maDvTrongCombo.Contains(dv.MaDv) &&
@@ -156,38 +178,38 @@ namespace MinhTamHair.Controllers
                     gia = dv.Gia,
                     moTa = dv.MoTa,
                     thoiGianLam = dv.ThoiGianLam,
+
                     hinhAnh = _context.Hinhanhs
                         .Where(h => h.MaDv == dv.MaDv)
                         .Select(h => h.DuongDan)
                         .FirstOrDefault(),
-                    // Flash sale hiện tại cho dịch vụ gợi ý (nếu có)
+
                     flashGiam = _context.ChitietFlashsales
-                        .Where(cf => cf.MaDv == dv.MaDv &&
-                                     cf.MaFlNavigation.TrangThai == 1 &&
-                                     cf.MaFlNavigation.NgayBatDau <= now &&
-                                     cf.MaFlNavigation.NgayKetThuc >= now)
+                        .Where(cf =>
+                            cf.MaDv == dv.MaDv &&
+                            cf.MaFlNavigation.TrangThai == 1 &&
+                            cf.MaFlNavigation.NgayBatDau <= now &&
+                            cf.MaFlNavigation.NgayKetThuc >= now)
                         .Select(cf => (int?)cf.PhanTramGiam)
                         .FirstOrDefault()
                 })
                 .ToListAsync();
 
-            // Tính giaGoc và phanTramGiam sau khi query xong (tránh lỗi EF projection)
-            var suggestedServicesFormatted = suggestedServices.Select(s =>
+            var suggestedServices = suggestedRaw.Select(s =>
             {
-                var giaGocDv = s.gia ?? 0;
-                decimal giaDv = s.flashGiam.HasValue
-                    ? giaGocDv * (100 - s.flashGiam.Value) / 100
-                    : giaGocDv;
+                var giaGoc = s.gia ?? 0;
 
-                int? ptGiam = s.flashGiam.HasValue ? s.flashGiam : null;
+                decimal gia = s.flashGiam.HasValue
+                    ? giaGoc * (100 - s.flashGiam.Value) / 100
+                    : giaGoc;
 
                 return new
                 {
                     s.id,
                     s.tenDv,
-                    gia = giaDv,
-                    giaGoc = giaGocDv,
-                    phanTramGiam = ptGiam,
+                    gia,
+                    giaGoc,
+                    phanTramGiam = s.flashGiam,
                     s.moTa,
                     s.thoiGianLam,
                     s.hinhAnh
@@ -203,11 +225,11 @@ namespace MinhTamHair.Controllers
                 hinhAnh = combo.HinhAnh,
 
                 gia = giaSauCombo,
-                giaGoc = giaGocCombo,
-                phanTramGiam = phanTramFlash ?? phanTramGiam,
+                giaGoc = basePrice,
+                phanTramGiam = phanTramFlash,
                 ngayKetThuc = ngayKetThucFlash,
 
-                tongThoiGian = tongThoiGian,
+                tongThoiGian,
                 soLuongDichVu = dichVuTrongCombo.Count,
 
                 diemTrungBinh,
@@ -215,8 +237,9 @@ namespace MinhTamHair.Controllers
 
                 dichVuTrongCombo,
                 relatedCombos = relatedCombosFormatted,
-                suggestedServices = suggestedServicesFormatted
+                suggestedServices
             };
+
             return Ok(result);
         }
     }

@@ -78,17 +78,39 @@ namespace MinhTamHair.KhanchHang.Controllers
             }).ToList();
 
             // ================= COMBOS =================
-            var combos = await _context.Combos
+            var combosRaw = await _context.Combos
                 .Where(x => x.TrangThai == 1)
-                .Select(x => new
+                .Include(x => x.ChitietFlashsales)
+                    .ThenInclude(fs => fs.MaFlNavigation)
+                .ToListAsync();
+
+            var combos = combosRaw.Select(x =>
+            {
+                var flash = x.ChitietFlashsales
+                    .FirstOrDefault(fs =>
+                        fs.MaFlNavigation.TrangThai == 1 &&
+                        fs.MaFlNavigation.NgayBatDau <= now &&
+                        fs.MaFlNavigation.NgayKetThuc >= now);
+
+                return new
                 {
                     x.MaCb,
                     x.TenCombo,
-                    x.Gia,
+
+                    GiaGoc = x.Gia,
+
+                    Gia = flash == null ? x.Gia: x.Gia - (x.Gia * flash.PhanTramGiam / 100),
+
                     x.MoTa,
-                    x.HinhAnh
-                })
-                .ToListAsync();
+                    x.HinhAnh,
+
+                    FlashSale = flash == null ? null : new
+                    {
+                        flash.PhanTramGiam,
+                        flash.MaFlNavigation.NgayKetThuc
+                    }
+                };
+            }).ToList();
 
             // ================= RESULT =================
             var result = new

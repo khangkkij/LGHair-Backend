@@ -196,7 +196,12 @@ namespace MinhTamHair.KhanchHang.Controllers
             {
                 return BadRequest("Combo đang được sử dụng, không thể xóa!");
             }
+            var usedInFlashSale = await _context.ChitietFlashsales.AnyAsync(x => x.MaCb == id);
 
+            if (usedInFlashSale)
+            {
+                return BadRequest("Combo đang nằm trong Flash Sale, không thể xóa!");
+            }
             // 🔥 Xóa ảnh nếu có
             if (!string.IsNullOrEmpty(combo.HinhAnh))
             {
