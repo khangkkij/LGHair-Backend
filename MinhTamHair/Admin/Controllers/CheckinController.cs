@@ -427,38 +427,53 @@ namespace MinhTamHair.Admin.Controllers
         [HttpPost("confirm-final-payment")]
         public async Task<IActionResult> ConfirmFinalPayment([FromBody] FinalPaymentRequest req)
         {
-            // 1. Tìm cả Lịch đặt và Hóa đơn
             var ld = await _context.Lichdats.FirstOrDefaultAsync(x => x.MaLd == req.MaLd);
             var hoaDon = await _context.HoaDons.FirstOrDefaultAsync(hd => hd.MaLd == req.MaLd);
 
             if (ld == null) return NotFound("Không tìm thấy lịch đặt");
 
-            // 2. CẬP NHẬT DỮ LIỆU ĐỂ THỐNG KÊ (Phải làm trước khi tạo link)
+            // 1. Cập nhật dữ liệu doanh thu
             if (hoaDon != null)
             {
-                hoaDon.MaNv = req.MaStylist;  // Để Dashboard hiện Top Nhân Viên
-                hoaDon.TrangThai = 1;         // Để Dashboard cộng doanh thu
-                hoaDon.TongTien = (hoaDon.TongTien ?? 0) + req.AmountToPay; // Cập nhật tổng tiền cuối cùng
-                hoaDon.NgayTao = DateTime.Now; // Để lên biểu đồ đúng ngày hôm nay
+                hoaDon.MaNv = req.MaStylist;
+                hoaDon.TrangThai = 1;
+                hoaDon.TongTien = (hoaDon.TongTien ?? 0) + req.AmountToPay;
+                hoaDon.NgayTao = DateTime.Now;
             }
 
-            // 3. Nếu số tiền thu thêm > 0, tạo Link thanh toán
+            // 2. Xử lý logic theo Phương thức thanh toán
             if (req.AmountToPay > 0)
             {
-                await _context.SaveChangesAsync(); // Lưu trạng thái trước khi đi thanh toán
-
-                if (req.PaymentMethod.ToLower() == "vnpay")
+                // 🔥 NẾU LÀ TIỀN MẶT -> Lưu luôn vào database, không cần tạo link
+                if (req.PaymentMethod.ToLower() == "tienmat")
                 {
-                    string vnpayUrl = CreateVNPayLink(req.MaLd, (double)req.AmountToPay);
-                    return Ok(new { payUrl = vnpayUrl }); // Trả về link VNPay
-                }
+                    var tt = new Thanhtoan
+                    {
+                        MaHd = hoaDon?.MaHd ?? req.MaLd,
+                        PhuongThuc = "Tiền mặt",
+                        SoTien = req.AmountToPay,
+                        TrangThai = 1 // Đánh dấu đã thu xong
+                    };
+                    _context.Thanhtoans.Add(tt);
 
-                var momoUrl = await CreateMoMoLink(req.MaLd, (long)req.AmountToPay);
-                return Ok(new { payUrl = momoUrl }); // Trả về link MoMo
+                    if (hoaDon != null)
+                    {
+                        hoaDon.TienDaTra = (hoaDon.TienDaTra ?? 0) + req.AmountToPay;
+                    }
+                }
+                else //  NẾU LÀ VNPAY HOẶC MOMO -> Đi lấy Link
+                {
+                    await _context.SaveChangesAsync(); // Lưu trạng thái trước khi chuyển trang online
+
+                    if (req.PaymentMethod.ToLower() == "vnpay")
+                        return Ok(new { payUrl = CreateVNPayLink(req.MaLd, (double)req.AmountToPay) });
+
+                    return Ok(new { payUrl = await CreateMoMoLink(req.MaLd, (long)req.AmountToPay) });
+                }
             }
 
-            // 4. Nếu không nợ tiền (Trả tiền mặt hoặc đã trả đủ)
-            ld.TrangThai = 3; // Hoàn thành lịch đặt
+            // 3. Hoàn tất lịch đặt (Dùng chung cho cả trả đủ, nợ 0đ, hoặc trả tiền mặt)
+            ld.TrangThai = 3;
             await _context.SaveChangesAsync();
 
             return Ok(new { message = "Hoàn tất phục vụ và đã ghi nhận doanh thu" });
