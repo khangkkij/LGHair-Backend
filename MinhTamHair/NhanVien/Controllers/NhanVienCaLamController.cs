@@ -71,9 +71,8 @@ namespace MinhTamHair.NhanVien.Controllers
 			return Ok(new { success = true, data = shifts });
 		}
 
-		// SỬA API ĐIỂM DANH
 		[HttpPatch("diem-danh/{maLich}")]
-		public async Task<IActionResult> CheckIn(int maLich, [FromQuery] string maNv) // THÊM maNv Ở ĐÂY
+		public async Task<IActionResult> CheckIn(int maLich, [FromQuery] string maNv)
 		{
 			if (string.IsNullOrEmpty(maNv)) return BadRequest(new { message = "Thiếu mã nhân viên" });
 
@@ -84,10 +83,48 @@ namespace MinhTamHair.NhanVien.Controllers
 			if (lich.CaLam == "Chưa xếp") return BadRequest(new { message = "Ca làm chưa được xếp, không thể điểm danh." });
 			if (lich.TrangThai == 2) return BadRequest(new { message = "Bạn đã điểm danh rồi." });
 
-			lich.TrangThai = 2;
+			// ==========================================
+			// THÊM MỚI: KIỂM TRA GIỜ GIẤC ĐIỂM DANH
+			// ==========================================
+			var now = DateTime.Now.TimeOfDay; // Lấy giờ phút hiện tại
+			TimeSpan shiftStartTime;
+
+			// Xác định giờ bắt đầu dựa vào tên ca (Hiếu nhớ chỉnh lại giờ cho đúng với Salon nhé)
+			switch (lich.CaLam)
+			{
+				case "Sáng":
+				case "Cả ngày":
+					shiftStartTime = new TimeSpan(8, 0, 0); // Ca sáng bắt đầu lúc 08:00
+					break;
+				case "Chiều":
+					shiftStartTime = new TimeSpan(13, 0, 0); // Ca chiều bắt đầu lúc 13:00
+					break;
+				case "Tối":
+					shiftStartTime = new TimeSpan(17, 0, 0); // Ca tối bắt đầu lúc 17:00
+					break;
+				default:
+					// Dành cho các ca linh động hoặc ghi chú khác, tạm thời không block giờ
+					shiftStartTime = new TimeSpan(0, 0, 0);
+					break;
+			}
+
+			// Cho phép điểm danh sớm 30 phút trước khi vào ca
+			// Ví dụ: Ca 8h thì 7h30 mới được hiện nút bấm (hợp lệ)
+			if (shiftStartTime.TotalHours > 0)
+			{
+				var allowedCheckInTime = shiftStartTime.Subtract(TimeSpan.FromMinutes(30));
+
+				if (now < allowedCheckInTime)
+				{
+					return BadRequest(new { message = $"Chưa đến giờ làm! {lich.CaLam} bắt đầu lúc {shiftStartTime:hh\\:mm}. Bạn chỉ được điểm danh sớm 30 phút." });
+				}
+			}
+			// ==========================================
+
+			lich.TrangThai = 2; // Đánh dấu Có mặt
 			await _context.SaveChangesAsync();
 
-			return Ok(new { success = true, message = "Điểm danh thành công!" });
+			return Ok(new { success = true, message = "Điểm danh thành công! Chúc bạn làm việc hiệu quả." });
 		}
 
 		// LÀM TƯƠNG TỰ CHO API RỜI CA SỚM (NẾU CÓ)
