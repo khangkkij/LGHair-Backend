@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace MinhTamHair.Models;
@@ -38,4 +38,6 @@ public partial class Khachhang
     public virtual ICollection<Thongbao> Thongbaos { get; set; } = new List<Thongbao>();
 
     public virtual ICollection<Voucher> MaCodes { get; set; } = new List<Voucher>();
+    public virtual ICollection<DanhgiaSanpham> DanhgiaSanphams { get; set; } = new List<DanhgiaSanpham>();
+    public virtual ICollection<Giohang> Giohangs { get; set; } = new List<Giohang>();
 }

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace MinhTamHair.Models;
@@ -14,6 +14,8 @@ public partial class Dichvu
     public string? MoTa { get; set; }
 
     public decimal? Gia { get; set; }
+
+    public decimal? PhanTramHoaHong { get; set; }
 
     public int? ThoiGianLam { get; set; }
 
