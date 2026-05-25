@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 
@@ -41,4 +41,7 @@ public partial class HoaDon
     public virtual Nhanvien? MaNvNavigation { get; set; }
 
     public virtual ICollection<Thanhtoan> Thanhtoans { get; set; } = new List<Thanhtoan>();
+    public virtual ICollection<ChitietHoadonSp> ChitietHoadonSps { get; set; } = new List<ChitietHoadonSp>();
+    public virtual ICollection<DanhgiaSanpham> DanhgiaSanphams { get; set; } = new List<DanhgiaSanpham>();
+    public virtual ICollection<ThongtinGiaohang> ThongtinGiaohangs { get; set; } = new List<ThongtinGiaohang>();
 }

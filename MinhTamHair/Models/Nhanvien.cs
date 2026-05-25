@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace MinhTamHair.Models;
@@ -46,4 +46,6 @@ public partial class Nhanvien
     public virtual Loainhanvien? MaLoaiNvNavigation { get; set; }
 
     public virtual Role? MaRoleNavigation { get; set; }
+    public virtual ICollection<ChitietHoadonSp> ChitietHoadonSps { get; set; } = new List<ChitietHoadonSp>();
+    public virtual ICollection<Phieunhap> Phieunhaps { get; set; } = new List<Phieunhap>();
 }

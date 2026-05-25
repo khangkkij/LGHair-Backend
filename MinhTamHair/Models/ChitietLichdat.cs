@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace MinhTamHair.Models;
@@ -16,6 +16,8 @@ public partial class ChitietLichdat
     public string? MaCb { get; set; }
 
     public decimal? GiaLucDat { get; set; }
+
+    public decimal? TienHoaHongDv { get; set; }
 
     public string? GhiChu { get; set; }
 

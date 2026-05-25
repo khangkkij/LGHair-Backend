@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace MinhTamHair.Models;
@@ -11,6 +11,8 @@ public partial class Lichlamviec
 
     public DateOnly? NgayLamViec { get; set; }
 	
+    public string? GhiChu { get; set; }
+
 
 	public string? CaLam { get; set; }
 
