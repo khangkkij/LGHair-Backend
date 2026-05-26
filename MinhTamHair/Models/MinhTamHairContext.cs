@@ -80,10 +80,55 @@ public partial class MinhTamHairContext : DbContext
     public virtual DbSet<Sanpham> Sanphams { get; set; }
     public virtual DbSet<ThongtinGiaohang> ThongtinGiaohangs { get; set; }
     public virtual DbSet<Thuonghieu> Thuonghieus { get; set; }
-
+    public  DbSet<YeuThichNhanVien> YeuThichNhanViens { get; set; }
+    public  DbSet<YeuThichDichVu> YeuThichDichVus { get; set; }
+    public  DbSet<YeuThichSanPham> YeuThichSanPhams { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        base.OnModelCreating(modelBuilder);
+        modelBuilder.Entity<YeuThichSanPham>(entity =>
+        {
+            entity.HasKey(yt => new { yt.MaKH, yt.MaSP });
+            entity.HasOne(yt => yt.KhachHang)
+                  .WithMany()
+                  .HasForeignKey(yt => yt.MaKH)
+                  .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(yt => yt.SanPham)
+                  .WithMany()
+                  .HasForeignKey(yt => yt.MaSP)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<YeuThichNhanVien>(entity =>
+        {
+            entity.HasKey(yt => new { yt.MaKH, yt.MaNV });
+            entity.HasOne(yt => yt.KhachHang)
+                  .WithMany()
+                  .HasForeignKey(yt => yt.MaKH)
+                  .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(yt => yt.nhanVien)
+                  .WithMany()
+                  .HasForeignKey(yt => yt.MaNV)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<YeuThichDichVu>(entity =>
+        {
+  
+            entity.HasKey(yt => new { yt.MaKH, yt.MaDV });
+
+           
+            entity.HasOne(yt => yt.KhachHang)
+                  .WithMany()
+                  .HasForeignKey(yt => yt.MaKH)
+                  .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(yt => yt.Dichvu)
+                  .WithMany()
+                  .HasForeignKey(yt => yt.MaDV)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+
+
         modelBuilder.Entity<Bangmau>(entity =>
         {
             entity.HasKey(e => e.MaMau).HasName("PK__BANGMAU__27572EAE77605C70");
@@ -1343,7 +1388,7 @@ public partial class MinhTamHairContext : DbContext
             entity.Property(e => e.TrangThai).HasColumnName("trangThai");
         });
 
-
+       
 
         OnModelCreatingPartial(modelBuilder);
     }
