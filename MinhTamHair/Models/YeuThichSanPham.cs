@@ -6,7 +6,7 @@
         public Khachhang KhachHang { get; set; }
 
         public string MaSP { get; set; }
-        public Sanpham SanPham { get; set; }
+        public SanPham SanPham { get; set; }
 
         public DateTime NgayThem { get; set; } = DateTime.Now;
     }

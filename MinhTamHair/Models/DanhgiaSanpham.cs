@@ -7,7 +7,7 @@ public partial class DanhgiaSanpham
 {
     public int MaDgsp { get; set; }
 
-    public string? MaSp { get; set; }
+    public string? MaSanPham { get; set; }
 
     public string? MaHd { get; set; }
 
@@ -29,6 +29,5 @@ public partial class DanhgiaSanpham
 
     public virtual Khachhang? MaKhNavigation { get; set; }
 
-    public virtual Sanpham? MaSpNavigation { get; set; }
+    public virtual SanPham? MaSpNavigation { get; set; }
 }
-

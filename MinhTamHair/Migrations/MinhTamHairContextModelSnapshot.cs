@@ -103,6 +103,49 @@ namespace MinhTamHair.Migrations
                     b.ToTable("BANGMAU", (string)null);
                 });
 
+            modelBuilder.Entity("MinhTamHair.Models.BienTheSanpham", b =>
+                {
+                    b.Property<string>("MaBienThe")
+                        .HasMaxLength(10)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(10)")
+                        .HasColumnName("maBienThe");
+
+                    b.Property<decimal?>("GiaBan")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("HinhAnhDaiDien")
+                        .HasMaxLength(255)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(255)");
+
+                    b.Property<string>("MaSanPham")
+                        .HasMaxLength(10)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(10)")
+                        .HasColumnName("maSanPham");
+
+                    b.Property<decimal?>("PhanTramHoaHong")
+                        .HasColumnType("decimal(5,2)");
+
+                    b.Property<int?>("SoLuongTon")
+                        .HasColumnType("int");
+
+                    b.Property<string>("TenBienThe")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)")
+                        .HasColumnName("tenBienThe");
+
+                    b.Property<int?>("TrangThai")
+                        .HasColumnType("int");
+
+                    b.HasKey("MaBienThe");
+
+                    b.HasIndex("MaSanPham");
+
+                    b.ToTable("BIENTHE_SANPHAM", (string)null);
+                });
+
             modelBuilder.Entity("MinhTamHair.Models.ChitietFlashsale", b =>
                 {
                     b.Property<int>("Id")
@@ -153,20 +196,20 @@ namespace MinhTamHair.Migrations
                         .HasColumnType("int")
                         .HasColumnName("maGH");
 
-                    b.Property<string>("MaSp")
+                    b.Property<string>("MaBienThe")
                         .HasMaxLength(10)
                         .IsUnicode(false)
                         .HasColumnType("varchar(10)")
-                        .HasColumnName("maSP");
+                        .HasColumnName("maBienThe");
 
                     b.Property<int?>("SoLuong")
                         .HasColumnType("int")
                         .HasColumnName("soLuong");
 
-                    b.HasKey("MaGh", "MaSp")
+                    b.HasKey("MaGh", "MaBienThe")
                         .HasName("PK__CHITIET___CD9C0ACC0072A942");
 
-                    b.HasIndex("MaSp");
+                    b.HasIndex("MaBienThe");
 
                     b.ToTable("CHITIET_GIOHANG", (string)null);
                 });
@@ -179,11 +222,11 @@ namespace MinhTamHair.Migrations
                         .HasColumnType("varchar(50)")
                         .HasColumnName("maHD");
 
-                    b.Property<string>("MaSp")
+                    b.Property<string>("MaBienThe")
                         .HasMaxLength(10)
                         .IsUnicode(false)
                         .HasColumnType("varchar(10)")
-                        .HasColumnName("maSP");
+                        .HasColumnName("maBienThe");
 
                     b.Property<decimal?>("DonGiaLucBan")
                         .HasColumnType("decimal(18, 2)")
@@ -207,12 +250,12 @@ namespace MinhTamHair.Migrations
                         .HasColumnType("decimal(18, 2)")
                         .HasColumnName("tienHoaHongSP");
 
-                    b.HasKey("MaHd", "MaSp")
+                    b.HasKey("MaHd", "MaBienThe")
                         .HasName("PK__CHITIET___CD9C3321972BC3EA");
 
-                    b.HasIndex("MaNv");
+                    b.HasIndex("MaBienThe");
 
-                    b.HasIndex("MaSp");
+                    b.HasIndex("MaNv");
 
                     b.ToTable("CHITIET_HOADON_SP", (string)null);
                 });
@@ -284,11 +327,11 @@ namespace MinhTamHair.Migrations
                         .HasColumnType("varchar(10)")
                         .HasColumnName("maPN");
 
-                    b.Property<string>("MaSp")
+                    b.Property<string>("MaBienThe")
                         .HasMaxLength(10)
                         .IsUnicode(false)
                         .HasColumnType("varchar(10)")
-                        .HasColumnName("maSP");
+                        .HasColumnName("maBienThe");
 
                     b.Property<decimal?>("GiaNhap")
                         .HasColumnType("decimal(18, 2)")
@@ -298,10 +341,10 @@ namespace MinhTamHair.Migrations
                         .HasColumnType("int")
                         .HasColumnName("soLuong");
 
-                    b.HasKey("MaPn", "MaSp")
+                    b.HasKey("MaPn", "MaBienThe")
                         .HasName("PK__CHITIET___CD9CF03D4A71F270");
 
-                    b.HasIndex("MaSp");
+                    b.HasIndex("MaBienThe");
 
                     b.ToTable("CHITIET_PHIEUNHAP", (string)null);
                 });
@@ -425,6 +468,34 @@ namespace MinhTamHair.Migrations
                         .HasName("PK__DANH_MUC__7A3EF4081AD9A7FB");
 
                     b.ToTable("DANH_MUC", (string)null);
+                });
+
+            modelBuilder.Entity("MinhTamHair.Models.DanhMucSP", b =>
+                {
+                    b.Property<string>("MaDMSP")
+                        .HasMaxLength(10)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(10)")
+                        .HasColumnName("maDMSP");
+
+                    b.Property<string>("HinhAnh")
+                        .HasMaxLength(255)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(255)")
+                        .HasColumnName("hinhAnh");
+
+                    b.Property<string>("TenDanhMuc")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)")
+                        .HasColumnName("tenDanhMuc");
+
+                    b.Property<int?>("TrangThai")
+                        .HasColumnType("int")
+                        .HasColumnName("trangThai");
+
+                    b.HasKey("MaDMSP");
+
+                    b.ToTable("DANHMUCSP", (string)null);
                 });
 
             modelBuilder.Entity("MinhTamHair.Models.DanhgiaDichvu", b =>
@@ -570,7 +641,7 @@ namespace MinhTamHair.Migrations
                         .HasColumnType("varchar(10)")
                         .HasColumnName("maKH");
 
-                    b.Property<string>("MaSp")
+                    b.Property<string>("MaSanPham")
                         .HasMaxLength(10)
                         .IsUnicode(false)
                         .HasColumnType("varchar(10)")
@@ -603,7 +674,7 @@ namespace MinhTamHair.Migrations
 
                     b.HasIndex("MaKh");
 
-                    b.HasIndex("MaSp");
+                    b.HasIndex("MaSanPham");
 
                     b.ToTable("DANHGIA_SANPHAM", (string)null);
                 });
@@ -631,7 +702,7 @@ namespace MinhTamHair.Migrations
                         .HasColumnName("moTa");
 
                     b.Property<decimal?>("PhanTramHoaHong")
-                        .HasColumnType("decimal(18,2)");
+                        .HasColumnType("decimal(5,2)");
 
                     b.Property<string>("TenDv")
                         .HasMaxLength(100)
@@ -778,7 +849,7 @@ namespace MinhTamHair.Migrations
                         .HasColumnType("varchar(255)")
                         .HasColumnName("duongDan");
 
-                    b.Property<string>("MaSp")
+                    b.Property<string>("MaSanPham")
                         .HasMaxLength(10)
                         .IsUnicode(false)
                         .HasColumnType("varchar(10)")
@@ -787,7 +858,7 @@ namespace MinhTamHair.Migrations
                     b.HasKey("MaHa")
                         .HasName("PK__HINHANHS__7A3E1483AD681ED2");
 
-                    b.HasIndex("MaSp");
+                    b.HasIndex("MaSanPham");
 
                     b.ToTable("HINHANHSP", (string)null);
                 });
@@ -1143,60 +1214,6 @@ namespace MinhTamHair.Migrations
                     b.ToTable("LOAINHANVIEN", (string)null);
                 });
 
-            modelBuilder.Entity("MinhTamHair.Models.Loaisanphamcha", b =>
-                {
-                    b.Property<string>("MaLoaiSpcha")
-                        .HasMaxLength(10)
-                        .IsUnicode(false)
-                        .HasColumnType("varchar(10)")
-                        .HasColumnName("maLoaiSPCha");
-
-                    b.Property<string>("TenLoaiSp")
-                        .HasMaxLength(100)
-                        .HasColumnType("nvarchar(100)")
-                        .HasColumnName("tenLoaiSP");
-
-                    b.Property<int?>("TrangThai")
-                        .HasColumnType("int")
-                        .HasColumnName("trangThai");
-
-                    b.HasKey("MaLoaiSpcha")
-                        .HasName("PK__LOAISANP__D9D83107C001562A");
-
-                    b.ToTable("LOAISANPHAMCHA", (string)null);
-                });
-
-            modelBuilder.Entity("MinhTamHair.Models.Loaisanphamcon", b =>
-                {
-                    b.Property<string>("MaLoaiSpcon")
-                        .HasMaxLength(10)
-                        .IsUnicode(false)
-                        .HasColumnType("varchar(10)")
-                        .HasColumnName("maLoaiSPCon");
-
-                    b.Property<string>("MaLoaiSpcha")
-                        .HasMaxLength(10)
-                        .IsUnicode(false)
-                        .HasColumnType("varchar(10)")
-                        .HasColumnName("maLoaiSPCha");
-
-                    b.Property<string>("TenLoaiSp")
-                        .HasMaxLength(100)
-                        .HasColumnType("nvarchar(100)")
-                        .HasColumnName("tenLoaiSP");
-
-                    b.Property<int?>("TrangThai")
-                        .HasColumnType("int")
-                        .HasColumnName("trangThai");
-
-                    b.HasKey("MaLoaiSpcon")
-                        .HasName("PK__LOAISANP__D9D8EE1F438F042A");
-
-                    b.HasIndex("MaLoaiSpcha");
-
-                    b.ToTable("LOAISANPHAMCON", (string)null);
-                });
-
             modelBuilder.Entity("MinhTamHair.Models.Nhacungcap", b =>
                 {
                     b.Property<string>("MaNcc")
@@ -1427,17 +1444,13 @@ namespace MinhTamHair.Migrations
                     b.ToTable("ROLE", (string)null);
                 });
 
-            modelBuilder.Entity("MinhTamHair.Models.Sanpham", b =>
+            modelBuilder.Entity("MinhTamHair.Models.SanPham", b =>
                 {
                     b.Property<string>("MaSp")
                         .HasMaxLength(10)
                         .IsUnicode(false)
                         .HasColumnType("varchar(10)")
                         .HasColumnName("maSP");
-
-                    b.Property<decimal?>("GiaBan")
-                        .HasColumnType("decimal(18, 2)")
-                        .HasColumnName("giaBan");
 
                     b.Property<string>("HinhAnhDaiDien")
                         .HasMaxLength(255)
@@ -1446,14 +1459,13 @@ namespace MinhTamHair.Migrations
                         .HasColumnName("hinhAnhDaiDien");
 
                     b.Property<string>("HuongDanSuDung")
-                        .HasColumnType("nvarchar(max)")
-                        .HasColumnName("huongDanSuDung");
+                        .HasColumnType("nvarchar(max)");
 
-                    b.Property<string>("MaLoaiSpcon")
+                    b.Property<string>("MaDanhMuc")
                         .HasMaxLength(10)
                         .IsUnicode(false)
                         .HasColumnType("varchar(10)")
-                        .HasColumnName("maLoaiSPCon");
+                        .HasColumnName("maDanhMuc");
 
                     b.Property<string>("MaTh")
                         .HasMaxLength(10)
@@ -1462,16 +1474,7 @@ namespace MinhTamHair.Migrations
                         .HasColumnName("maTH");
 
                     b.Property<string>("MoTa")
-                        .HasColumnType("nvarchar(max)")
-                        .HasColumnName("moTa");
-
-                    b.Property<decimal?>("PhanTramHoaHong")
-                        .HasColumnType("decimal(18, 2)")
-                        .HasColumnName("phanTramHoaHong");
-
-                    b.Property<int?>("SoLuongTon")
-                        .HasColumnType("int")
-                        .HasColumnName("soLuongTon");
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<string>("TenSp")
                         .HasMaxLength(150)
@@ -1479,17 +1482,14 @@ namespace MinhTamHair.Migrations
                         .HasColumnName("tenSP");
 
                     b.Property<string>("ThanhPhan")
-                        .HasColumnType("nvarchar(max)")
-                        .HasColumnName("thanhPhan");
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<int?>("TrangThai")
-                        .HasColumnType("int")
-                        .HasColumnName("trangThai");
+                        .HasColumnType("int");
 
-                    b.HasKey("MaSp")
-                        .HasName("PK__SANPHAM__7A227A7AE4506676");
+                    b.HasKey("MaSp");
 
-                    b.HasIndex("MaLoaiSpcon");
+                    b.HasIndex("MaDanhMuc");
 
                     b.HasIndex("MaTh");
 
@@ -1879,6 +1879,15 @@ namespace MinhTamHair.Migrations
                         .HasConstraintName("FK__KHACHHANG___maKH__6A30C649");
                 });
 
+            modelBuilder.Entity("MinhTamHair.Models.BienTheSanpham", b =>
+                {
+                    b.HasOne("MinhTamHair.Models.SanPham", "MaSpNavigation")
+                        .WithMany("BienTheSanphams")
+                        .HasForeignKey("MaSanPham");
+
+                    b.Navigation("MaSpNavigation");
+                });
+
             modelBuilder.Entity("MinhTamHair.Models.ChitietFlashsale", b =>
                 {
                     b.HasOne("MinhTamHair.Models.Combo", "MaCbNavigation")
@@ -1907,25 +1916,31 @@ namespace MinhTamHair.Migrations
 
             modelBuilder.Entity("MinhTamHair.Models.ChitietGiohang", b =>
                 {
+                    b.HasOne("MinhTamHair.Models.BienTheSanpham", "MaBienTheNavigation")
+                        .WithMany("ChitietGiohangs")
+                        .HasForeignKey("MaBienThe")
+                        .IsRequired()
+                        .HasConstraintName("FK__CHITIET_GI__maBT__4C6B5938");
+
                     b.HasOne("MinhTamHair.Models.Giohang", "MaGhNavigation")
                         .WithMany("ChitietGiohangs")
                         .HasForeignKey("MaGh")
                         .IsRequired()
                         .HasConstraintName("FK__CHITIET_GI__maGH__4B7734FF");
 
-                    b.HasOne("MinhTamHair.Models.Sanpham", "MaSpNavigation")
-                        .WithMany("ChitietGiohangs")
-                        .HasForeignKey("MaSp")
-                        .IsRequired()
-                        .HasConstraintName("FK__CHITIET_GI__maSP__4C6B5938");
+                    b.Navigation("MaBienTheNavigation");
 
                     b.Navigation("MaGhNavigation");
-
-                    b.Navigation("MaSpNavigation");
                 });
 
             modelBuilder.Entity("MinhTamHair.Models.ChitietHoadonSp", b =>
                 {
+                    b.HasOne("MinhTamHair.Models.BienTheSanpham", "MaBienTheNavigation")
+                        .WithMany("ChitietHoadonSps")
+                        .HasForeignKey("MaBienThe")
+                        .IsRequired()
+                        .HasConstraintName("FK__CHITIET_HO__maBT__44CA3770");
+
                     b.HasOne("MinhTamHair.Models.HoaDon", "MaHdNavigation")
                         .WithMany("ChitietHoadonSps")
                         .HasForeignKey("MaHd")
@@ -1937,17 +1952,11 @@ namespace MinhTamHair.Migrations
                         .HasForeignKey("MaNv")
                         .HasConstraintName("FK__CHITIET_HO__maNV__45BE5BA9");
 
-                    b.HasOne("MinhTamHair.Models.Sanpham", "MaSpNavigation")
-                        .WithMany("ChitietHoadonSps")
-                        .HasForeignKey("MaSp")
-                        .IsRequired()
-                        .HasConstraintName("FK__CHITIET_HO__maSP__44CA3770");
+                    b.Navigation("MaBienTheNavigation");
 
                     b.Navigation("MaHdNavigation");
 
                     b.Navigation("MaNvNavigation");
-
-                    b.Navigation("MaSpNavigation");
                 });
 
             modelBuilder.Entity("MinhTamHair.Models.ChitietLichdat", b =>
@@ -1983,21 +1992,21 @@ namespace MinhTamHair.Migrations
 
             modelBuilder.Entity("MinhTamHair.Models.ChitietPhieunhap", b =>
                 {
+                    b.HasOne("MinhTamHair.Models.BienTheSanpham", "MaBienTheNavigation")
+                        .WithMany("ChitietPhieunhaps")
+                        .HasForeignKey("MaBienThe")
+                        .IsRequired()
+                        .HasConstraintName("FK__CHITIET_PH__maBT__503BEA1C");
+
                     b.HasOne("MinhTamHair.Models.Phieunhap", "MaPnNavigation")
                         .WithMany("ChitietPhieunhaps")
                         .HasForeignKey("MaPn")
                         .IsRequired()
                         .HasConstraintName("FK__CHITIET_PH__maPN__4F47C5E3");
 
-                    b.HasOne("MinhTamHair.Models.Sanpham", "MaSpNavigation")
-                        .WithMany("ChitietPhieunhaps")
-                        .HasForeignKey("MaSp")
-                        .IsRequired()
-                        .HasConstraintName("FK__CHITIET_PH__maSP__503BEA1C");
+                    b.Navigation("MaBienTheNavigation");
 
                     b.Navigation("MaPnNavigation");
-
-                    b.Navigation("MaSpNavigation");
                 });
 
             modelBuilder.Entity("MinhTamHair.Models.ChitietTieude", b =>
@@ -2070,9 +2079,9 @@ namespace MinhTamHair.Migrations
                         .HasForeignKey("MaKh")
                         .HasConstraintName("FK__DANHGIA_SA__maKH__498EEC8D");
 
-                    b.HasOne("MinhTamHair.Models.Sanpham", "MaSpNavigation")
+                    b.HasOne("MinhTamHair.Models.SanPham", "MaSpNavigation")
                         .WithMany("DanhgiaSanphams")
-                        .HasForeignKey("MaSp")
+                        .HasForeignKey("MaSanPham")
                         .HasConstraintName("FK__DANHGIA_SA__maSP__47A6A41B");
 
                     b.Navigation("MaHdNavigation");
@@ -2114,9 +2123,9 @@ namespace MinhTamHair.Migrations
 
             modelBuilder.Entity("MinhTamHair.Models.Hinhanhsp", b =>
                 {
-                    b.HasOne("MinhTamHair.Models.Sanpham", "MaSpNavigation")
+                    b.HasOne("MinhTamHair.Models.SanPham", "MaSpNavigation")
                         .WithMany("Hinhanhsps")
-                        .HasForeignKey("MaSp")
+                        .HasForeignKey("MaSanPham")
                         .HasConstraintName("FK__HINHANHSP__maSP__42E1EEFE");
 
                     b.Navigation("MaSpNavigation");
@@ -2217,16 +2226,6 @@ namespace MinhTamHair.Migrations
                     b.Navigation("MaMauNavigation");
                 });
 
-            modelBuilder.Entity("MinhTamHair.Models.Loaisanphamcon", b =>
-                {
-                    b.HasOne("MinhTamHair.Models.Loaisanphamcha", "MaLoaiSpchaNavigation")
-                        .WithMany("Loaisanphamcons")
-                        .HasForeignKey("MaLoaiSpcha")
-                        .HasConstraintName("FK__LOAISANPH__maLoa__40058253");
-
-                    b.Navigation("MaLoaiSpchaNavigation");
-                });
-
             modelBuilder.Entity("MinhTamHair.Models.Nhanvien", b =>
                 {
                     b.HasOne("MinhTamHair.Models.Loainhanvien", "MaLoaiNvNavigation")
@@ -2261,21 +2260,19 @@ namespace MinhTamHair.Migrations
                     b.Navigation("MaNvNavigation");
                 });
 
-            modelBuilder.Entity("MinhTamHair.Models.Sanpham", b =>
+            modelBuilder.Entity("MinhTamHair.Models.SanPham", b =>
                 {
-                    b.HasOne("MinhTamHair.Models.Loaisanphamcon", "MaLoaiSpconNavigation")
+                    b.HasOne("MinhTamHair.Models.DanhMucSP", "MaDanhMucTheNavigation")
+                        .WithMany("SanPhams")
+                        .HasForeignKey("MaDanhMuc");
+
+                    b.HasOne("MinhTamHair.Models.Thuonghieu", "Thuonghieu")
                         .WithMany("Sanphams")
-                        .HasForeignKey("MaLoaiSpcon")
-                        .HasConstraintName("FK__SANPHAM__maLoaiS__40F9A68C");
+                        .HasForeignKey("MaTh");
 
-                    b.HasOne("MinhTamHair.Models.Thuonghieu", "MaThNavigation")
-                        .WithMany("Sanphams")
-                        .HasForeignKey("MaTh")
-                        .HasConstraintName("FK__SANPHAM__maTH__41EDCAC5");
+                    b.Navigation("MaDanhMucTheNavigation");
 
-                    b.Navigation("MaLoaiSpconNavigation");
-
-                    b.Navigation("MaThNavigation");
+                    b.Navigation("Thuonghieu");
                 });
 
             modelBuilder.Entity("MinhTamHair.Models.Thanhtoan", b =>
@@ -2364,7 +2361,7 @@ namespace MinhTamHair.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("MinhTamHair.Models.Sanpham", "SanPham")
+                    b.HasOne("MinhTamHair.Models.SanPham", "SanPham")
                         .WithMany()
                         .HasForeignKey("MaSP")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -2378,6 +2375,15 @@ namespace MinhTamHair.Migrations
             modelBuilder.Entity("MinhTamHair.Models.Bangmau", b =>
                 {
                     b.Navigation("Lichsuthutocs");
+                });
+
+            modelBuilder.Entity("MinhTamHair.Models.BienTheSanpham", b =>
+                {
+                    b.Navigation("ChitietGiohangs");
+
+                    b.Navigation("ChitietHoadonSps");
+
+                    b.Navigation("ChitietPhieunhaps");
                 });
 
             modelBuilder.Entity("MinhTamHair.Models.Combo", b =>
@@ -2394,6 +2400,11 @@ namespace MinhTamHair.Migrations
             modelBuilder.Entity("MinhTamHair.Models.DanhMuc", b =>
                 {
                     b.Navigation("Dichvus");
+                });
+
+            modelBuilder.Entity("MinhTamHair.Models.DanhMucSP", b =>
+                {
+                    b.Navigation("SanPhams");
                 });
 
             modelBuilder.Entity("MinhTamHair.Models.Dichvu", b =>
@@ -2477,16 +2488,6 @@ namespace MinhTamHair.Migrations
                     b.Navigation("Nhanviens");
                 });
 
-            modelBuilder.Entity("MinhTamHair.Models.Loaisanphamcha", b =>
-                {
-                    b.Navigation("Loaisanphamcons");
-                });
-
-            modelBuilder.Entity("MinhTamHair.Models.Loaisanphamcon", b =>
-                {
-                    b.Navigation("Sanphams");
-                });
-
             modelBuilder.Entity("MinhTamHair.Models.Nhacungcap", b =>
                 {
                     b.Navigation("Phieunhaps");
@@ -2517,13 +2518,9 @@ namespace MinhTamHair.Migrations
                     b.Navigation("Nhanviens");
                 });
 
-            modelBuilder.Entity("MinhTamHair.Models.Sanpham", b =>
+            modelBuilder.Entity("MinhTamHair.Models.SanPham", b =>
                 {
-                    b.Navigation("ChitietGiohangs");
-
-                    b.Navigation("ChitietHoadonSps");
-
-                    b.Navigation("ChitietPhieunhaps");
+                    b.Navigation("BienTheSanphams");
 
                     b.Navigation("DanhgiaSanphams");
 
