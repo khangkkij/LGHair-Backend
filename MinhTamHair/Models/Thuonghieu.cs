@@ -15,6 +15,6 @@ public partial class Thuonghieu
 
     public int? TrangThai { get; set; }
 
-    public virtual ICollection<Sanpham> Sanphams { get; set; } = new List<Sanpham>();
+    public virtual ICollection<SanPham> Sanphams { get; set; } = new List<SanPham>();
 }
 

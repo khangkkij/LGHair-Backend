@@ -6,13 +6,11 @@ namespace MinhTamHair.Models;
 public partial class ChitietGiohang
 {
     public int MaGh { get; set; }
-
-    public string MaSp { get; set; } = null!;
+    public string MaBienThe { get; set; } = null!;
 
     public int? SoLuong { get; set; }
 
+    public virtual BienTheSanpham MaBienTheNavigation { get; set; } = null!;
+
     public virtual Giohang MaGhNavigation { get; set; } = null!;
-
-    public virtual Sanpham MaSpNavigation { get; set; } = null!;
 }
-
