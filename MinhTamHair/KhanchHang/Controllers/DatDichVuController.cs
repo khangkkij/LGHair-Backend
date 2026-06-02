@@ -290,7 +290,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             return BadRequest(result?.message ?? "Lỗi MoMo");
         }
         [HttpPost("save-booking-final")]
-        public async Task<IActionResult> SaveBooking([FromBody] BookingRequest model, [FromQuery] string paymentMode, [FromQuery] string maStylist)
+        public async Task<IActionResult> SaveBooking([FromBody] BookingRequest model, [FromQuery] string paymentMode, [FromQuery] string? maStylist)
         {
             // Tạo chiến lược thực thi để chống lỗi mất kết nối DB
             var strategy = _context.Database.CreateExecutionStrategy();
