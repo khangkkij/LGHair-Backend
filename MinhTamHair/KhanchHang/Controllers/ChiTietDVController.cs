@@ -208,7 +208,8 @@ namespace MinhTamHair.KhanchHang.Controllers
                         ngayKetThuc = fs.NgayKetThuc;
                     }
 
-                    return new ServiceItemDto
+                    // THÊM ĐƯỜNG DẪN CỤ THỂ VÀO TRƯỚC CHỮ ServiceItemDto ĐỂ ÉP C# DÙNG ĐÚNG FILE
+                    return new MinhTamHair.KhanchHang.Models.ServiceItemDto
                     {
                         Id = s.MaDv,
                         TenDv = s.TenDv,
