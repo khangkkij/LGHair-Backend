@@ -92,8 +92,9 @@ namespace MinhTamHair.KhanchHang.Controllers
                     maRank = userResponse.MaRank,
                     tenRank = userResponse.MaRankNavigation?.TenRank, // Trả về tên hạng thực tế
                     email = userResponse.Email,
-                    sdt = userResponse.Sdt
-                }
+                    sdt = userResponse.Sdt,
+                    token = accessToken // Có thể trả token luôn nếu Frontend muốn lưu vào localStorage thay vì Cookie
+				}
             });
         }
         // --- HÀM HỖ TRỢ TẠO JWT TOKEN ---
@@ -149,10 +150,28 @@ namespace MinhTamHair.KhanchHang.Controllers
             }
 
             // 2. Kiểm tra Số điện thoại hoặc Email đã tồn tại chưa
-            var isExist = await _context.Khachhangs.AnyAsync(kh => kh.Sdt == request.Sdt || (request.Email != "" && kh.Email == request.Email));
+            var isExist = await _context.Khachhangs.AnyAsync(kh => kh.Sdt == request.Sdt || (!string.IsNullOrEmpty(request.Email) && kh.Email == request.Email));
             if (isExist)
             {
                 return BadRequest(new { success = false, message = "Số điện thoại hoặc Email này đã được đăng ký." });
+            }
+
+            // 2.5 Kiểm tra mã OTP nếu có nhập Email
+            if (!string.IsNullOrEmpty(request.Email))
+            {
+                if (string.IsNullOrEmpty(request.OTP))
+                {
+                    return BadRequest(new { success = false, message = "Vui lòng nhập mã xác nhận OTP từ Email." });
+                }
+
+                if (_cache.TryGetValue($"RegOTP_{request.Email}", out string savedOtp) && savedOtp == request.OTP)
+                {
+                    _cache.Remove($"RegOTP_{request.Email}"); // Dùng xong thì xóa OTP
+                }
+                else
+                {
+                    return BadRequest(new { success = false, message = "Mã xác nhận không đúng hoặc đã hết hạn." });
+                }
             }
 
             // 3. Tạo mã Khách Hàng mới (Ví dụ: KH + chuỗi ngẫu nhiên 6 số)
@@ -239,6 +258,32 @@ namespace MinhTamHair.KhanchHang.Controllers
             Response.Cookies.Delete("refreshToken", cookieOptions);
 
             return Ok(new { success = true, message = "Đã đăng xuất an toàn." });
+        }
+
+        [HttpPost("logout-all")]
+        [Authorize]
+        public async Task<IActionResult> LogoutAll()
+        {
+            var maKh = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            if (string.IsNullOrEmpty(maKh)) return Unauthorized();
+
+            // Tìm và xóa TẤT CẢ Refresh Token của User này
+            var allRefreshTokens = await _context.Refreshtokens
+                .Where(rt => rt.UserId == maKh)
+                .ToListAsync();
+
+            if (allRefreshTokens.Any())
+            {
+                _context.Refreshtokens.RemoveRange(allRefreshTokens);
+                await _context.SaveChangesAsync();
+            }
+
+            // Xóa Cookie ở máy hiện tại
+            var cookieOptions = new CookieOptions { Secure = true, SameSite = SameSiteMode.None };
+            Response.Cookies.Delete("accessToken", cookieOptions);
+            Response.Cookies.Delete("refreshToken", cookieOptions);
+
+            return Ok(new { success = true, message = "Đã đăng xuất khỏi tất cả thiết bị." });
         }
         [HttpPost("google-login")]
         public async Task<IActionResult> GoogleLogin([FromBody] GoogleLoginRequest request)
@@ -332,6 +377,119 @@ namespace MinhTamHair.KhanchHang.Controllers
                 return BadRequest(new { success = false, message = "Xác thực Google thất bại." });
             }
         }
+
+        [HttpPost("facebook-login")]
+        public async Task<IActionResult> FacebookLogin([FromBody] FacebookLoginRequest request)
+        {
+            try
+            {
+                // 1. Xác thực Token với Facebook Graph API
+                using var client = new HttpClient();
+                var fbResponse = await client.GetAsync($"https://graph.facebook.com/me?fields=id,name,email,picture.width(500).height(500)&access_token={request.Token}");
+
+                if (!fbResponse.IsSuccessStatusCode)
+                {
+                    return BadRequest(new { success = false, message = "Xác thực Facebook thất bại hoặc Token đã hết hạn." });
+                }
+
+                var fbContent = await fbResponse.Content.ReadAsStringAsync();
+                var fbData = System.Text.Json.JsonDocument.Parse(fbContent);
+                var root = fbData.RootElement;
+
+                string fbId = root.GetProperty("id").GetString();
+                string name = root.GetProperty("name").GetString();
+                
+                // Vì Email trong DB là nullable nhưng ta vẫn nên cung cấp 1 chuỗi để làm khóa liên kết
+                string email = root.TryGetProperty("email", out var emailProp) ? emailProp.GetString() : $"{fbId}@facebook.minhtamhair.local";
+                string pictureUrl = "";
+                
+                if (root.TryGetProperty("picture", out var picProp) && picProp.TryGetProperty("data", out var dataProp) && dataProp.TryGetProperty("url", out var urlProp))
+                {
+                    pictureUrl = urlProp.GetString();
+                }
+
+                // 2. Kiểm tra khách hàng đã tồn tại trong DB chưa (dựa vào Email)
+                var khachHang = await _context.Khachhangs
+                    .Include(kh => kh.MaRankNavigation)
+                    .FirstOrDefaultAsync(kh => kh.Email == email);
+
+				if (khachHang != null && khachHang.TrangThai == 0)
+				{
+					return BadRequest(new { success = false, message = "Tài khoản Facebook này liên kết với một tài khoản đã bị khóa." });
+				}
+
+				// 3. Nếu chưa có, tạo tài khoản mới tự động
+				if (khachHang == null)
+                {
+                    khachHang = new Khachhang
+                    {
+                        MaKh = "FB" + new Random().Next(100000, 999999).ToString(),
+                        HoTen = name,
+                        Email = email,
+                        HinhAnh = pictureUrl,
+                        NgayTao = DateTime.Now,
+                        TrangThai = 1,
+                        MaRank = await GetRankByPointsAsync(0),
+                        DiemTichLuy = 0,
+                        MatKhau = Guid.NewGuid().ToString() // Mật khẩu ngẫu nhiên để bảo mật
+                    };
+                    _context.Khachhangs.Add(khachHang);
+                    await _context.SaveChangesAsync();
+                }
+                else
+                {
+                    // Cập nhật lại hình đại diện mới nhất của Facebook nếu cần
+                    if (!string.IsNullOrEmpty(pictureUrl))
+                    {
+                        khachHang.HinhAnh = pictureUrl;
+                    }
+                    khachHang.MaRank = await GetRankByPointsAsync(khachHang.DiemTichLuy);
+                    await _context.SaveChangesAsync();
+                }
+
+                // 4. Tạo bộ Token của hệ thống
+                var accessToken = GenerateJwtToken(khachHang);
+                var refreshToken = GenerateRefreshToken();
+
+                SetTokenCookie("accessToken", accessToken, 1); 
+                SetTokenCookie("refreshToken", refreshToken, 7); 
+
+                var refreshTokenEntity = new Refreshtoken
+                {
+                    UserId = khachHang.MaKh,
+                    Token = refreshToken,
+                    IssuedAt = DateTime.Now,
+                    ExpiredAt = DateTime.Now.AddDays(7)
+                };
+
+                _context.Refreshtokens.Add(refreshTokenEntity);
+                await _context.SaveChangesAsync();
+
+                var userResponse = await _context.Khachhangs
+                    .Include(kh => kh.MaRankNavigation)
+                    .FirstOrDefaultAsync(kh => kh.MaKh == khachHang.MaKh);
+
+                return Ok(new
+                {
+                    success = true,
+                    user = new
+                    {
+                        maKH = userResponse.MaKh,
+                        hoTen = userResponse.HoTen,
+                        hinhAnh = userResponse.HinhAnh,
+                        maRank = userResponse.MaRank,
+                        tenRank = userResponse.MaRankNavigation?.TenRank,
+                        email = userResponse.Email,
+                        sdt = userResponse.Sdt
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Lỗi xác thực Facebook: " + ex.Message);
+                return BadRequest(new { success = false, message = "Lỗi xử lý Facebook Login." });
+            }
+        }
         // --- PHƯƠNG ÁN 1: XÁC MINH QUA GOOGLE ---
         [HttpPost("forgot-password-google")]
         public async Task<IActionResult> ForgotPasswordGoogle([FromBody] GoogleLoginRequest request)
@@ -356,6 +514,41 @@ namespace MinhTamHair.KhanchHang.Controllers
             {
                 Console.WriteLine(ex);
                 return BadRequest(new { success = false, message = "Xác thực Google thất bại." });
+            }
+        }
+
+        // --- PHƯƠNG ÁN 1.5: XÁC MINH QUA FACEBOOK ---
+        [HttpPost("forgot-password-facebook")]
+        public async Task<IActionResult> ForgotPasswordFacebook([FromBody] FacebookLoginRequest request)
+        {
+            try
+            {
+                using var client = new HttpClient();
+                var fbResponse = await client.GetAsync($"https://graph.facebook.com/me?fields=id,name,email&access_token={request.Token}");
+
+                if (!fbResponse.IsSuccessStatusCode)
+                {
+                    return BadRequest(new { success = false, message = "Xác thực Facebook thất bại hoặc Token đã hết hạn." });
+                }
+
+                var fbContent = await fbResponse.Content.ReadAsStringAsync();
+                var fbData = System.Text.Json.JsonDocument.Parse(fbContent);
+                var root = fbData.RootElement;
+
+                string fbId = root.GetProperty("id").GetString();
+                string email = root.TryGetProperty("email", out var emailProp) ? emailProp.GetString() : $"{fbId}@facebook.minhtamhair.local";
+
+                var user = await _context.Khachhangs.FirstOrDefaultAsync(kh => kh.Email == email);
+                if (user == null) return BadRequest(new { success = false, message = "Tài khoản Facebook này chưa đăng ký thành viên hoặc không chứa Email hợp lệ." });
+
+                _cache.Set($"Verified_{email}", true, TimeSpan.FromMinutes(10));
+
+                return Ok(new { success = true, email = email });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Lỗi xác thực Facebook Forgot Password: " + ex.Message);
+                return BadRequest(new { success = false, message = "Lỗi xử lý Facebook." });
             }
         }
 
@@ -385,6 +578,40 @@ namespace MinhTamHair.KhanchHang.Controllers
             {
                 await _emailService.SendEmailAsync(email, subject, body);
                 return Ok(new { success = true, message = "Mã xác nhận đã được gửi vào Email." });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { success = false, message = "Không thể gửi mail: " + ex.Message });
+            }
+        }
+
+        // --- PHƯƠNG ÁN 2.5: GỬI OTP XÁC MINH ĐĂNG KÝ ---
+        [HttpPost("send-register-otp")]
+        public async Task<IActionResult> SendRegisterOTP([FromBody] string email)
+        {
+            if (string.IsNullOrEmpty(email)) return BadRequest(new { success = false, message = "Email không hợp lệ." });
+            
+            var user = await _context.Khachhangs.FirstOrDefaultAsync(kh => kh.Email == email);
+            if (user != null) return BadRequest(new { success = false, message = "Email này đã được sử dụng." });
+
+            string otp = new Random().Next(100000, 999999).ToString();
+            _cache.Set($"RegOTP_{email}", otp, TimeSpan.FromMinutes(5));
+
+            string subject = "Mã xác nhận đăng ký tài khoản - Minh Tâm Hair";
+            string body = $@"
+        <div style='font-family: Arial, sans-serif; border: 1px solid #d4af37; padding: 20px; border-radius: 10px; max-width: 500px;'>
+            <h2 style='color: #8a6d3b;'>Xác nhận đăng ký tài khoản mới</h2>
+            <p>Chào bạn,</p>
+            <p>Mã OTP của bạn là: <b style='font-size: 24px; color: #d4af37;'>{otp}</b></p>
+            <p>Mã này có hiệu lực trong <b>5 phút</b>. Vui lòng sử dụng mã này để hoàn tất đăng ký tài khoản.</p>
+            <hr style='border: 0.5px solid #eee;'>
+            <p style='font-size: 12px; color: #888;'>Đây là email tự động, vui lòng không phản hồi.</p>
+        </div>";
+
+            try
+            {
+                await _emailService.SendEmailAsync(email, subject, body);
+                return Ok(new { success = true, message = "Mã xác nhận đăng ký đã được gửi vào Email." });
             }
             catch (Exception ex)
             {
@@ -545,8 +772,23 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             return Ok(new { success = true, message = "Làm mới Token thành công." });
         }
-
-
+        [HttpGet("verify-session")]
+        [Authorize]
+        public async Task<IActionResult> VerifySession()
+        {
+            // Lấy Refresh Token từ Cookie của máy đang gọi API này
+            if (Request.Cookies.TryGetValue("refreshToken", out string refreshToken))
+            {
+                // Kiểm tra xem token này còn tồn tại trong DB không (nếu bị máy khác logout-all thì sẽ mất)
+                var exists = await _context.Refreshtokens.AnyAsync(rt => rt.Token == refreshToken);
+                if (!exists)
+                {
+                    return Unauthorized(new { message = "Phiên đăng nhập đã bị thu hồi." });
+                }
+                return Ok(new { success = true, message = "Session is valid" });
+            }
+            return Unauthorized(new { message = "Không tìm thấy token." });
+        }
     }
 }
 

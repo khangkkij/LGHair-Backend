@@ -1,4 +1,4 @@
-﻿namespace MinhTamHair.KhanchHang.Models
+namespace MinhTamHair.KhanchHang.Models
 {
 	public class KhachHangLoginRequest
 	{
@@ -13,6 +13,7 @@
 		public string Sdt { get; set; }
 		public string Email { get; set; }
 		public string MatKhau { get; set; }
+		public string? OTP { get; set; }
 	}
 	public class LogoutRequest
 	{
@@ -22,6 +23,11 @@
 	public class GoogleLoginRequest
 	{
 		public string Credential { get; set; }
+	}
+	
+	public class FacebookLoginRequest
+	{
+		public string Token { get; set; }
 	}
 	public class KhachHangResetPasswordRequest
 	{
