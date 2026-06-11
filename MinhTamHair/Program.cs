@@ -6,6 +6,7 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using MinhTamHair.Models;
 using MinhTamHair.Services;
+using MinhTamHair.Services.Chat;
 using MinhTamHair.Services.Gemini;
 using MinhTamHair.Services.LightX;
 using MinhTamHair.Services.UploadIMG;
@@ -50,15 +51,16 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowVueApp", policy =>
     {
-        // Mỗi origin (cổng Vite khác nhau) phải được liệt kê — nếu thiếu, trình duyệt chặn CORS.
         policy.WithOrigins(
-                  "http://localhost:5173",
-                  "http://localhost:5174",
-                  "https://localhost:5173",
-                  "https://localhost:5174")
+                  "http://localhost:5173",   // Customer app HTTP
+                  "http://localhost:5174",   // Admin app HTTP
+                  "https://localhost:5173",  // Customer app HTTPS (basicSsl)
+                  "https://localhost:5174",  // Admin app HTTPS (basicSsl)
+                  "https://localhost:5175",  // Dự phòng cổng khác
+                  "https://localhost:5176")
               .AllowAnyHeader()
               .AllowAnyMethod()
-              .AllowCredentials(); // Bắt buộc để gửi AuthToken qua Cookie
+              .AllowCredentials();
     });
 });
 // cấu hình redis
@@ -89,27 +91,27 @@ builder.Services.AddAuthentication(options =>
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]))
     };
 
-	options.Events = new JwtBearerEvents
-	{
-		OnMessageReceived = context =>
-		{
-			// 1. Ưu tiên tìm Cookie của Admin/Nhân viên trước
-			var token = context.Request.Cookies["adminAccessToken"];
+    options.Events = new JwtBearerEvents
+    {
+        OnMessageReceived = context =>
+        {
+            // 1. Ưu tiên tìm Cookie của Admin/Nhân viên trước
+            var token = context.Request.Cookies["adminAccessToken"];
 
-			// 2. Nếu không có, tìm tiếp Cookie của Khách hàng (bạn check lại tên cookie khách hàng của bạn là gì để thay vào chữ "accessToken" nhé)
-			if (string.IsNullOrEmpty(token))
-			{
-				token = context.Request.Cookies["accessToken"];
-			}
+            // 2. Nếu không có, tìm tiếp Cookie của Khách hàng (bạn check lại tên cookie khách hàng của bạn là gì để thay vào chữ "accessToken" nhé)
+            if (string.IsNullOrEmpty(token))
+            {
+                token = context.Request.Cookies["accessToken"];
+            }
 
-			// 3. Đưa Token cho C# đọc
-			if (!string.IsNullOrEmpty(token))
-			{
-				context.Token = token;
-			}
-			return Task.CompletedTask;
-		}
-	};
+            // 3. Đưa Token cho C# đọc
+            if (!string.IsNullOrEmpty(token))
+            {
+                context.Token = token;
+            }
+            return Task.CompletedTask;
+        }
+    };
 });
 builder.Services.AddSwaggerGen(c =>
 {
@@ -165,15 +167,21 @@ builder.Services.AddScoped<IUploadIMG, UploadIMG>();
 builder.Services.AddScoped<ILightXService, LightXService>();
 builder.Services.AddHttpClient<GeminiService>();
 //                  DI CLOUDINARY
+
+// ===== FIREBASE FIRESTORE SERVICE =====
+// Dùng REST API - không cần Service Account JSON, đăng ký Scoped
+builder.Services.AddScoped<IFirestoreService, FirestoreService>();
+// ===== END FIREBASE FIRESTORE SERVICE =====
+
 var app = builder.Build();
 
 //      Cấu hình CORS để cho phép Vue App truy cập API
 
-    app.Use((context, next) =>
-    {
-	    context.Response.Headers.Append("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
-	    return next();
-    });
+app.Use((context, next) =>
+{
+    context.Response.Headers.Append("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
+    return next();
+});
 
 
 
@@ -186,7 +194,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-app.UseDefaultFiles(); 
+app.UseDefaultFiles();
 app.UseStaticFiles();
 
 var uploadDirectory = Path.Combine(builder.Environment.ContentRootPath, "UserUploads");
