@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.KhanchHang.Models;
 using MinhTamHair.KhanchHang.Models;
@@ -580,9 +580,8 @@ namespace MinhTamHair.KhanchHang.Controllers
                 TimeOnly end = start.AddMinutes(request.TongThoiGian);
 
                 var caCanThiet = new List<string> { "Cả ngày" };
-                if (start >= new TimeOnly(8, 0) && end <= new TimeOnly(12, 0)) caCanThiet.Add("Sáng");
-                else if (start >= new TimeOnly(13, 0) && end <= new TimeOnly(17, 0)) caCanThiet.Add("Chiều");
-                else if (start >= new TimeOnly(17, 0) && end <= new TimeOnly(21, 0)) caCanThiet.Add("Tối");
+                if (start >= new TimeOnly(7, 0) && end <= new TimeOnly(17, 0)) caCanThiet.Add("Ca ngày");
+                if (start >= new TimeOnly(13, 0) && end <= new TimeOnly(20, 0)) caCanThiet.Add("Ca tối");
 
                 // 2. LẤY THỢ ĐI LÀM (Bỏ Include để EF Core không bị ngáo)
                 var thoDiLam = await _context.Lichlamviecs

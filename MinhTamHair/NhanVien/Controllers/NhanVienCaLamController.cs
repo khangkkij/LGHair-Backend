@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
@@ -64,7 +64,8 @@ namespace MinhTamHair.NhanVien.Controllers
 					MaLich = l.MaLich,
 					NgayLamViec = l.NgayLamViec.Value.ToString("yyyy-MM-dd"),
 					CaLam = l.CaLam,
-					TrangThai = l.TrangThai
+					TrangThai = l.TrangThai,
+					GhiChu = l.GhiChu
 				})
 				.ToListAsync();
 
@@ -92,15 +93,11 @@ namespace MinhTamHair.NhanVien.Controllers
 			// Xác định giờ bắt đầu dựa vào tên ca (Hiếu nhớ chỉnh lại giờ cho đúng với Salon nhé)
 			switch (lich.CaLam)
 			{
-				case "Sáng":
-				case "Cả ngày":
-					shiftStartTime = new TimeSpan(8, 0, 0); // Ca sáng bắt đầu lúc 08:00
+				case "Ca ngày":
+					shiftStartTime = new TimeSpan(7, 0, 0); // Ca ngày bắt đầu lúc 07:00
 					break;
-				case "Chiều":
-					shiftStartTime = new TimeSpan(13, 0, 0); // Ca chiều bắt đầu lúc 13:00
-					break;
-				case "Tối":
-					shiftStartTime = new TimeSpan(17, 0, 0); // Ca tối bắt đầu lúc 17:00
+				case "Ca tối":
+					shiftStartTime = new TimeSpan(13, 0, 0); // Ca tối bắt đầu lúc 13:00
 					break;
 				default:
 					// Dành cho các ca linh động hoặc ghi chú khác, tạm thời không block giờ
@@ -138,6 +135,30 @@ namespace MinhTamHair.NhanVien.Controllers
 			await _context.SaveChangesAsync();
 
 			return Ok(new { success = true, message = "Đã đánh dấu rời ca sớm!" });
+		}
+
+		// ==========================================
+		// THÊM MỚI: API CẬP NHẬT TRẠNG THÁI ĐIỂM DANH (Có mặt, Vắng mặt, Rời ca, Muộn)
+		// ==========================================
+		[HttpPatch("cap-nhat-diem-danh/{maLich}")]
+		public async Task<IActionResult> CapNhatDiemDanh(int maLich, [FromQuery] string maNv, [FromBody] MinhTamHair.Admin.Models.CaLamDTO.UpdateDiemDanhRequest request)
+		{
+			if (string.IsNullOrEmpty(maNv)) return BadRequest(new { message = "Thiếu mã nhân viên" });
+
+			var lich = await _context.Lichlamviecs.FirstOrDefaultAsync(l => l.MaLich == maLich && l.MaNv == maNv);
+			if (lich == null) return NotFound(new { message = "Không tìm thấy ca làm của bạn." });
+
+			// Yêu cầu nhập lý do nếu không phải "Có mặt"
+			if (request.TrangThai != 2 && string.IsNullOrWhiteSpace(request.GhiChu))
+			{
+				return BadRequest(new { message = "Vui lòng nhập lý do." });
+			}
+
+			lich.TrangThai = request.TrangThai;
+			lich.GhiChu = request.GhiChu;
+
+			await _context.SaveChangesAsync();
+			return Ok(new { success = true, message = "Cập nhật trạng thái điểm danh thành công!" });
 		}
 		// 3. API GỬI YÊU CẦU ĐỔI CA (Trạng thái 4)
 		[HttpPatch("gui-yeu-cau/{maLich}")]

@@ -1,4 +1,4 @@
-﻿using System.Collections;
+using System.Collections;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -80,7 +80,8 @@ namespace MinhTamHair.Admin.Controllers
                     TenLoaiNv = l.MaNvNavigation.MaLoaiNvNavigation!.TenLoai,
                     NgayLamViec = l.NgayLamViec.Value.ToString("yyyy-MM-dd"),
                     CaLam = l.CaLam ?? "",
-                    TrangThai = l.TrangThai
+                    TrangThai = l.TrangThai,
+                    GhiChu = l.GhiChu
                 })
                 .ToListAsync();
 
@@ -98,17 +99,11 @@ namespace MinhTamHair.Admin.Controllers
             TimeOnly caStart, caEnd;
             switch (lich.CaLam)
             {
-                case "Sáng":
-                    caStart = new TimeOnly(8, 0); caEnd = new TimeOnly(12, 0);
+                case "Ca ngày":
+                    caStart = new TimeOnly(7, 0); caEnd = new TimeOnly(17, 0);
                     break;
-                case "Chiều":
-                    caStart = new TimeOnly(13, 0); caEnd = new TimeOnly(17, 0);
-                    break;
-                case "Tối":
-                    caStart = new TimeOnly(17, 0); caEnd = new TimeOnly(21, 0);
-                    break;
-                case "Cả ngày":
-                    caStart = new TimeOnly(8, 0); caEnd = new TimeOnly(21, 0);
+                case "Ca tối":
+                    caStart = new TimeOnly(13, 0); caEnd = new TimeOnly(20, 0);
                     break;
                 default:
                     // Nếu không xác định được ca, mặc định chặn xóa nếu ngày đó có bất kỳ lịch đặt nào
@@ -219,10 +214,8 @@ namespace MinhTamHair.Admin.Controllers
             TimeOnly start, end;
             switch (lich.CaLam)
             {
-                case "Sáng": start = new TimeOnly(8, 0); end = new TimeOnly(12, 0); break;
-                case "Chiều": start = new TimeOnly(13, 0); end = new TimeOnly(17, 0); break;
-                case "Tối": start = new TimeOnly(17, 0); end = new TimeOnly(21, 0); break;
-                case "Cả ngày": start = new TimeOnly(8, 0); end = new TimeOnly(21, 0); break;
+                case "Ca ngày": start = new TimeOnly(7, 0); end = new TimeOnly(17, 0); break;
+                case "Ca tối": start = new TimeOnly(13, 0); end = new TimeOnly(20, 0); break;
                 default: return BadRequest(new { message = "Ca làm không hợp lệ." });
             }
 
@@ -238,6 +231,27 @@ namespace MinhTamHair.Admin.Controllers
             await _context.SaveChangesAsync();
 
             return Ok(new { success = true, message = "Điểm danh thành công." });
+        }
+
+        // API Cập nhật trạng thái điểm danh (Có mặt, Vắng mặt, Rời ca, Muộn)
+        [HttpPatch("cap-nhat-diem-danh/{maLich}")]
+        public async Task<IActionResult> CapNhatDiemDanh(int maLich, [FromBody] UpdateDiemDanhRequest request)
+        {
+            var lich = await _context.Lichlamviecs.FindAsync(maLich);
+            if (lich == null) return NotFound(new { message = "Không tìm thấy ca làm." });
+
+            // Trạng thái 2: Có mặt, 3: Rời ca, 5: Vắng mặt, 6: Muộn
+            // Khi chọn 3 trong 4 ngoại trừ Có mặt (2) thì phải nhập lý do
+            if (request.TrangThai != 2 && string.IsNullOrWhiteSpace(request.GhiChu))
+            {
+                return BadRequest(new { message = "Vui lòng nhập lý do (Ghi chú)." });
+            }
+
+            lich.TrangThai = request.TrangThai;
+            lich.GhiChu = request.GhiChu;
+
+            await _context.SaveChangesAsync();
+            return Ok(new { success = true, message = "Cập nhật trạng thái điểm danh thành công." });
         }
 
         [HttpPost("khoi-tao-ngay")]
@@ -402,7 +416,7 @@ namespace MinhTamHair.Admin.Controllers
 						// Nếu thợ này chưa có lịch trong ngày hôm đó -> Tạo mới
 						if (!caDaCo.Contains(nv.MaNv))
 						{
-							var caMacDinh = mauCaLam.GetValueOrDefault(nv.MaNv, "Cả ngày");
+							var caMacDinh = mauCaLam.GetValueOrDefault(nv.MaNv, "Ca ngày");
 							_context.Lichlamviecs.Add(new Lichlamviec
 							{
 								MaNv = nv.MaNv,

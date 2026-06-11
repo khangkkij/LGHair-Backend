@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
@@ -52,8 +52,10 @@ builder.Services.AddCors(options =>
     {
         // Mỗi origin (cổng Vite khác nhau) phải được liệt kê — nếu thiếu, trình duyệt chặn CORS.
         policy.WithOrigins(
-                  "http://localhost:5173", // Vite mặc định
-                  "http://localhost:5174") // Vite khi 5173 đã bị chiếm
+                  "http://localhost:5173",
+                  "http://localhost:5174",
+                  "https://localhost:5173",
+                  "https://localhost:5174")
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials(); // Bắt buộc để gửi AuthToken qua Cookie

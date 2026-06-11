@@ -1,4 +1,4 @@
-﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations;
 
 namespace MinhTamHair.Admin.Models
 {
@@ -31,6 +31,15 @@ namespace MinhTamHair.Admin.Models
 			public string? NgayKetThuc { get; set; }
 			public string CaLam { get; set; } = null!;
 			public int? TrangThai { get; set; } // 1: Làm việc, 0: Nghỉ phép, 2: Đi trễ
+			public string? GhiChu { get; set; }
+		}
+
+		// DTO để nhận yêu cầu cập nhật trạng thái điểm danh (Có mặt, Vắng mặt, Rời ca, Muộn)
+		public class UpdateDiemDanhRequest
+		{
+			[Required]
+			public int TrangThai { get; set; } // 2: Có mặt, 3: Rời ca, 5: Vắng mặt, 6: Muộn
+			public string? GhiChu { get; set; } // Lý do
 		}
 	}
 }
