@@ -230,7 +230,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 var vnp_TmnCode = _configuration["Vnpay:TmnCode"];
                 var vnp_HashSecret = _configuration["Vnpay:HashSecret"];
                 var vnp_Url = _configuration["Vnpay:BaseUrl"];
-                var vnp_ReturnUrl = _configuration["Vnpay:ReturnUrl"];
+                var vnp_ReturnUrl = _configuration["Vnpay:ReturnUrlDichVu"];
 
                 vnpay.AddRequestData("vnp_Version", "2.1.0");
                 vnpay.AddRequestData("vnp_Command", "pay");
@@ -254,7 +254,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             var accessKey = _configuration["Momo:AccessKey"];
             var secretKey = _configuration["Momo:SecretKey"];
             var endpoint = _configuration["Momo:ApiEndpoint"];
-            var redirectUrl = _configuration["Momo:ReturnUrl"];
+            var redirectUrl = _configuration["Momo:ReturnUrlDichVu"];
             var ipnUrl = _configuration["Momo:NotifyUrl"];
 
             string orderId = DateTime.Now.ToString("yyyyMMddHHmmss");
@@ -580,8 +580,9 @@ namespace MinhTamHair.KhanchHang.Controllers
                 TimeOnly end = start.AddMinutes(request.TongThoiGian);
 
                 var caCanThiet = new List<string> { "Cả ngày" };
-                if (start >= new TimeOnly(7, 0) && end <= new TimeOnly(17, 0)) caCanThiet.Add("Ca ngày");
-                if (start >= new TimeOnly(13, 0) && end <= new TimeOnly(20, 0)) caCanThiet.Add("Ca tối");
+                if (start >= new TimeOnly(8, 0) && end <= new TimeOnly(12, 0)) caCanThiet.Add("Sáng");
+                else if (start >= new TimeOnly(13, 0) && end <= new TimeOnly(17, 0)) caCanThiet.Add("Chiều");
+                else if (start >= new TimeOnly(17, 0) && end <= new TimeOnly(21, 0)) caCanThiet.Add("Tối");
 
                 // 2. LẤY THỢ ĐI LÀM (Bỏ Include để EF Core không bị ngáo)
                 var thoDiLam = await _context.Lichlamviecs
