@@ -3,6 +3,8 @@ using Microsoft.EntityFrameworkCore;
 using MinhTamHair.KhanchHang.Models;
 using MinhTamHair.Models;
 using MinhTamHair.Services;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace MinhTamHair.KhanchHang.Controllers
 {
@@ -18,7 +20,7 @@ namespace MinhTamHair.KhanchHang.Controllers
         {
             _context = context;
             _configuration = configuration;
-            _qrEmailService= qrEmailService;
+            _qrEmailService = qrEmailService;
         }
 
         // TẢI DANH SÁCH DỊCH VỤ 
@@ -263,7 +265,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         TongTien = req.GrandTotal,
                         ThanhTien = req.GrandTotal,
                         TienDaTra = req.PaidAmount,
-                        TrangThai = 0,
+                        TrangThai = 1,
                         MaCode = maCodeChinh
                     };
                     _context.HoaDons.Add(hoaDon);
@@ -376,14 +378,63 @@ namespace MinhTamHair.KhanchHang.Controllers
                             vnpay.AddRequestData("vnp_Locale", "vn");
                             vnpay.AddRequestData("vnp_OrderInfo", "Thanh toan hoa don " + maHd);
                             vnpay.AddRequestData("vnp_OrderType", "other");
-                            vnpay.AddRequestData("vnp_ReturnUrl", "http://localhost:5173/payment-result-tong");
+                            vnpay.AddRequestData("vnp_ReturnUrl", _configuration["Vnpay:ReturnUrlTong"]);
                             vnpay.AddRequestData("vnp_TxnRef", maHd);
 
                             paymentUrl = vnpay.CreateRequestUrl(_configuration["Vnpay:BaseUrl"] ?? "", _configuration["Vnpay:HashSecret"] ?? "");
                         }
+                        else if (phuongThuc.ToLower() == "momo")
+                        {
+                            var partnerCode = _configuration["Momo:PartnerCode"];
+                            var accessKey = _configuration["Momo:AccessKey"];
+                            var secretKey = _configuration["Momo:SecretKey"];
+                            var endpoint = _configuration["Momo:ApiEndpoint"];
+                            var redirectUrl = _configuration["Momo:ReturnUrlTong"];
+                            var ipnUrl = _configuration["Momo:NotifyUrl"];
+
+                            long amount = (long)req.PaidAmount;
+                            string orderInfo = "Thanh toan hoa don tong " + maHd;
+
+                            string rawHash =
+                                $"accessKey={accessKey}&amount={amount}&extraData=&ipnUrl={ipnUrl}&orderId={maHd}&orderInfo={orderInfo}&partnerCode={partnerCode}&redirectUrl={redirectUrl}&requestId={maHd}&requestType=captureWallet";
+
+                            string signature = SignHmacSHA256(rawHash, secretKey);
+
+                            var requestData = new
+                            {
+                                partnerCode,
+                                requestId = maHd,
+                                amount,
+                                orderId = maHd,
+                                orderInfo,
+                                redirectUrl,
+                                ipnUrl,
+                                lang = "vi",
+                                extraData = "",
+                                requestType = "captureWallet",
+                                signature
+                            };
+
+                            using var client = new HttpClient();
+                            var response = await client.PostAsJsonAsync(endpoint, requestData);
+                            var result = await response.Content.ReadFromJsonAsync<MomoResponse>();
+
+                            if (result != null && result.resultCode == 0)
+                            {
+                                paymentUrl = result.payUrl;
+                            }
+                            else
+                            {
+                                return BadRequest(new
+                                {
+                                    success = false,
+                                    message = "Lỗi tạo link MoMo: " + (result?.message ?? "Không xác định")
+                                });
+                            }
+                        }
                     }
 
-                    return Ok(new { success = true, isOnlinePayment = !string.IsNullOrEmpty(paymentUrl), url = paymentUrl,maHd = maHd });
+                    return Ok(new { success = true, isOnlinePayment = !string.IsNullOrEmpty(paymentUrl), url = paymentUrl, maHd = maHd });
                 }
                 catch (Exception ex)
                 {
@@ -489,7 +540,18 @@ namespace MinhTamHair.KhanchHang.Controllers
                 return BadRequest(new { success = false, message = ex.Message });
             }
         }
+        private string SignHmacSHA256(string message, string key)
+        {
+            byte[] keyByte = Encoding.UTF8.GetBytes(key);
+            byte[] messageBytes = Encoding.UTF8.GetBytes(message);
+
+            using var hmacsha256 = new HMACSHA256(keyByte);
+            byte[] hashmessage = hmacsha256.ComputeHash(messageBytes);
+
+            return BitConverter.ToString(hashmessage).Replace("-", "").ToLower();
+        }
     }
+
 
     [System.ComponentModel.DataAnnotations.Schema.NotMapped]
     public class CheckoutSummaryRequest
@@ -502,18 +564,18 @@ namespace MinhTamHair.KhanchHang.Controllers
         public string? Note { get; set; }
         public DateTime? BookingDate { get; set; }
         public string? StylistId { get; set; }
-        
+
         public List<CheckoutServiceItemDto>? Services { get; set; }
-        
+
         public List<ProductItemDto2>? Products { get; set; }
         public string? ReceiveType { get; set; }
         public DeliveryInfoDto? DeliveryInfo { get; set; } // Cho phép null nếu không giao hàng
         public List<string>? VoucherIds { get; set; }
-        
+
         public decimal GrandTotal { get; set; }
         public decimal PaidAmount { get; set; }
         public decimal ShippingFee { get; set; }
-        
+
         public string? PaymentMode { get; set; }
         public string? ServicePaymentMethod { get; set; }
         public string? ProductPaymentMethod { get; set; }
@@ -524,7 +586,7 @@ namespace MinhTamHair.KhanchHang.Controllers
     {
         public string? Id { get; set; }
         public decimal Price { get; set; }
-        public int Duration { get; set; } 
+        public int Duration { get; set; }
     }
 
     [System.ComponentModel.DataAnnotations.Schema.NotMapped]

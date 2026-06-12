@@ -36,7 +36,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 {
                     MaSp = sp.MaSp,
                     TenSp = sp.TenSp,
-                    ThuongHieu = sp.Thuonghieu, 
+                    ThuongHieu = sp.Thuonghieu,
 
                     Bienthes = sp.BienTheSanphams
                                  .Where(bt => bt.TrangThai == 1)
@@ -47,7 +47,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                                      GiaBan = bt.GiaBan,
                                      SoLuongTon = bt.SoLuongTon,
                                      HinhAnh = !string.IsNullOrEmpty(bt.HinhAnhDaiDien) ? bt.HinhAnhDaiDien : sp.HinhAnhDaiDien
-                                 }) 
+                                 })
                 })
                 .Take(20)
                 .ToListAsync();
@@ -168,7 +168,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         TongTien = subTotal + req.ShippingFee,
                         ThanhTien = finalTotal,
                         TienDaTra = safePayment == "cod" ? 0 : finalTotal,
-                        TrangThai = 0,
+                        TrangThai = 1,
                         MaCode = maCodeChinh
                     };
                     _context.HoaDons.Add(hoaDon);
@@ -182,7 +182,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         DiaChiNhan = req.Address ?? "",
                         Email = req.Email ?? "",
                         PhiShip = req.ShippingFee,
-                        TrangThaiGiaoHang = 0
+                        TrangThaiGiaoHang = 1
                     };
                     _context.ThongtinGiaohangs.Add(thongTinGH);
 
@@ -244,7 +244,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         vnpay.AddRequestData("vnp_Locale", "vn");
                         vnpay.AddRequestData("vnp_OrderInfo", "Thanh toan don hang san pham " + maHd);
                         vnpay.AddRequestData("vnp_OrderType", "other");
-                        vnpay.AddRequestData("vnp_ReturnUrl", _configuration["Vnpay:ReturnUrl"]);
+                        vnpay.AddRequestData("vnp_ReturnUrl", _configuration["Vnpay:ReturnUrlSanPham"]);
                         vnpay.AddRequestData("vnp_TxnRef", maHd);
 
                         paymentUrl = vnpay.CreateRequestUrl(_configuration["Vnpay:BaseUrl"], _configuration["Vnpay:HashSecret"]);
@@ -255,7 +255,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         var accessKey = _configuration["Momo:AccessKey"];
                         var secretKey = _configuration["Momo:SecretKey"] ?? throw new Exception("Thiếu MoMo SecretKey");
                         var endpoint = _configuration["Momo:ApiEndpoint"];
-                        var redirectUrl = _configuration["Momo:ReturnUrl"];
+                        var redirectUrl = _configuration["Momo:ReturnUrlSanPham"];
                         var ipnUrl = _configuration["Momo:NotifyUrl"];
 
                         long amount = (long)finalTotal;
