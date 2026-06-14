@@ -153,6 +153,11 @@ builder.Services.AddAuthorization(options =>
     options.AddPolicy("CustomerPolicy", policy => policy.RequireRole("KhachHang"));
 });
 builder.Services.AddMemoryCache();
+
+// ===== ĐĂNG KÝ SALARY SERVICE =====
+// ISalaryService → SalaryService: Tính lương động real-time, không lưu vào DB
+builder.Services.AddScoped<MinhTamHair.Admin.Services.ISalaryService, MinhTamHair.Admin.Services.SalaryService>();
+// ===== END SALARY SERVICE =====
 builder.Services.AddTransient<IEmailService, EmailService>();
 builder.Services.AddScoped<IQrEmailService, QrEmailService>();
 builder.Services.AddHttpClient("ZaloPersonalBridgeProbe", client => client.Timeout = TimeSpan.FromSeconds(4));
