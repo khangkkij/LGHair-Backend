@@ -143,6 +143,7 @@ public class SanPhamController : ControllerBase
             .Include(s => s.Thuonghieu)
             .Include(s => s.Hinhanhsps)
             .Include(s => s.BienTheSanphams)
+                .ThenInclude(bt => bt.HinhanhBTs)
             .Include(s => s.DanhgiaSanphams)
             .FirstOrDefaultAsync(s => s.MaSp == id && s.TrangThai == 1);
 
@@ -217,6 +218,10 @@ public class SanPhamController : ControllerBase
                 bt.SoLuongTon,
                 bt.HinhAnhDaiDien,
                 bt.PhanTramHoaHong,
+                // Gallery ảnh của từng biến thể (bảng HINHANH_BT)
+                HinhAnhs = bt.HinhanhBTs
+                    .Select(h => new { h.MaHa, h.DuongDan })
+                    .ToList(),
             }).ToList(),
 
             // Dải giá tổng (cho header khi chưa chọn biến thể)

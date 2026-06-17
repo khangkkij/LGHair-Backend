@@ -83,10 +83,35 @@ public partial class MinhTamHairContext : DbContext
     public  DbSet<YeuThichNhanVien> YeuThichNhanViens { get; set; }
     public  DbSet<YeuThichDichVu> YeuThichDichVus { get; set; }
     public  DbSet<YeuThichSanPham> YeuThichSanPhams { get; set; }
+    public DbSet<HinhanhBT> HinhanhBTs { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+        modelBuilder.Entity<HinhanhBT>(entity =>
+        {
+            entity.HasKey(e => e.MaHa);
+
+            entity.ToTable("HINHANH_BT");
+
+            entity.Property(e => e.MaHa)
+                .HasColumnName("maHA");
+
+            entity.Property(e => e.MaBienThe)
+                .HasMaxLength(10)
+                .IsUnicode(false)
+                .HasColumnName("maBienThe");
+
+            entity.Property(e => e.DuongDan)
+                .HasMaxLength(255)
+                .IsUnicode(false)
+                .HasColumnName("duongDan");
+
+            entity.HasOne(d => d.MaBienTheNavigation)
+                .WithMany(p => p.HinhanhBTs)
+                .HasForeignKey(d => d.MaBienThe)
+                .HasConstraintName("FK_HINHANH_BT_BIENTHE");
+        });
         modelBuilder.Entity<YeuThichSanPham>(entity =>
         {
             entity.HasKey(yt => new { yt.MaKH, yt.MaSP });
