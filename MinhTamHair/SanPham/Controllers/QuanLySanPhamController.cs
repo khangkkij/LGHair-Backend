@@ -1,0 +1,756 @@
+﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using MinhTamHair.Models;
+
+namespace MinhTamHair.Controllers;
+
+[ApiController]
+[Route("api/[controller]")]
+public class QuanLySanPhamController : ControllerBase
+{
+    private readonly MinhTamHairContext _context;
+    private readonly IWebHostEnvironment _env;
+
+    public QuanLySanPhamController(MinhTamHairContext context, IWebHostEnvironment env)
+    {
+        _context = context;
+        _env = env;
+    }
+
+    // ================================================================
+    // HELPER
+    // ================================================================
+    private async Task<string?> SaveImageAsync(IFormFile? file, string subfolder)
+    {
+        if (file == null || file.Length == 0) return null;
+        var allowed = new[] { "image/jpeg", "image/png", "image/webp", "image/gif" };
+        if (!allowed.Contains(file.ContentType)) return null;
+
+        var dir = Path.Combine(_env.WebRootPath, "uploads", subfolder);
+        Directory.CreateDirectory(dir);
+
+        var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
+        var name = $"{Guid.NewGuid():N}{ext}";
+        var full = Path.Combine(dir, name);
+
+        await using var fs = System.IO.File.Create(full);
+        await file.CopyToAsync(fs);
+
+        return $"/uploads/{subfolder}/{name}";
+    }
+
+    private void DeleteImageFile(string? relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath)) return;
+        var full = Path.Combine(_env.WebRootPath, relativePath.TrimStart('/'));
+        if (System.IO.File.Exists(full)) System.IO.File.Delete(full);
+    }
+
+    // ================================================================
+    // LOOKUP DATA
+    // ================================================================
+
+    [HttpGet("danhmuc")]
+    public async Task<IActionResult> GetDanhMuc()
+    {
+        var list = await _context.DanhMucSPs
+            .OrderBy(d => d.TenDanhMuc)
+            .Select(d => new { d.MaDMSP, d.TenDanhMuc, d.TrangThai })
+            .ToListAsync();
+        return Ok(list);
+    }
+
+    [HttpGet("thuonghieu")]
+    public async Task<IActionResult> GetThuongHieu()
+    {
+        var list = await _context.Thuonghieus
+            .OrderBy(t => t.TenThuongHieu)
+            .Select(t => new { t.MaTh, t.TenThuongHieu, t.TrangThai })
+            .ToListAsync();
+        return Ok(list);
+    }
+
+    // ================================================================
+    // LIST SẢN PHẨM
+    // ================================================================
+    [HttpGet]
+    public async Task<IActionResult> GetAll(
+        [FromQuery] string? keyword,
+        [FromQuery] string? maDanhMuc,
+        [FromQuery] string? maTH,
+        [FromQuery] int? trangThai)
+    {
+        var query = _context.SanPhams
+            .Include(s => s.BienTheSanphams)
+            .AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(keyword))
+            query = query.Where(s => s.TenSp!.Contains(keyword) || s.MaSp.Contains(keyword));
+
+        if (!string.IsNullOrWhiteSpace(maDanhMuc))
+            query = query.Where(s => s.MaDanhMuc == maDanhMuc);
+
+        if (!string.IsNullOrWhiteSpace(maTH))
+            query = query.Where(s => s.MaTh == maTH);
+
+        if (trangThai.HasValue)
+            query = query.Where(s => s.TrangThai == trangThai.Value);
+
+        var list = await query
+            .OrderBy(s => s.TenSp)
+            .Select(s => new
+            {
+                s.MaSp,
+                s.TenSp,
+                s.MaDanhMuc,
+                s.MaTh,
+                s.HinhAnhDaiDien,
+                s.TrangThai,
+                SoLuongBienThe = s.BienTheSanphams.Count(bt => bt.TrangThai == 1),
+            })
+            .ToListAsync();
+
+        return Ok(list);
+    }
+
+    // ================================================================
+    // TẠO SẢN PHẨM
+    // ================================================================
+    [HttpPost]
+    public async Task<IActionResult> Create([FromForm] CreateSanPhamDto dto)
+    {
+        if (string.IsNullOrWhiteSpace(dto.MaSp))
+            return BadRequest(new { message = "Mã sản phẩm không được trống." });
+
+        if (await _context.SanPhams.AnyAsync(s => s.MaSp == dto.MaSp.Trim()))
+            return Conflict(new { message = "Mã sản phẩm đã tồn tại." });
+
+        var imgPath = await SaveImageAsync(dto.File, "sanpham");
+
+        var sp = new Models.SanPham
+        {
+            MaSp = dto.MaSp.Trim(),
+            TenSp = dto.TenSp?.Trim(),
+            MaDanhMuc = dto.MaDanhMuc,
+            MaTh = string.IsNullOrWhiteSpace(dto.MaTh) ? null : dto.MaTh,
+            HinhAnhDaiDien = imgPath,
+            TrangThai = dto.TrangThai ?? 1,
+        };
+
+        _context.SanPhams.Add(sp);
+        await _context.SaveChangesAsync();
+
+        // Lưu ảnh gallery nếu có
+        if (dto.GalleryFiles != null && dto.GalleryFiles.Count > 0)
+        {
+            foreach (var gf in dto.GalleryFiles.Take(10))
+            {
+                var gPath = await SaveImageAsync(gf, "sanpham_gallery");
+                if (gPath != null)
+                    _context.Hinhanhsps.Add(new Hinhanhsp { MaSanPham = sp.MaSp, DuongDan = gPath });
+            }
+            await _context.SaveChangesAsync();
+        }
+
+        return Ok(new { message = "Thêm sản phẩm thành công.", maSp = sp.MaSp });
+    }
+
+    // ================================================================
+    // CẬP NHẬT SẢN PHẨM
+    // ================================================================
+    [HttpPut("{id}")]
+    public async Task<IActionResult> Update(string id, [FromForm] UpdateSanPhamDto dto)
+    {
+        var sp = await _context.SanPhams.FindAsync(id);
+        if (sp == null) return NotFound(new { message = "Không tìm thấy sản phẩm." });
+
+        sp.TenSp = dto.TenSp?.Trim() ?? sp.TenSp;
+        sp.MaDanhMuc = dto.MaDanhMuc ?? sp.MaDanhMuc;
+        sp.MaTh = string.IsNullOrWhiteSpace(dto.MaTh) ? null : dto.MaTh;
+        sp.TrangThai = dto.TrangThai ?? sp.TrangThai;
+
+        if (dto.File != null && dto.File.Length > 0)
+        {
+            DeleteImageFile(sp.HinhAnhDaiDien);
+            sp.HinhAnhDaiDien = await SaveImageAsync(dto.File, "sanpham");
+        }
+
+        // Thêm ảnh gallery mới
+        if (dto.GalleryFiles != null && dto.GalleryFiles.Count > 0)
+        {
+            foreach (var gf in dto.GalleryFiles.Take(10))
+            {
+                var gPath = await SaveImageAsync(gf, "sanpham_gallery");
+                if (gPath != null)
+                    _context.Hinhanhsps.Add(new Hinhanhsp { MaSanPham = id, DuongDan = gPath });
+            }
+        }
+
+        await _context.SaveChangesAsync();
+        return Ok(new { message = "Cập nhật thành công." });
+    }
+
+    // ================================================================
+    // XÓA SẢN PHẨM
+    // ================================================================
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> Delete(string id)
+    {
+        var sp = await _context.SanPhams.Include(s => s.BienTheSanphams).ThenInclude(bt => bt.HinhanhBTs).Include(s => s.Hinhanhsps)
+            .FirstOrDefaultAsync(s => s.MaSp == id);
+
+        if (sp == null)
+            return NotFound(new { message = "Không tìm thấy sản phẩm." });
+
+        var maBienThes = sp.BienTheSanphams
+            .Select(bt => bt.MaBienThe)
+            .ToList();
+
+        bool daPhatSinhDuLieu =
+            await _context.ChitietHoadonSps.AnyAsync(x => maBienThes.Contains(x.MaBienThe))
+            || await _context.ChitietGiohangs.AnyAsync(x => maBienThes.Contains(x.MaBienThe))
+            || await _context.ChitietPhieunhaps.AnyAsync(x => maBienThes.Contains(x.MaBienThe));
+
+        if (daPhatSinhDuLieu)
+        {
+            return BadRequest(new
+            {
+                message = "Sản phẩm đã phát sinh dữ liệu, không thể xóa."
+            });
+        }
+        if (sp == null) return NotFound(new { message = "Không tìm thấy sản phẩm." });
+
+        foreach (var bt in sp.BienTheSanphams)
+        {
+            DeleteImageFile(bt.HinhAnhDaiDien);
+            foreach (var hbt in bt.HinhanhBTs)
+                DeleteImageFile(hbt.DuongDan);
+        }
+
+        foreach (var h in sp.Hinhanhsps)
+            DeleteImageFile(h.DuongDan);
+
+        DeleteImageFile(sp.HinhAnhDaiDien);
+
+        _context.SanPhams.Remove(sp);
+        await _context.SaveChangesAsync();
+        return Ok(new { message = "Đã xóa sản phẩm." });
+    }
+
+    // ================================================================
+    // TOGGLE TRẠNG THÁI
+    // ================================================================
+    [HttpPatch("{id}/trangthai")]
+    public async Task<IActionResult> ToggleStatus(string id, [FromBody] ToggleStatusDto dto)
+    {
+        var sp = await _context.SanPhams.FindAsync(id);
+        if (sp == null) return NotFound();
+        sp.TrangThai = dto.TrangThai;
+        await _context.SaveChangesAsync();
+        return Ok(new { message = "Đã cập nhật trạng thái.", trangThai = sp.TrangThai });
+    }
+
+    // ================================================================
+    // GALLERY ẢNH SẢN PHẨM
+    // ================================================================
+
+    // GET api/QuanLySanPham/{maSP}/gallery
+    [HttpGet("{maSP}/gallery")]
+    public async Task<IActionResult> GetGallerySP(string maSP)
+    {
+        var list = await _context.Hinhanhsps
+            .Where(h => h.MaSanPham == maSP)
+            .Select(h => new { h.MaHa, h.DuongDan })
+            .ToListAsync();
+        return Ok(list);
+    }
+
+    // POST api/QuanLySanPham/{maSP}/gallery  (multipart/form-data, field: files)
+    [HttpPost("{maSP}/gallery")]
+    public async Task<IActionResult> AddGallerySP(string maSP, [FromForm] GalleryUploadDto dto)
+    {
+        var sp = await _context.SanPhams.FindAsync(maSP);
+        if (sp == null) return NotFound(new { message = "Không tìm thấy sản phẩm." });
+
+        if (dto.Files == null || dto.Files.Count == 0)
+            return BadRequest(new { message = "Không có file nào được tải lên." });
+
+        var added = new List<object>();
+        foreach (var f in dto.Files.Take(10))
+        {
+            var path = await SaveImageAsync(f, "sanpham_gallery");
+            if (path == null) continue;
+            var h = new Hinhanhsp { MaSanPham = maSP, DuongDan = path };
+            _context.Hinhanhsps.Add(h);
+            await _context.SaveChangesAsync();
+            added.Add(new { h.MaHa, h.DuongDan });
+        }
+
+        return Ok(new { message = $"Đã thêm {added.Count} ảnh.", images = added });
+    }
+
+    // DELETE api/QuanLySanPham/gallery/{maHa}
+    [HttpDelete("gallery/{maHa:int}")]
+    public async Task<IActionResult> DeleteGallerySP(int maHa)
+    {
+        var h = await _context.Hinhanhsps.FindAsync(maHa);
+        if (h == null) return NotFound(new { message = "Không tìm thấy ảnh." });
+        DeleteImageFile(h.DuongDan);
+        _context.Hinhanhsps.Remove(h);
+        await _context.SaveChangesAsync();
+        return Ok(new { message = "Đã xóa ảnh." });
+    }
+
+    // ================================================================
+    // BIẾN THỂ
+    // ================================================================
+
+    // GET api/QuanLySanPham/{maSP}/bienthe
+    [HttpGet("{maSP}/bienthe")]
+    public async Task<IActionResult> GetBienThe(string maSP)
+    {
+        var list = await _context.BienTheSanphams
+            .Where(bt => bt.MaSanPham == maSP)
+            .OrderBy(bt => bt.GiaBan)
+            .Select(bt => new
+            {
+                bt.MaBienThe,
+                MaSanPham = bt.MaSanPham,
+                bt.TenBienThe,
+                bt.GiaBan,
+                SoLuong = bt.SoLuongTon,
+                bt.PhanTramHoaHong,
+                bt.HinhAnhDaiDien,
+                bt.TrangThai,
+            })
+            .ToListAsync();
+
+        return Ok(list);
+    }
+
+    // POST api/QuanLySanPham/bienthe
+    [HttpPost("bienthe")]
+    public async Task<IActionResult> CreateBienThe([FromForm] CreateBienTheDto dto)
+    {
+        if (string.IsNullOrWhiteSpace(dto.MaBienThe))
+            return BadRequest(new { message = "Mã biến thể không được trống." });
+
+        if (await _context.BienTheSanphams.AnyAsync(bt => bt.MaBienThe == dto.MaBienThe.Trim()))
+            return Conflict(new { message = "Mã biến thể đã tồn tại." });
+
+        var imgPath = await SaveImageAsync(dto.File, "bienthe");
+
+        var bt = new BienTheSanpham
+        {
+            MaBienThe = dto.MaBienThe.Trim(),
+            MaSanPham = dto.MaSanPham,
+            TenBienThe = dto.TenBienThe?.Trim(),
+            GiaBan = dto.GiaBan ?? 0,
+            SoLuongTon = dto.SoLuong ?? 0,
+            PhanTramHoaHong = dto.PhanTramHoaHong,
+            HinhAnhDaiDien = imgPath,
+            TrangThai = dto.TrangThai ?? 1,
+        };
+
+        _context.BienTheSanphams.Add(bt);
+        await _context.SaveChangesAsync();
+
+        // Lưu gallery biến thể
+        if (dto.GalleryFiles != null && dto.GalleryFiles.Count > 0)
+        {
+            foreach (var gf in dto.GalleryFiles.Take(10))
+            {
+                var gPath = await SaveImageAsync(gf, "bienthe_gallery");
+                if (gPath != null)
+                    _context.HinhanhBTs.Add(new HinhanhBT { MaBienThe = bt.MaBienThe, DuongDan = gPath });
+            }
+            await _context.SaveChangesAsync();
+        }
+
+        return Ok(new { message = "Thêm biến thể thành công.", maBienThe = bt.MaBienThe });
+    }
+
+    // PUT api/QuanLySanPham/bienthe/{maBienThe}
+    [HttpPut("bienthe/{maBienThe}")]
+    public async Task<IActionResult> UpdateBienThe(string maBienThe, [FromForm] UpdateBienTheDto dto)
+    {
+        var bt = await _context.BienTheSanphams.FindAsync(maBienThe);
+        if (bt == null) return NotFound(new { message = "Không tìm thấy biến thể." });
+
+        bt.TenBienThe = dto.TenBienThe?.Trim() ?? bt.TenBienThe;
+        bt.GiaBan = dto.GiaBan ?? bt.GiaBan;
+        bt.SoLuongTon = dto.SoLuong ?? bt.SoLuongTon;
+        bt.PhanTramHoaHong = dto.PhanTramHoaHong ?? bt.PhanTramHoaHong;
+        bt.TrangThai = dto.TrangThai ?? bt.TrangThai;
+
+        if (dto.File != null && dto.File.Length > 0)
+        {
+            DeleteImageFile(bt.HinhAnhDaiDien);
+            bt.HinhAnhDaiDien = await SaveImageAsync(dto.File, "bienthe");
+        }
+
+        // Thêm gallery mới
+        if (dto.GalleryFiles != null && dto.GalleryFiles.Count > 0)
+        {
+            foreach (var gf in dto.GalleryFiles.Take(10))
+            {
+                var gPath = await SaveImageAsync(gf, "bienthe_gallery");
+                if (gPath != null)
+                    _context.HinhanhBTs.Add(new HinhanhBT { MaBienThe = maBienThe, DuongDan = gPath });
+            }
+        }
+
+        await _context.SaveChangesAsync();
+        return Ok(new { message = "Cập nhật biến thể thành công." });
+    }
+
+    // DELETE api/QuanLySanPham/bienthe/{maBienThe}
+    [HttpDelete("bienthe/{maBienThe}")]
+    public async Task<IActionResult> DeleteBienThe(string maBienThe)
+    {
+        var bt = await _context.BienTheSanphams
+            .Include(b => b.HinhanhBTs)
+            .FirstOrDefaultAsync(b => b.MaBienThe == maBienThe);
+
+        if (bt == null)
+            return NotFound(new { message = "Không tìm thấy biến thể." });
+
+        // Kiểm tra dữ liệu liên quan
+        bool daCoHoaDon = await _context.ChitietHoadonSps
+            .AnyAsync(x => x.MaBienThe == maBienThe);
+
+        bool daCoGioHang = await _context.ChitietGiohangs
+            .AnyAsync(x => x.MaBienThe == maBienThe);
+
+        bool daCoPhieuNhap = await _context.ChitietPhieunhaps
+            .AnyAsync(x => x.MaBienThe == maBienThe);
+
+        if (daCoHoaDon || daCoGioHang || daCoPhieuNhap)
+        {
+            return BadRequest(new
+            {
+                message = "Biến thể đã phát sinh dữ liệu, không thể xóa."
+            });
+        }
+
+        foreach (var h in bt.HinhanhBTs)
+        {
+            DeleteImageFile(h.DuongDan);
+        }
+
+        _context.HinhanhBTs.RemoveRange(bt.HinhanhBTs);
+
+        DeleteImageFile(bt.HinhAnhDaiDien);
+
+        _context.BienTheSanphams.Remove(bt);
+
+        await _context.SaveChangesAsync();
+
+        return Ok(new { message = "Đã xóa biến thể." });
+    }
+
+    // ================================================================
+    // GALLERY ẢNH BIẾN THỂ
+    // ================================================================
+
+    // GET api/QuanLySanPham/bienthe/{maBienThe}/gallery
+    [HttpGet("bienthe/{maBienThe}/gallery")]
+    public async Task<IActionResult> GetGalleryBT(string maBienThe)
+    {
+        var list = await _context.HinhanhBTs
+            .Where(h => h.MaBienThe == maBienThe)
+            .Select(h => new { h.MaHa, h.DuongDan })
+            .ToListAsync();
+        return Ok(list);
+    }
+
+    // POST api/QuanLySanPham/bienthe/{maBienThe}/gallery
+    [HttpPost("bienthe/{maBienThe}/gallery")]
+    public async Task<IActionResult> AddGalleryBT(string maBienThe, [FromForm] GalleryUploadDto dto)
+    {
+        var bt = await _context.BienTheSanphams.FindAsync(maBienThe);
+        if (bt == null) return NotFound(new { message = "Không tìm thấy biến thể." });
+
+        if (dto.Files == null || dto.Files.Count == 0)
+            return BadRequest(new { message = "Không có file nào được tải lên." });
+
+        var added = new List<object>();
+        foreach (var f in dto.Files.Take(10))
+        {
+            var path = await SaveImageAsync(f, "bienthe_gallery");
+            if (path == null) continue;
+            var h = new HinhanhBT { MaBienThe = maBienThe, DuongDan = path };
+            _context.HinhanhBTs.Add(h);
+            await _context.SaveChangesAsync();
+            added.Add(new { h.MaHa, h.DuongDan });
+        }
+
+        return Ok(new { message = $"Đã thêm {added.Count} ảnh.", images = added });
+    }
+
+    // DELETE api/QuanLySanPham/bienthe/gallery/{maHa}
+    [HttpDelete("bienthe/gallery/{maHa:int}")]
+    public async Task<IActionResult> DeleteGalleryBT(int maHa)
+    {
+        var h = await _context.HinhanhBTs.FindAsync(maHa);
+        if (h == null) return NotFound(new { message = "Không tìm thấy ảnh." });
+        DeleteImageFile(h.DuongDan);
+        _context.HinhanhBTs.Remove(h);
+        await _context.SaveChangesAsync();
+        return Ok(new { message = "Đã xóa ảnh." });
+    }
+
+    // ================================================================
+    // KHÁCH HÀNG: INIT
+    // ================================================================
+    [HttpGet("init")]
+    public async Task<IActionResult> GetInit()
+    {
+        var danhMuc = await _context.DanhMucSPs
+            .Where(d => d.TrangThai == 1)
+            .Select(d => new { d.MaDMSP, d.TenDanhMuc })
+            .OrderBy(d => d.TenDanhMuc)
+            .ToListAsync();
+
+        var thuongHieu = await _context.Thuonghieus
+            .Where(t => t.TrangThai == 1)
+            .Select(t => new { t.MaTh, t.TenThuongHieu })
+            .OrderBy(t => t.TenThuongHieu)
+            .ToListAsync();
+
+        return Ok(new { danhMuc, thuongHieu });
+    }
+
+    // ================================================================
+    // KHÁCH HÀNG: LỌC + PHÂN TRANG
+    // ================================================================
+    [HttpGet("filter")]
+    public async Task<IActionResult> Filter(
+        [FromQuery] string? search,
+        [FromQuery] string? danhMuc,
+        [FromQuery] string? thuongHieu,
+        [FromQuery] string? priceRange,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 9)
+    {
+        var query = _context.SanPhams
+            .Where(sp => sp.TrangThai == 1)
+            .Include(sp => sp.MaDanhMucTheNavigation)
+            .Include(sp => sp.Thuonghieu)
+            .Include(sp => sp.BienTheSanphams)
+            .Include(sp => sp.DanhgiaSanphams)
+            .AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(search))
+            query = query.Where(sp =>
+                sp.TenSp!.Contains(search) ||
+                (sp.MoTa != null && sp.MoTa.Contains(search)));
+
+        if (!string.IsNullOrWhiteSpace(danhMuc) && danhMuc != "all")
+            query = query.Where(sp => sp.MaDanhMuc == danhMuc);
+
+        if (!string.IsNullOrWhiteSpace(thuongHieu) && thuongHieu != "all")
+            query = query.Where(sp => sp.MaTh == thuongHieu);
+
+        var allList = await query.ToListAsync();
+
+        if (!string.IsNullOrWhiteSpace(priceRange) && priceRange != "all")
+        {
+            allList = priceRange switch
+            {
+                "low" => allList.Where(sp => sp.BienTheSanphams.Any(bt => bt.TrangThai == 1) &&
+                              sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => bt.GiaBan) < 200000).ToList(),
+                "mid" => allList.Where(sp => sp.BienTheSanphams.Any(bt => bt.TrangThai == 1) &&
+                              sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => bt.GiaBan) >= 200000 &&
+                              sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => bt.GiaBan) <= 500000).ToList(),
+                "high" => allList.Where(sp => sp.BienTheSanphams.Any(bt => bt.TrangThai == 1) &&
+                              sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => bt.GiaBan) > 500000).ToList(),
+                _ => allList
+            };
+        }
+
+        var total = allList.Count;
+        var totalPages = (int)Math.Ceiling(total / (double)pageSize);
+        var paged = allList.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+
+        var result = paged.Select(sp =>
+        {
+            var btHD = sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).ToList();
+            var giaMin = btHD.Any() ? btHD.Min(bt => bt.GiaBan) : (decimal?)null;
+            var giaMax = btHD.Any() ? btHD.Max(bt => bt.GiaBan) : (decimal?)null;
+            var danhGia = sp.DanhgiaSanphams.Where(dg => dg.TrangThai == 1).ToList();
+
+            return new
+            {
+                sp.MaSp,
+                sp.TenSp,
+                sp.MoTa,
+                sp.HinhAnhDaiDien,
+                GiaTu = giaMin,
+                GiaDen = giaMax,
+                SoLuongTon = btHD.Sum(bt => bt.SoLuongTon ?? 0),
+                SoBienThe = btHD.Count,
+                SoSao = danhGia.Any() ? Math.Round(danhGia.Average(dg => dg.SoSao ?? 0), 1) : (double?)null,
+                SoLuongDanhGia = danhGia.Count,
+                DanhMuc = sp.MaDanhMucTheNavigation == null ? null : new
+                {
+                    sp.MaDanhMucTheNavigation.MaDMSP,
+                    sp.MaDanhMucTheNavigation.TenDanhMuc,
+                },
+                ThuongHieu = sp.Thuonghieu == null ? null : new
+                {
+                    sp.Thuonghieu.MaTh,
+                    sp.Thuonghieu.TenThuongHieu,
+                },
+            };
+        });
+
+        return Ok(new { data = result, totalPages, total });
+    }
+
+    // ================================================================
+    // KHÁCH HÀNG: CHI TIẾT SẢN PHẨM
+    // ================================================================
+    [HttpGet("{id}")]
+    public async Task<IActionResult> GetById(string id)
+    {
+        var sp = await _context.SanPhams
+            .Include(s => s.MaDanhMucTheNavigation)
+            .Include(s => s.Thuonghieu)
+            .Include(s => s.Hinhanhsps)
+            .Include(s => s.BienTheSanphams)
+                .ThenInclude(bt => bt.HinhanhBTs)
+            .Include(s => s.DanhgiaSanphams)
+            .FirstOrDefaultAsync(s => s.MaSp == id && s.TrangThai == 1);
+
+        if (sp == null) return NotFound(new { message = "Không tìm thấy sản phẩm." });
+
+        var btHD = sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).OrderBy(bt => bt.GiaBan).ToList();
+        var danhGia = sp.DanhgiaSanphams.Where(dg => dg.TrangThai == 1).ToList();
+
+        var goiY = await _context.SanPhams
+            .Where(s => s.MaDanhMuc == sp.MaDanhMuc && s.MaSp != id && s.TrangThai == 1)
+            .Include(s => s.Thuonghieu)
+            .Include(s => s.BienTheSanphams)
+            .Take(4)
+            .Select(s => new
+            {
+                s.MaSp,
+                s.TenSp,
+                s.MoTa,
+                s.HinhAnhDaiDien,
+                GiaTu = s.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => (decimal?)bt.GiaBan),
+                GiaDen = s.BienTheSanphams.Where(bt => bt.TrangThai == 1).Max(bt => (decimal?)bt.GiaBan),
+                ThuongHieu = s.Thuonghieu == null ? null : new
+                {
+                    s.Thuonghieu.MaTh,
+                    s.Thuonghieu.TenThuongHieu,
+                },
+            })
+            .ToListAsync();
+
+        return Ok(new
+        {
+            sp.MaSp,
+            sp.TenSp,
+            sp.MoTa,
+            sp.ThanhPhan,
+            sp.HuongDanSuDung,
+            sp.HinhAnhDaiDien,
+
+            DanhMuc = sp.MaDanhMucTheNavigation == null ? null : new
+            {
+                sp.MaDanhMucTheNavigation.MaDMSP,
+                sp.MaDanhMucTheNavigation.TenDanhMuc,
+            },
+            ThuongHieu = sp.Thuonghieu == null ? null : new
+            {
+                sp.Thuonghieu.MaTh,
+                sp.Thuonghieu.TenThuongHieu,
+                sp.Thuonghieu.HinhAnh,
+            },
+
+            // Gallery ảnh sản phẩm
+            HinhAnhs = sp.Hinhanhsps.Select(h => new { h.MaHa, h.DuongDan }).ToList(),
+
+            BienThes = btHD.Select(bt => new
+            {
+                bt.MaBienThe,
+                bt.TenBienThe,
+                bt.GiaBan,
+                bt.SoLuongTon,
+                bt.HinhAnhDaiDien,
+                bt.PhanTramHoaHong,
+                // Gallery ảnh biến thể
+                HinhAnhs = bt.HinhanhBTs.Select(h => new { h.MaHa, h.DuongDan }).ToList(),
+            }).ToList(),
+
+            GiaTu = btHD.Any() ? btHD.Min(bt => bt.GiaBan) : (decimal?)null,
+            GiaDen = btHD.Any() ? btHD.Max(bt => bt.GiaBan) : (decimal?)null,
+
+            SoSao = danhGia.Any() ? Math.Round(danhGia.Average(dg => dg.SoSao ?? 0), 1) : (double?)null,
+            SoLuongDanhGia = danhGia.Count,
+            SuggestedProducts = goiY,
+        });
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// DTOs
+// ════════════════════════════════════════════════════════════════════
+
+public class CreateSanPhamDto
+{
+    public string? MaSp { get; set; }
+    public string? TenSp { get; set; }
+    public string? MaDanhMuc { get; set; }
+    public string? MaTh { get; set; }
+    public int? TrangThai { get; set; }
+    public IFormFile? File { get; set; }
+    public List<IFormFile>? GalleryFiles { get; set; }   // ← ảnh gallery
+}
+
+public class UpdateSanPhamDto
+{
+    public string? TenSp { get; set; }
+    public string? MaDanhMuc { get; set; }
+    public string? MaTh { get; set; }
+    public int? TrangThai { get; set; }
+    public IFormFile? File { get; set; }
+    public List<IFormFile>? GalleryFiles { get; set; }   // ← ảnh gallery mới thêm
+}
+
+public class ToggleStatusDto
+{
+    public int TrangThai { get; set; }
+}
+
+public class CreateBienTheDto
+{
+    public string? MaBienThe { get; set; }
+    public string? MaSanPham { get; set; }
+    public string? TenBienThe { get; set; }
+    public decimal? GiaBan { get; set; }
+    public int? SoLuong { get; set; }
+    public decimal? PhanTramHoaHong { get; set; }
+    public int? TrangThai { get; set; }
+    public IFormFile? File { get; set; }
+    public List<IFormFile>? GalleryFiles { get; set; }   // ← ảnh gallery
+}
+
+public class UpdateBienTheDto
+{
+    public string? MaSanPham { get; set; }
+    public string? TenBienThe { get; set; }
+    public decimal? GiaBan { get; set; }
+    public int? SoLuong { get; set; }
+    public decimal? PhanTramHoaHong { get; set; }
+    public int? TrangThai { get; set; }
+    public IFormFile? File { get; set; }
+    public List<IFormFile>? GalleryFiles { get; set; }   // ← ảnh gallery mới thêm
+}
+
+public class GalleryUploadDto
+{
+    public List<IFormFile>? Files { get; set; }
+}

@@ -28,4 +28,5 @@ public partial class BienTheSanpham
     public virtual ICollection<ChitietHoadonSp> ChitietHoadonSps { get; set; } = new List<ChitietHoadonSp>();
 
     public virtual ICollection<ChitietPhieunhap> ChitietPhieunhaps { get; set; } = new List<ChitietPhieunhap>();
+    public virtual ICollection<HinhanhBT> HinhanhBTs { get; set; } = new List<HinhanhBT>();
 }
