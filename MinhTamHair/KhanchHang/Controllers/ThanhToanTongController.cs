@@ -38,7 +38,8 @@ namespace MinhTamHair.KhanchHang.Controllers
                         price = s.Gia,
                         originalPrice = s.Gia,
                         duration = s.ThoiGianLam ?? 30,
-                        icon = s.Hinhanhs
+                        hinhAnh = s.Hinhanhs.Select(h => h.DuongDan).FirstOrDefault(),
+                        icon = s.Hinhanhs.Select(h => h.DuongDan).FirstOrDefault()
                     })
                     .ToListAsync();
 
@@ -231,7 +232,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                             NgayHen = DateOnly.FromDateTime(localTime),
                             GioBatDau = gioBatDau,
                             GioKetThuc = gioKetThuc,
-                            TrangThai = 0,
+                            TrangThai = 0, // Trạng thái ban đầu luôn là 0 (Chưa xác nhận/chưa thanh toán)
                         });
                         await _context.SaveChangesAsync();
 
@@ -252,7 +253,18 @@ namespace MinhTamHair.KhanchHang.Controllers
                         await _context.SaveChangesAsync();
                     }
 
-                    // BƯỚC 3: TẠO HÓA ĐƠN 
+                    // BƯỚC 5 (Chuyển lên trước để xác định trạng thái thanh toán online)
+                    string phuongThuc = "COD";
+                    if (req.PaidAmount > 0)
+                    {
+                        phuongThuc = (req.CheckoutType == "CHI_MUA_SAN_PHAM") ? req.ProductPaymentMethod : req.ServicePaymentMethod;
+                    }
+
+                    // Xác định đơn hàng có phải thanh toán online qua cổng VNPay/MoMo hay không
+                    bool isOnlinePayment = req.PaidAmount > 0 &&
+                        (phuongThuc.ToLower() == "vnpay" || phuongThuc.ToLower() == "momo");
+
+                    // BƯỚC 3: TẠO HÓA ĐƠN
                     string? maCodeChinh = req.VoucherIds != null && req.VoucherIds.Any(v => !string.IsNullOrWhiteSpace(v))
                     ? req.VoucherIds.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))
                     : null;
@@ -265,7 +277,8 @@ namespace MinhTamHair.KhanchHang.Controllers
                         TongTien = req.GrandTotal,
                         ThanhTien = req.GrandTotal,
                         TienDaTra = req.PaidAmount,
-                        TrangThai = 1,
+                        // Nếu là thanh toán online thì khởi tạo là 0 (Chưa thanh toán), ngược lại (COD/Free) thì là 1
+                        TrangThai = isOnlinePayment ? 0 : 1,
                         MaCode = maCodeChinh
                     };
                     _context.HoaDons.Add(hoaDon);
@@ -307,19 +320,14 @@ namespace MinhTamHair.KhanchHang.Controllers
                         }
                     }
 
-                    // BƯỚC 5: TẠO THANH TOÁN & TRỪ VOUCHER
-                    string phuongThuc = "COD";
-                    if (req.PaidAmount > 0)
-                    {
-                        phuongThuc = (req.CheckoutType == "CHI_MUA_SAN_PHAM") ? req.ProductPaymentMethod : req.ServicePaymentMethod;
-                    }
-
+                    // LƯU BẢN GHI THANH TOÁN
                     _context.Thanhtoans.Add(new Thanhtoan
                     {
                         MaHd = maHd,
                         PhuongThuc = (phuongThuc ?? "COD").ToUpper(),
                         SoTien = req.PaidAmount,
-                        TrangThai = req.PaidAmount > 0 ? 1 : 0
+                        // Nếu là thanh toán online thì bắt đầu với trạng thái 0 (Chưa thanh toán)
+                        TrangThai = isOnlinePayment ? 0 : 1
                     });
 
                     if (req.VoucherIds != null)
@@ -332,34 +340,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                     await _context.SaveChangesAsync();
                     await transaction.CommitAsync();
-                    if (!string.IsNullOrEmpty(maLd)) // Chỉ gửi nếu đơn hàng này có sinh ra Mã Lịch Đặt
-                    {
-                        try
-                        {
-                            var khachHang = await _context.Khachhangs.FindAsync(safeKhachHang);
 
-                            // Ưu tiên lấy tên và email khách vừa nhập trên form, nếu không có thì lấy trong DB
-                            string tenKhach = !string.IsNullOrWhiteSpace(req.CustomerName) ? req.CustomerName : (khachHang?.HoTen ?? "Khách hàng");
-                            string emailNhan = !string.IsNullOrWhiteSpace(req.Email) ? req.Email : khachHang?.Email;
-
-                            if (!string.IsNullOrWhiteSpace(emailNhan) && req.BookingDate.HasValue)
-                            {
-                                // Gọi service gửi Email
-                                await _qrEmailService.SendBookingEmailAsync(
-                                    emailNhan,
-                                    tenKhach,
-                                    maLd,
-                                    req.BookingDate.Value,
-                                    req.GrandTotal
-                                );
-                                Console.WriteLine("Đã gửi mã QR thành công tới email: " + emailNhan);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine("====== LỖI GỬI EMAIL QR ======\n" + ex.Message);
-                        }
-                    }
 
                     // BƯỚC 6: TẠO LINK VNPAY HOẶC MOMO
                     string paymentUrl = null;
@@ -445,11 +426,15 @@ namespace MinhTamHair.KhanchHang.Controllers
                 }
             });
         }
+
         // ===============================================
         // API 6: CẬP NHẬT TRẠNG THÁI & LẤY CHI TIẾT BIÊN LAI
         // ===============================================
         [HttpGet("get-receipt")]
-        public async Task<IActionResult> GetReceipt([FromQuery] string maHd, [FromQuery] string? vnp_ResponseCode = null)
+        public async Task<IActionResult> GetReceipt(
+            [FromQuery] string maHd,
+            [FromQuery] string? vnp_ResponseCode = null,
+            [FromQuery] string? resultCode = null)
         {
             if (string.IsNullOrEmpty(maHd)) return BadRequest(new { success = false, message = "Thiếu mã hóa đơn." });
 
@@ -462,23 +447,79 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                 if (hoaDon == null) return NotFound(new { success = false, message = "Không tìm thấy hóa đơn" });
 
-                // 1. CẬP NHẬT TRẠNG THÁI NẾU TỪ VNPAY VỀ THÀNH CÔNG (Mã 00)
-                if (vnp_ResponseCode == "00" && hoaDon.TrangThai == 0)
+                // 1. CẬP NHẬT TRẠNG THÁI NẾU THANH TOÁN ONLINE THÀNH CÔNG (VNPay hoặc MoMo)
+                bool isPaymentSuccess = (vnp_ResponseCode == "00") || (resultCode == "0");
+
+                if (isPaymentSuccess && hoaDon.TrangThai == 0)
                 {
                     hoaDon.TrangThai = 1;
                     var thanhToan = hoaDon.Thanhtoans.FirstOrDefault();
                     if (thanhToan != null) thanhToan.TrangThai = 1;
-
-                    if (!string.IsNullOrEmpty(hoaDon.MaLd))
-                    {
-                        var lichDat = await _context.Lichdats.FirstOrDefaultAsync(l => l.MaLd == hoaDon.MaLd);
-                        if (lichDat != null && lichDat.TrangThai == 0) lichDat.TrangThai = 1;
-                    }
                     await _context.SaveChangesAsync();
                 }
 
-                // 2. GOM DỮ LIỆU ĐỂ TRẢ VỀ FRONTEND
-                var khachHang = await _context.Khachhangs.FindAsync(hoaDon.MaKh);
+                // 2. NẾU HÓA ĐƠN ĐÃ THANH TOÁN (TrangThai == 1) VÀ LỊCH ĐẶT CHƯA XÁC NHẬN (TrangThai == 0)
+                // THÌ TIẾN HÀNH XÁC NHẬN LỊCH VÀ KÍCH HOẠT GỬI EMAIL QR (Chỉ chạy đúng 1 lần đầu tiên)
+                bool shouldSendEmail = false;
+                if (hoaDon.TrangThai == 1 && !string.IsNullOrEmpty(hoaDon.MaLd))
+                {
+                    var lichDat = await _context.Lichdats.FirstOrDefaultAsync(l => l.MaLd == hoaDon.MaLd);
+                    if (lichDat != null && lichDat.TrangThai == 0)
+                    {
+                        lichDat.TrangThai = 1;
+                        await _context.SaveChangesAsync();
+                        shouldSendEmail = true;
+                    }
+                }
+
+                // 3. THỰC HIỆN GỬI EMAIL QR XÁC NHẬN LỊCH HẸN
+                var delivery = hoaDon.ThongtinGiaohangs.FirstOrDefault();
+                if (shouldSendEmail)
+                {
+                    try
+                    {
+                        var khachHang = await _context.Khachhangs.FindAsync(hoaDon.MaKh);
+
+                        // Ưu tiên lấy thông tin email & tên từ Khachhang, nếu không có/rỗng thì lấy từ ThongtinGiaohang
+                        string tenKhach = khachHang?.HoTen ?? "Khách hàng";
+                        string emailNhan = khachHang?.Email;
+
+                        if (string.IsNullOrWhiteSpace(emailNhan) && delivery != null)
+                        {
+                            emailNhan = delivery.Email;
+                            tenKhach = delivery.TenNguoiNhan;
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(emailNhan))
+                        {
+                            var ld = await _context.Lichdats.FirstOrDefaultAsync(l => l.MaLd == hoaDon.MaLd);
+                            DateTime ngayHenDateTime = DateTime.Now;
+
+                            if (ld != null && ld.NgayHen.HasValue && ld.GioBatDau.HasValue)
+                            {
+                                // Chuyển đổi DateOnly và TimeOnly thành DateTime
+                                ngayHenDateTime = ld.NgayHen.Value.ToDateTime(ld.GioBatDau.Value);
+                            }
+
+                            // Gọi service gửi Email
+                            await _qrEmailService.SendBookingEmailAsync(
+                                emailNhan,
+                                tenKhach,
+                                hoaDon.MaLd,
+                                ngayHenDateTime,
+                                hoaDon.ThanhTien ?? 0m
+                            );
+                            Console.WriteLine("Đã gửi mã QR thành công tới email: " + emailNhan);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("====== LỖI GỬI EMAIL QR TRONG GET-RECEIPT ======\n" + ex.Message);
+                    }
+                }
+
+                // 4. GOM DỮ LIỆU ĐỂ TRẢ VỀ FRONTEND
+                var khachHangInfo = await _context.Khachhangs.FindAsync(hoaDon.MaKh);
 
                 object bookingInfo = null;
                 if (!string.IsNullOrEmpty(hoaDon.MaLd))
@@ -516,14 +557,12 @@ namespace MinhTamHair.KhanchHang.Controllers
                     productsList.Add(new { name = $"{sp?.TenSp} - {bt?.TenBienThe}", qty = ct.SoLuong, price = ct.DonGiaLucBan, total = ct.ThanhTien });
                 }
 
-                var delivery = hoaDon.ThongtinGiaohangs.FirstOrDefault();
-
                 var receipt = new
                 {
                     maHd = hoaDon.MaHd,
                     ngayTao = hoaDon.NgayTao?.ToString("dd/MM/yyyy HH:mm"),
-                    khachHang = khachHang?.HoTen ?? "Khách vãng lai",
-                    sdt = khachHang?.Sdt ?? "",
+                    khachHang = khachHangInfo?.HoTen ?? "Khách vãng lai",
+                    sdt = khachHangInfo?.Sdt ?? "",
                     tongTien = hoaDon.TongTien,
                     thanhTien = hoaDon.ThanhTien,
                     tienDaTra = hoaDon.TienDaTra,
@@ -540,6 +579,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 return BadRequest(new { success = false, message = ex.Message });
             }
         }
+
         private string SignHmacSHA256(string message, string key)
         {
             byte[] keyByte = Encoding.UTF8.GetBytes(key);
@@ -551,7 +591,6 @@ namespace MinhTamHair.KhanchHang.Controllers
             return BitConverter.ToString(hashmessage).Replace("-", "").ToLower();
         }
     }
-
 
     [System.ComponentModel.DataAnnotations.Schema.NotMapped]
     public class CheckoutSummaryRequest
