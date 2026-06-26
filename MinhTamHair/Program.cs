@@ -54,6 +54,8 @@ builder.Services.AddCors(options =>
     options.AddPolicy("AllowVueApp", policy =>
     {
         policy.WithOrigins(
+                  "http://localhost:3000",   // Dev Proxy HTTP
+                  "https://localhost:3000",  // Dev Proxy HTTPS
                   "http://localhost:5173",   // Customer app HTTP
                   "http://localhost:5174",   // Admin app HTTP
                   "https://localhost:5173",  // Customer app HTTPS (basicSsl)
@@ -223,3 +225,4 @@ app.UseAuthorization();     // Bật Phân quyền sau
 app.MapControllers();
 app.MapFallbackToFile("/dist/index.html");
 app.Run();
+ 
