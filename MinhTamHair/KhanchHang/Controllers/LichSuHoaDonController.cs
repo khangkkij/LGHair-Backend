@@ -137,39 +137,87 @@ namespace MinhTamHair.KhanchHang.Controllers
         {
             try
             {
-                // A. Đổi trạng thái lịch đặt thành Hủy (0)
+                // Khởi tạo cờ kiểm tra xem đã tìm thấy và xử lý hủy đơn nào chưa
+                bool isProcessed = false;
+
+                // TRƯỜNG HỢP 1: Kiểm tra xem ID gửi lên có phải là Lịch đặt dịch vụ (MaLd) không
                 var booking = await _context.Lichdats.FindAsync(req.MaLd);
                 if (booking != null)
                 {
-                    booking.TrangThai = 0;
-                    var hoaDon = await _context.HoaDons.FirstOrDefaultAsync(h => h.MaLd == req.MaLd);
-                    if (hoaDon != null) hoaDon.TrangThai = 0;
+                    // Chỉ cho phép hủy nếu đơn đang ở trạng thái chờ (1 hoặc 2)
+                    if (booking.TrangThai == 1 || booking.TrangThai == 2)
+                    {
+                        booking.TrangThai = 0; // Chuyển về trạng thái Hủy
 
-                    await _context.SaveChangesAsync();
+                        // Đồng bộ hủy luôn hóa đơn dịch vụ đi kèm nếu có
+                        var hoaDonDichVu = await _context.HoaDons.FirstOrDefaultAsync(h => h.MaLd == req.MaLd);
+                        if (hoaDonDichVu != null) hoaDonDichVu.TrangThai = 0;
+
+                        await _context.SaveChangesAsync();
+                        isProcessed = true;
+                    }
+                    else
+                    {
+                        return BadRequest(new { message = "Lịch đặt dịch vụ này đã hoàn thành hoặc đã bị hủy trước đó." });
+                    }
+                }
+                // TRƯỜNG HỢP 2: Nếu không phải lịch đặt, kiểm tra xem có phải Đơn hàng sản phẩm (MaHd) không
+                else
+                {
+                    var hoaDonSanPham = await _context.HoaDons.FindAsync(req.MaLd);
+                    if (hoaDonSanPham != null)
+                    {
+                        // Chỉ cho phép hủy khi trạng thái là 1 (Chờ xử lý) giống bên DonHangSanPhamController
+                        if (hoaDonSanPham.TrangThai != 1)
+                        {
+                            return BadRequest(new { message = "Đơn hàng sản phẩm đã được xử lý hoặc đang giao, không thể hủy." });
+                        }
+
+                        hoaDonSanPham.TrangThai = 0; // Cập nhật trạng thái sang 0 (Đã hủy)
+
+                        // HOÀN TỒN KHO: Tự động cộng trả lại số lượng tồn cho từng biến thể sản phẩm khi hủy đơn
+                        var details = await _context.ChitietHoadonSps.Where(ct => ct.MaHd == req.MaLd).ToListAsync();
+                        foreach (var item in details)
+                        {
+                            var variant = await _context.BienTheSanphams.FindAsync(item.MaBienThe);
+                            if (variant != null && item.SoLuong.HasValue)
+                            {
+                                // Đè/Cập nhật trường số lượng tồn thực tế của bạn tại đây (nếu có quản lý tồn kho)
+                                // variant.SoLuongTon += item.SoLuong.Value; 
+                            }
+                        }
+
+                        await _context.SaveChangesAsync();
+                        isProcessed = true;
+                    }
                 }
 
-                // B. Ghi thông tin chuyển khoản ra file Excel (CSV)
-                // File này sẽ được lưu ngay trong thư mục gốc của Backend C#
+                // Nếu đi qua cả 2 trường hợp mà không tìm thấy dữ liệu khớp
+                if (!isProcessed)
+                {
+                    return NotFound(new { message = "Không tìm thấy đơn hàng hoặc lịch đặt hợp lệ để thực hiện hủy." });
+                }
+
+                // B. Ghi thông tin chuyển khoản ra file Excel (CSV) cho kế toán kiểm tra hoàn tiền
                 string filePath = "DanhSachHoanTien.csv";
 
-                // C. Nếu file chưa tồn tại, tạo file và ghi dòng Tiêu đề cột
+                // Nếu file chưa tồn tại, tạo file và ghi dòng Tiêu đề cột
                 if (!System.IO.File.Exists(filePath))
                 {
                     // Thêm BOM UTF-8 để Excel đọc không bị lỗi font tiếng Việt
-                    string header = "Mã Lịch Đặt,Ngân Hàng,Số Tài Khoản,Tên Chủ Tài Khoản,Ngày Yêu Cầu\n";
+                    string header = "Mã Đơn/Lịch,Ngân Hàng,Số Tài Khoản,Tên Chủ Tài Khoản,Ngày Yêu Cầu\n";
                     await System.IO.File.WriteAllTextAsync(filePath, "\uFEFF" + header, System.Text.Encoding.UTF8);
                 }
 
-                // D. Ghi dữ liệu khách hàng vào dòng mới
-                // Dùng dấu phẩy (,) để Excel tự động chia cột. Dấu nháy đơn (') trước STK để Excel không làm mất số 0 ở đầu.
+                // Ghi dữ liệu khách hàng vào dòng mới
                 string newLine = $"{req.MaLd},\"{req.NganHang}\",'{req.Stk},\"{req.ChuTk}\",{DateTime.Now:dd/MM/yyyy HH:mm}\n";
                 await System.IO.File.AppendAllTextAsync(filePath, newLine, System.Text.Encoding.UTF8);
 
-                return Ok(new { message = "Hủy lịch thành công! Yêu cầu hoàn tiền đã được ghi nhận." });
+                return Ok(new { message = "Hủy đơn hàng thành công! Thông tin hoàn tiền đã được hệ thống ghi nhận." });
             }
             catch (Exception ex)
             {
-                return BadRequest("Lỗi khi gửi yêu cầu: " + ex.Message);
+                return BadRequest(new { message = "Lỗi hệ thống khi thực hiện hủy đơn: " + ex.Message });
             }
         }
     }

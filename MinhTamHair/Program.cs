@@ -43,6 +43,8 @@ builder.Services.AddControllers()
         options.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
         // Chống lỗi vòng lặp khi truy vấn dữ liệu quan hệ (Voucher <-> KhachHang)
         options.JsonSerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles;
+        options.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles;
+        options.JsonSerializerOptions.WriteIndented = true;
     });
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
@@ -52,6 +54,8 @@ builder.Services.AddCors(options =>
     options.AddPolicy("AllowVueApp", policy =>
     {
         policy.WithOrigins(
+                  "http://localhost:3000",   // Dev Proxy HTTP
+                  "https://localhost:3000",  // Dev Proxy HTTPS
                   "http://localhost:5173",   // Customer app HTTP
                   "http://localhost:5174",   // Admin app HTTP
                   "https://localhost:5173",  // Customer app HTTPS (basicSsl)
@@ -157,6 +161,11 @@ builder.Services.AddAuthorization(options =>
     options.AddPolicy("CustomerPolicy", policy => policy.RequireRole("KhachHang"));
 });
 builder.Services.AddMemoryCache();
+
+// ===== ĐĂNG KÝ SALARY SERVICE =====
+// ISalaryService → SalaryService: Tính lương động real-time, không lưu vào DB
+builder.Services.AddScoped<MinhTamHair.Admin.Services.ISalaryService, MinhTamHair.Admin.Services.SalaryService>();
+// ===== END SALARY SERVICE =====
 builder.Services.AddTransient<IEmailService, EmailService>();
 builder.Services.AddScoped<IQrEmailService, QrEmailService>();
 builder.Services.AddHttpClient("ZaloPersonalBridgeProbe", client => client.Timeout = TimeSpan.FromSeconds(4));
@@ -222,3 +231,4 @@ app.UseAuthorization();     // Bật Phân quyền sau
 app.MapControllers();
 app.MapFallbackToFile("/dist/index.html");
 app.Run();
+ 
