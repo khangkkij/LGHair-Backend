@@ -126,12 +126,18 @@ namespace MinhTamHair.NhanVien.Controllers
 
 		// LÀM TƯƠNG TỰ CHO API RỜI CA SỚM (NẾU CÓ)
 		[HttpPatch("roi-ca-som/{maLich}")]
-		public async Task<IActionResult> CheckOut(int maLich, [FromQuery] string maNv)
+		public async Task<IActionResult> CheckOut(int maLich, [FromQuery] string maNv, [FromBody] MinhTamHair.Admin.Models.CaLamDTO.RoiCaSomRequest request)
 		{
 			var lich = await _context.Lichlamviecs.FirstOrDefaultAsync(l => l.MaLich == maLich && l.MaNv == maNv);
 			if (lich == null) return NotFound(new { message = "Không tìm thấy ca làm của bạn." });
 
+			if (string.IsNullOrWhiteSpace(request.GhiChu))
+			{
+				return BadRequest(new { message = "Vui lòng nhập lý do rời ca sớm." });
+			}
+
 			lich.TrangThai = 3;
+			lich.GhiChu = request.GhiChu;
 			await _context.SaveChangesAsync();
 
 			return Ok(new { success = true, message = "Đã đánh dấu rời ca sớm!" });

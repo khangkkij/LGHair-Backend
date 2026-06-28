@@ -41,5 +41,12 @@ namespace MinhTamHair.Admin.Models
 			public int TrangThai { get; set; } // 2: Có mặt, 3: Rời ca, 5: Vắng mặt, 6: Muộn
 			public string? GhiChu { get; set; } // Lý do
 		}
+
+		// DTO để nhận yêu cầu Rời ca sớm
+		public class RoiCaSomRequest
+		{
+			[Required]
+			public string GhiChu { get; set; } = null!; // Bắt buộc nhập lý do rời ca sớm
+		}
 	}
 }

@@ -172,8 +172,9 @@ public class AdminKhachHangController : ControllerBase
         string? matKhauTraVe = null;
         if (!string.IsNullOrWhiteSpace(dto.MatKhauMoi))
         {
-            entity.MatKhau = dto.MatKhauMoi.Trim();
-            matKhauTraVe = entity.MatKhau;
+            var plainNewPassword = dto.MatKhauMoi.Trim();
+            entity.MatKhau = BCrypt.Net.BCrypt.HashPassword(plainNewPassword);
+            matKhauTraVe = plainNewPassword;
         }
 
         await _context.SaveChangesAsync(cancellationToken);
@@ -215,7 +216,7 @@ public class AdminKhachHangController : ControllerBase
             Sdt = sdt,
             Email = emailTrim,
             GioiTinh = gioiTinhTrim,
-            MatKhau = matKhau,
+            MatKhau = BCrypt.Net.BCrypt.HashPassword(matKhau),
             NgayTao = DateTime.Now,
             TrangThai = 1,
             DiemTichLuy = 0,

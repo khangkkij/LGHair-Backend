@@ -99,10 +99,16 @@ builder.Services.AddAuthentication(options =>
     {
         OnMessageReceived = context =>
         {
-            // 1. Ưu tiên tìm Cookie của Admin/Nhân viên trước
-            var token = context.Request.Cookies["adminAccessToken"];
+            // 1. Ưu tiên Header Authorization do Vue gửi (Bearer Token)
+            var authHeader = context.Request.Headers["Authorization"].FirstOrDefault();
+            if (!string.IsNullOrEmpty(authHeader) && authHeader.StartsWith("Bearer "))
+            {
+                // Nếu Frontend đã gửi kèm Token chuẩn qua Header, kệ cho C# tự đọc
+                return Task.CompletedTask;
+            }
 
-            // 2. Nếu không có, tìm tiếp Cookie của Khách hàng (bạn check lại tên cookie khách hàng của bạn là gì để thay vào chữ "accessToken" nhé)
+            // 2. Nếu không có Header (ví dụ gọi từ Swagger, load ảnh...), tìm trong Cookie
+            var token = context.Request.Cookies["adminAccessToken"];
             if (string.IsNullOrEmpty(token))
             {
                 token = context.Request.Cookies["accessToken"];

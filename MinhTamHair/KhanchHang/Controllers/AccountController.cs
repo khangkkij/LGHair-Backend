@@ -46,15 +46,33 @@ namespace MinhTamHair.KhanchHang.Controllers
                 return BadRequest(new { success = false, message = "Vui lòng nhập tài khoản và mật khẩu." });
 
             var khachHang = await _context.Khachhangs
-                .FirstOrDefaultAsync(kh => (kh.Email == request.Username || kh.Sdt == request.Username)
-                                            && kh.MatKhau == request.Password && kh.TrangThai == 1);
+                .FirstOrDefaultAsync(kh => kh.Email == request.Username || kh.Sdt == request.Username);
 
             if (khachHang == null)
                 return Unauthorized(new { success = false, message = "Tài khoản hoặc mật khẩu không chính xác." });
-            if (khachHang.TrangThai == 0)
+                
+            bool isPasswordValid = false;
+            if (!string.IsNullOrEmpty(khachHang.MatKhau))
             {
-                return BadRequest(new { success = false, message = "Tài khoản của bạn đã bị khóa. Vui lòng liên hệ quản trị viên." });
+                if (khachHang.MatKhau.StartsWith("$2a$") || khachHang.MatKhau.StartsWith("$2b$") || khachHang.MatKhau.StartsWith("$2y$"))
+                {
+                    isPasswordValid = BCrypt.Net.BCrypt.Verify(request.Password, khachHang.MatKhau);
+                }
+                else
+                {
+                    isPasswordValid = (khachHang.MatKhau == request.Password);
+                    // Có thể hash lại mật khẩu cũ ở đây nếu muốn: 
+                    // if (isPasswordValid) khachHang.MatKhau = BCrypt.Net.BCrypt.HashPassword(request.Password);
+                }
             }
+
+            if (!isPasswordValid)
+                return Unauthorized(new { success = false, message = "Tài khoản hoặc mật khẩu không chính xác." });
+
+			if (khachHang.TrangThai == 0)
+			{
+				return BadRequest(new { success = false, message = "Tài khoản của bạn đã bị khóa. Vui lòng liên hệ quản trị viên." });
+			}
 
             // Cập nhật lại Rank dựa trên điểm hiện tại trước khi trả về cho khách
             khachHang.MaRank = await GetRankByPointsAsync(khachHang.DiemTichLuy);
@@ -192,7 +210,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 HoTen = request.HoTen,
                 Sdt = request.Sdt,
                 Email = request.Email,
-                MatKhau = request.MatKhau, // Thực tế nên Hash (mã hóa) mật khẩu trước khi lưu
+                MatKhau = BCrypt.Net.BCrypt.HashPassword(request.MatKhau), // Đã mã hóa mật khẩu bằng BCrypt
                 NgayTao = DateTime.Now,
                 MaRank = await GetRankByPointsAsync(0),
                 TrangThai = 1, // 1 là Active
@@ -332,7 +350,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         TrangThai = 1,
                         MaRank = await GetRankByPointsAsync(0), // Không gán cứng RANK01
                         DiemTichLuy = 0,
-                        MatKhau = Guid.NewGuid().ToString()
+                        MatKhau = BCrypt.Net.BCrypt.HashPassword(Guid.NewGuid().ToString())
                     };
                     _context.Khachhangs.Add(khachHang);
                     await _context.SaveChangesAsync();
@@ -391,121 +409,6 @@ namespace MinhTamHair.KhanchHang.Controllers
             }
         }
 
-        [HttpPost("facebook-login")]
-        public async Task<IActionResult> FacebookLogin([FromBody] FacebookLoginRequest request)
-        {
-            try
-            {
-                // 1. Xác thực Token với Facebook Graph API
-                using var client = new HttpClient();
-                var fbResponse = await client.GetAsync($"https://graph.facebook.com/me?fields=id,name,email,picture.width(500).height(500)&access_token={request.Token}");
-
-                if (!fbResponse.IsSuccessStatusCode)
-                {
-                    return BadRequest(new { success = false, message = "Xác thực Facebook thất bại hoặc Token đã hết hạn." });
-                }
-
-                var fbContent = await fbResponse.Content.ReadAsStringAsync();
-                var fbData = System.Text.Json.JsonDocument.Parse(fbContent);
-                var root = fbData.RootElement;
-
-                string fbId = root.GetProperty("id").GetString();
-                string name = root.GetProperty("name").GetString();
-
-                // Vì Email trong DB là nullable nhưng ta vẫn nên cung cấp 1 chuỗi để làm khóa liên kết
-                string email = root.TryGetProperty("email", out var emailProp) ? emailProp.GetString() : $"{fbId}@facebook.minhtamhair.local";
-                string pictureUrl = "";
-
-                if (root.TryGetProperty("picture", out var picProp) && picProp.TryGetProperty("data", out var dataProp) && dataProp.TryGetProperty("url", out var urlProp))
-                {
-                    pictureUrl = urlProp.GetString();
-                }
-
-                // 2. Kiểm tra khách hàng đã tồn tại trong DB chưa (dựa vào Email)
-                var khachHang = await _context.Khachhangs
-                    .Include(kh => kh.MaRankNavigation)
-                    .FirstOrDefaultAsync(kh => kh.Email == email);
-
-                if (khachHang != null && khachHang.TrangThai == 0)
-                {
-                    return BadRequest(new { success = false, message = "Tài khoản Facebook này liên kết với một tài khoản đã bị khóa." });
-                }
-
-                // 3. Nếu chưa có, tạo tài khoản mới tự động
-                if (khachHang == null)
-                {
-                    khachHang = new Khachhang
-                    {
-                        MaKh = "FB" + new Random().Next(100000, 999999).ToString(),
-                        HoTen = name,
-                        Email = email,
-                        HinhAnh = pictureUrl,
-                        NgayTao = DateTime.Now,
-                        TrangThai = 1,
-                        MaRank = await GetRankByPointsAsync(0),
-                        DiemTichLuy = 0,
-                        MatKhau = Guid.NewGuid().ToString() // Mật khẩu ngẫu nhiên để bảo mật
-                    };
-                    _context.Khachhangs.Add(khachHang);
-                    await _context.SaveChangesAsync();
-                }
-                else
-                {
-                    // Cập nhật lại hình đại diện mới nhất của Facebook nếu cần
-                    if (!string.IsNullOrEmpty(pictureUrl))
-                    {
-                        khachHang.HinhAnh = pictureUrl;
-                    }
-                    khachHang.MaRank = await GetRankByPointsAsync(khachHang.DiemTichLuy);
-                    await _context.SaveChangesAsync();
-                }
-
-                // 4. Tạo bộ Token của hệ thống
-                var accessToken = GenerateJwtToken(khachHang);
-                var refreshToken = GenerateRefreshToken();
-
-                SetTokenCookie("accessToken", accessToken, 1);
-                SetTokenCookie("refreshToken", refreshToken, 7);
-
-                var refreshTokenEntity = new Refreshtoken
-                {
-                    UserId = khachHang.MaKh,
-                    Token = refreshToken,
-                    IssuedAt = DateTime.Now,
-                    ExpiredAt = DateTime.Now.AddDays(7)
-                };
-
-                _context.Refreshtokens.Add(refreshTokenEntity);
-                await _context.SaveChangesAsync();
-
-                var userResponse = await _context.Khachhangs
-                    .Include(kh => kh.MaRankNavigation)
-                    .FirstOrDefaultAsync(kh => kh.MaKh == khachHang.MaKh);
-
-                return Ok(new
-                {
-                    success = true,
-                    user = new
-                    {
-                        maKH = userResponse.MaKh,
-                        hoTen = userResponse.HoTen,
-                        hinhAnh = userResponse.HinhAnh,
-                        maRank = userResponse.MaRank,
-                        tenRank = userResponse.MaRankNavigation?.TenRank,
-                        email = userResponse.Email,
-                        sdt = userResponse.Sdt,
-                        token = accessToken,
-                        refreshToken = refreshToken
-                    }
-                });
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("Lỗi xác thực Facebook: " + ex.Message);
-                return BadRequest(new { success = false, message = "Lỗi xử lý Facebook Login." });
-            }
-        }
-
         // --- PHƯƠNG ÁN 1: XÁC MINH QUA GOOGLE ---
         [HttpPost("forgot-password-google")]
         public async Task<IActionResult> ForgotPasswordGoogle([FromBody] GoogleLoginRequest request)
@@ -530,41 +433,6 @@ namespace MinhTamHair.KhanchHang.Controllers
             {
                 Console.WriteLine(ex);
                 return BadRequest(new { success = false, message = "Xác thực Google thất bại." });
-            }
-        }
-
-        // --- PHƯƠNG ÁN 1.5: XÁC MINH QUA FACEBOOK ---
-        [HttpPost("forgot-password-facebook")]
-        public async Task<IActionResult> ForgotPasswordFacebook([FromBody] FacebookLoginRequest request)
-        {
-            try
-            {
-                using var client = new HttpClient();
-                var fbResponse = await client.GetAsync($"https://graph.facebook.com/me?fields=id,name,email&access_token={request.Token}");
-
-                if (!fbResponse.IsSuccessStatusCode)
-                {
-                    return BadRequest(new { success = false, message = "Xác thực Facebook thất bại hoặc Token đã hết hạn." });
-                }
-
-                var fbContent = await fbResponse.Content.ReadAsStringAsync();
-                var fbData = System.Text.Json.JsonDocument.Parse(fbContent);
-                var root = fbData.RootElement;
-
-                string fbId = root.GetProperty("id").GetString();
-                string email = root.TryGetProperty("email", out var emailProp) ? emailProp.GetString() : $"{fbId}@facebook.minhtamhair.local";
-
-                var user = await _context.Khachhangs.FirstOrDefaultAsync(kh => kh.Email == email);
-                if (user == null) return BadRequest(new { success = false, message = "Tài khoản Facebook này chưa đăng ký thành viên hoặc không chứa Email hợp lệ." });
-
-                _cache.Set($"Verified_{email}", true, TimeSpan.FromMinutes(10));
-
-                return Ok(new { success = true, email = email });
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("Lỗi xác thực Facebook Forgot Password: " + ex.Message);
-                return BadRequest(new { success = false, message = "Lỗi xử lý Facebook." });
             }
         }
 
@@ -667,7 +535,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             var user = await _context.Khachhangs.FirstOrDefaultAsync(kh => kh.Email == request.Email);
             if (user == null) return BadRequest(new { success = false, message = "Người dùng không tồn tại." });
 
-            user.MatKhau = request.NewPassword; // Nhớ Hash mật khẩu ở đây
+            user.MatKhau = BCrypt.Net.BCrypt.HashPassword(request.NewPassword); // Đã Hash mật khẩu
             await _context.SaveChangesAsync();
 
             return Ok(new { success = true, message = "Đổi mật khẩu thành công!" });
