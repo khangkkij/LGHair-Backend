@@ -24,11 +24,7 @@ namespace MinhTamHair.KhanchHang.Models
 	{
 		public string Credential { get; set; }
 	}
-	
-	public class FacebookLoginRequest
-	{
-		public string Token { get; set; }
-	}
+
 	public class KhachHangResetPasswordRequest
 	{
 		public string Email { get; set; }
