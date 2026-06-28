@@ -41,11 +41,29 @@ namespace MinhTamHair.KhanchHang.Controllers
                 return BadRequest(new { success = false, message = "Vui lòng nhập tài khoản và mật khẩu." });
 
             var khachHang = await _context.Khachhangs
-                .FirstOrDefaultAsync(kh => (kh.Email == request.Username || kh.Sdt == request.Username)
-                                            && kh.MatKhau == request.Password && kh.TrangThai == 1);
+                .FirstOrDefaultAsync(kh => kh.Email == request.Username || kh.Sdt == request.Username);
 
             if (khachHang == null)
                 return Unauthorized(new { success = false, message = "Tài khoản hoặc mật khẩu không chính xác." });
+                
+            bool isPasswordValid = false;
+            if (!string.IsNullOrEmpty(khachHang.MatKhau))
+            {
+                if (khachHang.MatKhau.StartsWith("$2a$") || khachHang.MatKhau.StartsWith("$2b$") || khachHang.MatKhau.StartsWith("$2y$"))
+                {
+                    isPasswordValid = BCrypt.Net.BCrypt.Verify(request.Password, khachHang.MatKhau);
+                }
+                else
+                {
+                    isPasswordValid = (khachHang.MatKhau == request.Password);
+                    // Có thể hash lại mật khẩu cũ ở đây nếu muốn: 
+                    // if (isPasswordValid) khachHang.MatKhau = BCrypt.Net.BCrypt.HashPassword(request.Password);
+                }
+            }
+
+            if (!isPasswordValid)
+                return Unauthorized(new { success = false, message = "Tài khoản hoặc mật khẩu không chính xác." });
+
 			if (khachHang.TrangThai == 0)
 			{
 				return BadRequest(new { success = false, message = "Tài khoản của bạn đã bị khóa. Vui lòng liên hệ quản trị viên." });
@@ -185,7 +203,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 HoTen = request.HoTen,
                 Sdt = request.Sdt,
                 Email = request.Email,
-                MatKhau = request.MatKhau, // Thực tế nên Hash (mã hóa) mật khẩu trước khi lưu
+                MatKhau = BCrypt.Net.BCrypt.HashPassword(request.MatKhau), // Đã mã hóa mật khẩu bằng BCrypt
                 NgayTao = DateTime.Now,
                 MaRank = await GetRankByPointsAsync(0),
                 TrangThai = 1, // 1 là Active
@@ -321,7 +339,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         TrangThai = 1,
                         MaRank = await GetRankByPointsAsync(0), // Không gán cứng RANK01
                         DiemTichLuy = 0,
-                        MatKhau = Guid.NewGuid().ToString()
+                        MatKhau = BCrypt.Net.BCrypt.HashPassword(Guid.NewGuid().ToString())
                     };
                     _context.Khachhangs.Add(khachHang);
                     await _context.SaveChangesAsync();
@@ -431,7 +449,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         TrangThai = 1,
                         MaRank = await GetRankByPointsAsync(0),
                         DiemTichLuy = 0,
-                        MatKhau = Guid.NewGuid().ToString() // Mật khẩu ngẫu nhiên để bảo mật
+                        MatKhau = BCrypt.Net.BCrypt.HashPassword(Guid.NewGuid().ToString()) // Mật khẩu ngẫu nhiên để bảo mật
                     };
                     _context.Khachhangs.Add(khachHang);
                     await _context.SaveChangesAsync();
@@ -651,7 +669,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             var user = await _context.Khachhangs.FirstOrDefaultAsync(kh => kh.Email == request.Email);
             if (user == null) return BadRequest(new { success = false, message = "Người dùng không tồn tại." });
 
-            user.MatKhau = request.NewPassword; // Nhớ Hash mật khẩu ở đây
+            user.MatKhau = BCrypt.Net.BCrypt.HashPassword(request.NewPassword); // Đã Hash mật khẩu
             await _context.SaveChangesAsync();
 
             return Ok(new { success = true, message = "Đổi mật khẩu thành công!" });
@@ -770,7 +788,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             SetTokenCookie("accessToken", newAccessToken, 1);
             SetTokenCookie("refreshToken", newRefreshTokenString, 7);
 
-            return Ok(new { success = true, message = "Làm mới Token thành công." });
+            return Ok(new { success = true, message = "Làm mới Token thành công.", accessToken = newAccessToken });
         }
         [HttpGet("verify-session")]
         [Authorize]
