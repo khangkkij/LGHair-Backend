@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -169,7 +169,7 @@ namespace MinhTamHair.Controllers
                     NgayVaoLam = dto.NgayVaoLam.HasValue ? DateOnly.FromDateTime(dto.NgayVaoLam.Value) : null,
                     TrangThai = dto.TrangThai ?? 1,
                     TenDangNhap = dto.TenDangNhap,
-                    MatKhau = string.IsNullOrEmpty(dto.MatKhau) ? "123456" : dto.MatKhau
+                    MatKhau = BCrypt.Net.BCrypt.HashPassword(string.IsNullOrEmpty(dto.MatKhau) ? "123456" : dto.MatKhau)
                 };
 
                 if (dto.HinhAnhFile != null) nv.HinhAnh = await SaveImageAsync(dto.HinhAnhFile);
@@ -214,7 +214,7 @@ namespace MinhTamHair.Controllers
                 nv.TrangThai = dto.TrangThai ?? 1;
                 nv.TenDangNhap = dto.TenDangNhap;
 
-                if (!string.IsNullOrEmpty(dto.MatKhau)) nv.MatKhau = dto.MatKhau;
+                if (!string.IsNullOrEmpty(dto.MatKhau)) nv.MatKhau = BCrypt.Net.BCrypt.HashPassword(dto.MatKhau);
                 if (dto.HinhAnhFile != null) nv.HinhAnh = await SaveImageAsync(dto.HinhAnhFile);
 
                 await _context.SaveChangesAsync();

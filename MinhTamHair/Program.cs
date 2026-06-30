@@ -54,6 +54,8 @@ builder.Services.AddCors(options =>
     options.AddPolicy("AllowVueApp", policy =>
     {
         policy.WithOrigins(
+                  "http://localhost:3000",   // Dev Proxy HTTP
+                  "https://localhost:3000",  // Dev Proxy HTTPS
                   "http://localhost:5173",   // Customer app HTTP
                   "http://localhost:5174",   // Admin app HTTP
                   "https://localhost:5173",  // Customer app HTTPS (basicSsl)
@@ -97,10 +99,16 @@ builder.Services.AddAuthentication(options =>
     {
         OnMessageReceived = context =>
         {
-            // 1. Ưu tiên tìm Cookie của Admin/Nhân viên trước
-            var token = context.Request.Cookies["adminAccessToken"];
+            // 1. Ưu tiên Header Authorization do Vue gửi (Bearer Token)
+            var authHeader = context.Request.Headers["Authorization"].FirstOrDefault();
+            if (!string.IsNullOrEmpty(authHeader) && authHeader.StartsWith("Bearer "))
+            {
+                // Nếu Frontend đã gửi kèm Token chuẩn qua Header, kệ cho C# tự đọc
+                return Task.CompletedTask;
+            }
 
-            // 2. Nếu không có, tìm tiếp Cookie của Khách hàng (bạn check lại tên cookie khách hàng của bạn là gì để thay vào chữ "accessToken" nhé)
+            // 2. Nếu không có Header (ví dụ gọi từ Swagger, load ảnh...), tìm trong Cookie
+            var token = context.Request.Cookies["adminAccessToken"];
             if (string.IsNullOrEmpty(token))
             {
                 token = context.Request.Cookies["accessToken"];
@@ -194,11 +202,9 @@ app.Use((context, next) =>
 
 
 // Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
-{
+
     app.UseSwagger();
     app.UseSwaggerUI();
-}
 
 app.UseHttpsRedirection();
 app.UseDefaultFiles();
@@ -223,3 +229,4 @@ app.UseAuthorization();     // Bật Phân quyền sau
 app.MapControllers();
 app.MapFallbackToFile("/dist/index.html");
 app.Run();
+ 

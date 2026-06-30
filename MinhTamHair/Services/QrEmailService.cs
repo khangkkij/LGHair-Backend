@@ -33,7 +33,7 @@ namespace MinhTamHair.Services
             string body = $@"
             <div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #f1d592; border-radius: 15px; background: #fff;'>
                 <div style='text-align: center; margin-bottom: 20px;'>
-                    <h2 style='color: #d4af37; margin: 0;'>MINH TÂM HAIR SALON</h2>
+                    <h2 style='color: #d4af37; margin: 0;'>LG HAIR</h2>
                     <p style='color: #888; font-size: 12px; margin-top: 5px; text-transform: uppercase;'>Xác nhận lịch hẹn thành công</p>
                 </div>
                 
@@ -52,7 +52,7 @@ namespace MinhTamHair.Services
                 </div>
                 
                 <p style='margin-top: 40px; text-align: center; color: #888; font-size: 12px; border-top: 1px dashed #eee; padding-top: 20px;'>
-                    Trân trọng,<br/><b>Đội ngũ Minh Tâm Hair Salon</b>
+                    Trân trọng,<br/><b>Đội ngũ LG Hair Salon</b>
                 </p>
             </div>";
 
@@ -64,7 +64,7 @@ namespace MinhTamHair.Services
                 var mailMessage = new MailMessage
                 {
                     From = new MailAddress(senderEmail, senderName),
-                    Subject = $"[Minh Tâm Hair] Xác nhận lịch hẹn #{bookingId}",
+                    Subject = $"[LG Hair] Xác nhận lịch hẹn #{bookingId}",
                     Body = body,
                     IsBodyHtml = true
                 };

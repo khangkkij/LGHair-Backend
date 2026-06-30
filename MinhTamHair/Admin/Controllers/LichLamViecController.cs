@@ -44,19 +44,19 @@ namespace MinhTamHair.Admin.Controllers
         public async Task<IActionResult> GetLichLamViec([FromQuery] string? tuNgay, [FromQuery] string? denNgay, [FromQuery] int? trangThai)
         {
             var today = DateOnly.FromDateTime(DateTime.Now);
-            var sixtyDaysAgo = today.AddDays(-60); // Mốc giới hạn 2 tháng
+            var retentionLimit = today.AddYears(-1).AddDays(-15); // Mốc giới hạn 1 năm 15 ngày
 
             var query = _context.Lichlamviecs
                 .Include(l => l.MaNvNavigation)
                 .ThenInclude(nv => nv.MaLoaiNvNavigation)
-                .Where(l => l.NgayLamViec >= sixtyDaysAgo) // Ràng buộc cứng: Chỉ lấy dữ liệu trong 60 ngày
+                .Where(l => l.NgayLamViec >= retentionLimit) // Ràng buộc cứng: Chỉ lấy dữ liệu trong thời gian cho phép
                 .AsQueryable();
 
-            // Lọc theo dải ngày người dùng chọn (nhưng vẫn nằm trong khoảng 60 ngày trên)
+            // Lọc theo dải ngày người dùng chọn
             if (!string.IsNullOrEmpty(tuNgay) && DateOnly.TryParse(tuNgay, out DateOnly fromDate))
             {
-                // Nếu ngày người dùng chọn cũ hơn 60 ngày, ta lấy mốc 60 ngày làm chuẩn
-                var actualFromDate = fromDate < sixtyDaysAgo ? sixtyDaysAgo : fromDate;
+                // Nếu ngày người dùng chọn cũ hơn mốc, ta lấy mốc làm chuẩn
+                var actualFromDate = fromDate < retentionLimit ? retentionLimit : fromDate;
                 query = query.Where(l => l.NgayLamViec >= actualFromDate);
             }
 
@@ -270,10 +270,10 @@ namespace MinhTamHair.Admin.Controllers
             // --- BẮT ĐẦU LOGIC CLEAR TỰ ĐỘNG ---
             try
             {
-                var sixtyDaysAgo = targetDate.AddDays(-60); // Mốc 2 tháng trước
+                var retentionLimit = targetDate.AddYears(-1).AddDays(-15); // Mốc 1 năm 15 ngày trước
 
-                // Tìm những bản ghi cũ hơn 60 ngày
-                var oldRecords = _context.Lichlamviecs.Where(l => l.NgayLamViec < sixtyDaysAgo);
+                // Tìm những bản ghi cũ hơn giới hạn này
+                var oldRecords = _context.Lichlamviecs.Where(l => l.NgayLamViec < retentionLimit);
 
                 if (oldRecords.Any())
                 {
@@ -333,7 +333,7 @@ namespace MinhTamHair.Admin.Controllers
         }
 
         [HttpPatch("roi-ca-som/{maLich}")]
-        public async Task<IActionResult> MarkAsLeftEarly(int maLich)
+        public async Task<IActionResult> MarkAsLeftEarly(int maLich, [FromBody] RoiCaSomRequest request)
         {
             var lich = await _context.Lichlamviecs.FindAsync(maLich);
             if (lich == null) return NotFound();
@@ -344,7 +344,13 @@ namespace MinhTamHair.Admin.Controllers
                 return BadRequest(new { message = "Chỉ có thể đánh dấu rời ca cho nhân viên đã điểm danh có mặt." });
             }
 
+            if (string.IsNullOrWhiteSpace(request.GhiChu))
+            {
+                return BadRequest(new { message = "Vui lòng nhập lý do rời ca sớm." });
+            }
+
             lich.TrangThai = 3; // Trạng thái mới: Rời ca sớm
+            lich.GhiChu = request.GhiChu;
             await _context.SaveChangesAsync();
 
             return Ok(new { success = true, message = "Đã ghi nhận nhân viên rời ca sớm." });
