@@ -15,9 +15,6 @@ public class SanPhamController : ControllerBase
         _context = context;
     }
 
-    // =========================================================
-    // GET api/SanPham/init
-    // =========================================================
     [HttpGet("init")]
     public async Task<IActionResult> GetInit()
     {
@@ -36,10 +33,6 @@ public class SanPhamController : ControllerBase
         return Ok(new { danhMuc, thuongHieu });
     }
 
-    // =========================================================
-    // GET api/SanPham/filter
-    // Thêm GiaDen (max) để frontend hiển thị dải giá "100k – 200k"
-    // =========================================================
     [HttpGet("filter")]
     public async Task<IActionResult> Filter(
         [FromQuery] string? search,
@@ -89,6 +82,28 @@ public class SanPhamController : ControllerBase
         var totalPages = (int)Math.Ceiling(total / (double)pageSize);
         var paged = allList.Skip((page - 1) * pageSize).Take(pageSize).ToList();
 
+        // Top 3 sản phẩm bán nhiều nhất TRONG TỪNG DANH MỤC (mỗi danh mục có 3 hot riêng)
+        var hotProductIds = (await _context.ChitietHoadonSps
+            .Join(
+                _context.BienTheSanphams,
+                ct => ct.MaBienThe,
+                bt => bt.MaBienThe,
+                (ct, bt) => new { bt.MaSanPham, ct.SoLuong }
+            )
+            .Join(
+                _context.SanPhams,
+                x => x.MaSanPham,
+                sp => sp.MaSp,
+                (x, sp) => new { x.MaSanPham, x.SoLuong, sp.MaDanhMuc }
+            )
+            .GroupBy(x => new { x.MaSanPham, x.MaDanhMuc })
+            .Select(g => new { g.Key.MaSanPham, g.Key.MaDanhMuc, TongBan = g.Sum(x => x.SoLuong) })
+            .ToListAsync())
+            .GroupBy(x => x.MaDanhMuc)
+            .SelectMany(g => g.OrderByDescending(x => x.TongBan).Take(3))
+            .Select(x => x.MaSanPham)
+            .ToHashSet();
+
         var result = paged.Select(sp =>
         {
             var btHoatDong = sp.BienTheSanphams
@@ -110,12 +125,13 @@ public class SanPhamController : ControllerBase
                 sp.TenSp,
                 sp.MoTa,
                 sp.HinhAnhDaiDien,
-                GiaTu = giaMin,   // giá thấp nhất
-                GiaDen = giaMax,   // giá cao nhất  ← MỚI
+                GiaTu = giaMin,
+                GiaDen = giaMax,
                 SoLuongTon = tonKho,
                 SoBienThe = btHoatDong.Count,
                 SoSao = soSao,
                 SoLuongDanhGia = danhGia.Count,
+                IsHot = hotProductIds.Contains(sp.MaSp),
                 DanhMuc = sp.MaDanhMucTheNavigation == null ? null : new
                 {
                     sp.MaDanhMucTheNavigation.MaDMSP,
@@ -153,6 +169,13 @@ public class SanPhamController : ControllerBase
         var btHoatDong = sp.BienTheSanphams
             .Where(bt => bt.TrangThai == 1)
             .OrderBy(bt => bt.GiaBan)
+            .ToList();
+
+        // Tất cả biến thể còn active (kể cả hết hàng) — để hiển thị trên trang chi tiết
+        var btHienThi = sp.BienTheSanphams
+            .Where(bt => bt.TrangThai == 1 || bt.TrangThai==0)
+            .OrderBy(bt => bt.SoLuongTon == 0 ? 1 : 0) // biến thể còn hàng lên trước
+            .ThenBy(bt => bt.GiaBan)
             .ToList();
 
         var danhGia = sp.DanhgiaSanphams
@@ -209,8 +232,8 @@ public class SanPhamController : ControllerBase
                 .Select(h => new { h.MaHa, h.DuongDan })
                 .ToList(),
 
-            // Biến thể — sắp theo giá tăng dần
-            BienThes = btHoatDong.Select(bt => new
+            // Biến thể — còn hàng lên trước, hết hàng xuống dưới
+            BienThes = btHienThi.Select(bt => new
             {
                 bt.MaBienThe,
                 bt.TenBienThe,

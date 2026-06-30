@@ -84,10 +84,62 @@ public partial class MinhTamHairContext : DbContext
     public  DbSet<YeuThichDichVu> YeuThichDichVus { get; set; }
     public  DbSet<YeuThichSanPham> YeuThichSanPhams { get; set; }
     public DbSet<HinhanhBT> HinhanhBTs { get; set; }
-
+    public virtual DbSet<LichSuTonKho> LichSuTonKhos { get; set; }
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+        modelBuilder.Entity<LichSuTonKho>(entity =>
+        {
+            entity.HasKey(e => e.MaLich);
+
+            entity.ToTable("LICHSU_TONKHO");
+
+            entity.Property(e => e.MaLich)
+                .HasColumnName("maLich");
+
+            entity.Property(e => e.MaBienThe)
+                .HasMaxLength(10)
+                .IsUnicode(false)
+                .HasColumnName("maBienThe");
+
+            entity.Property(e => e.LoaiBienDong)
+                .HasMaxLength(20)
+                .IsUnicode(false)
+                .HasColumnName("loaiBienDong");
+
+            entity.Property(e => e.SoLuongThayDoi)
+                .HasColumnName("soLuongThayDoi");
+
+            entity.Property(e => e.TonTruoc)
+                .HasColumnName("tonTruoc");
+
+            entity.Property(e => e.TonSau)
+                .HasColumnName("tonSau");
+
+            entity.Property(e => e.MaChungTu)
+                .HasMaxLength(10)
+                .IsUnicode(false)
+                .HasColumnName("maChungTu");
+
+            entity.Property(e => e.MaNv)
+                .HasMaxLength(10)
+                .IsUnicode(false)
+                .HasColumnName("maNV");
+
+            entity.Property(e => e.GhiChu)
+                .HasMaxLength(255)
+                .HasColumnName("ghiChu");
+
+            entity.Property(e => e.ThoiGian)
+                .HasColumnType("datetime")
+                .HasColumnName("thoiGian")
+                .HasDefaultValueSql("(getdate())");
+
+            entity.HasOne(d => d.MaBienTheNavigation)
+                .WithMany()
+                .HasForeignKey(d => d.MaBienThe)
+                .HasConstraintName("FK_LICHSU_TONKHO_BIENTHE");
+        });
         modelBuilder.Entity<HinhanhBT>(entity =>
         {
             entity.HasKey(e => e.MaHa);

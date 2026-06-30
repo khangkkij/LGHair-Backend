@@ -17,9 +17,6 @@ public class QuanLySanPhamController : ControllerBase
         _env = env;
     }
 
-    // ================================================================
-    // HELPER
-    // ================================================================
     private async Task<string?> SaveImageAsync(IFormFile? file, string subfolder)
     {
         if (file == null || file.Length == 0) return null;
@@ -46,9 +43,6 @@ public class QuanLySanPhamController : ControllerBase
         if (System.IO.File.Exists(full)) System.IO.File.Delete(full);
     }
 
-    // ================================================================
-    // LOOKUP DATA
-    // ================================================================
 
     [HttpGet("danhmuc")]
     public async Task<IActionResult> GetDanhMuc()
@@ -70,9 +64,6 @@ public class QuanLySanPhamController : ControllerBase
         return Ok(list);
     }
 
-    // ================================================================
-    // LIST SẢN PHẨM
-    // ================================================================
     [HttpGet]
     public async Task<IActionResult> GetAll(
         [FromQuery] string? keyword,
@@ -80,6 +71,7 @@ public class QuanLySanPhamController : ControllerBase
         [FromQuery] string? maTH,
         [FromQuery] int? trangThai)
     {
+        await DongBoTrangThaiTheoSoLuongAsync();
         var query = _context.SanPhams
             .Include(s => s.BienTheSanphams)
             .AsQueryable();
@@ -113,9 +105,6 @@ public class QuanLySanPhamController : ControllerBase
         return Ok(list);
     }
 
-    // ================================================================
-    // TẠO SẢN PHẨM
-    // ================================================================
     [HttpPost]
     public async Task<IActionResult> Create([FromForm] CreateSanPhamDto dto)
     {
@@ -155,9 +144,6 @@ public class QuanLySanPhamController : ControllerBase
         return Ok(new { message = "Thêm sản phẩm thành công.", maSp = sp.MaSp });
     }
 
-    // ================================================================
-    // CẬP NHẬT SẢN PHẨM
-    // ================================================================
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(string id, [FromForm] UpdateSanPhamDto dto)
     {
@@ -190,9 +176,6 @@ public class QuanLySanPhamController : ControllerBase
         return Ok(new { message = "Cập nhật thành công." });
     }
 
-    // ================================================================
-    // XÓA SẢN PHẨM
-    // ================================================================
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(string id)
     {
@@ -237,9 +220,6 @@ public class QuanLySanPhamController : ControllerBase
         return Ok(new { message = "Đã xóa sản phẩm." });
     }
 
-    // ================================================================
-    // TOGGLE TRẠNG THÁI
-    // ================================================================
     [HttpPatch("{id}/trangthai")]
     public async Task<IActionResult> ToggleStatus(string id, [FromBody] ToggleStatusDto dto)
     {
@@ -250,11 +230,6 @@ public class QuanLySanPhamController : ControllerBase
         return Ok(new { message = "Đã cập nhật trạng thái.", trangThai = sp.TrangThai });
     }
 
-    // ================================================================
-    // GALLERY ẢNH SẢN PHẨM
-    // ================================================================
-
-    // GET api/QuanLySanPham/{maSP}/gallery
     [HttpGet("{maSP}/gallery")]
     public async Task<IActionResult> GetGallerySP(string maSP)
     {
@@ -265,7 +240,6 @@ public class QuanLySanPhamController : ControllerBase
         return Ok(list);
     }
 
-    // POST api/QuanLySanPham/{maSP}/gallery  (multipart/form-data, field: files)
     [HttpPost("{maSP}/gallery")]
     public async Task<IActionResult> AddGallerySP(string maSP, [FromForm] GalleryUploadDto dto)
     {
@@ -289,7 +263,6 @@ public class QuanLySanPhamController : ControllerBase
         return Ok(new { message = $"Đã thêm {added.Count} ảnh.", images = added });
     }
 
-    // DELETE api/QuanLySanPham/gallery/{maHa}
     [HttpDelete("gallery/{maHa:int}")]
     public async Task<IActionResult> DeleteGallerySP(int maHa)
     {
@@ -301,14 +274,10 @@ public class QuanLySanPhamController : ControllerBase
         return Ok(new { message = "Đã xóa ảnh." });
     }
 
-    // ================================================================
-    // BIẾN THỂ
-    // ================================================================
-
-    // GET api/QuanLySanPham/{maSP}/bienthe
     [HttpGet("{maSP}/bienthe")]
     public async Task<IActionResult> GetBienThe(string maSP)
     {
+        await DongBoTrangThaiTheoSoLuongAsync(maSP);
         var list = await _context.BienTheSanphams
             .Where(bt => bt.MaSanPham == maSP)
             .OrderBy(bt => bt.GiaBan)
@@ -327,8 +296,6 @@ public class QuanLySanPhamController : ControllerBase
 
         return Ok(list);
     }
-
-    // POST api/QuanLySanPham/bienthe
     [HttpPost("bienthe")]
     public async Task<IActionResult> CreateBienThe([FromForm] CreateBienTheDto dto)
     {
@@ -351,11 +318,10 @@ public class QuanLySanPhamController : ControllerBase
             HinhAnhDaiDien = imgPath,
             TrangThai = dto.TrangThai ?? 1,
         };
-
+        ChuanHoaTrangThaiBienThe(bt);
         _context.BienTheSanphams.Add(bt);
         await _context.SaveChangesAsync();
 
-        // Lưu gallery biến thể
         if (dto.GalleryFiles != null && dto.GalleryFiles.Count > 0)
         {
             foreach (var gf in dto.GalleryFiles.Take(10))
@@ -366,11 +332,24 @@ public class QuanLySanPhamController : ControllerBase
             }
             await _context.SaveChangesAsync();
         }
-
+        if (bt.SoLuongTon.GetValueOrDefault() > 0)
+        {
+            _context.LichSuTonKhos.Add(new LichSuTonKho
+            {
+                MaBienThe = bt.MaBienThe,
+                LoaiBienDong = "DIEU_CHINH",
+                SoLuongThayDoi = bt.SoLuongTon!.Value,
+                TonTruoc = 0,
+                TonSau = bt.SoLuongTon.Value,
+                MaChungTu = null,
+                MaNv = dto.MaNv,
+                GhiChu = string.IsNullOrWhiteSpace(dto.GhiChu) ? "Tạo biến thể mới" : dto.GhiChu.Trim(),
+                ThoiGian = DateTime.Now
+            });
+            await _context.SaveChangesAsync();
+        }
         return Ok(new { message = "Thêm biến thể thành công.", maBienThe = bt.MaBienThe });
     }
-
-    // PUT api/QuanLySanPham/bienthe/{maBienThe}
     [HttpPut("bienthe/{maBienThe}")]
     public async Task<IActionResult> UpdateBienThe(string maBienThe, [FromForm] UpdateBienTheDto dto)
     {
@@ -379,9 +358,33 @@ public class QuanLySanPhamController : ControllerBase
 
         bt.TenBienThe = dto.TenBienThe?.Trim() ?? bt.TenBienThe;
         bt.GiaBan = dto.GiaBan ?? bt.GiaBan;
-        bt.SoLuongTon = dto.SoLuong ?? bt.SoLuongTon;
         bt.PhanTramHoaHong = dto.PhanTramHoaHong ?? bt.PhanTramHoaHong;
         bt.TrangThai = dto.TrangThai ?? bt.TrangThai;
+
+        if (dto.SoLuong.HasValue && dto.SoLuong.Value != (bt.SoLuongTon ?? 0))
+        {
+            if (string.IsNullOrWhiteSpace(dto.GhiChu))
+                return BadRequest(new { message = "Vui lòng nhập lý do điều chỉnh số lượng." });
+
+            var tonTruoc = bt.SoLuongTon ?? 0;
+            var tonSau = dto.SoLuong.Value;
+            bt.SoLuongTon = tonSau;
+
+            _context.LichSuTonKhos.Add(new LichSuTonKho
+            {
+                MaBienThe = bt.MaBienThe,
+                LoaiBienDong = "DIEU_CHINH",
+                SoLuongThayDoi = tonSau - tonTruoc,
+                TonTruoc = tonTruoc,
+                TonSau = tonSau,
+                MaChungTu = null,
+                MaNv = dto.MaNv,
+                GhiChu = dto.GhiChu.Trim(),
+                ThoiGian = DateTime.Now
+            });
+        }
+
+        ChuanHoaTrangThaiBienThe(bt);
 
         if (dto.File != null && dto.File.Length > 0)
         {
@@ -389,7 +392,6 @@ public class QuanLySanPhamController : ControllerBase
             bt.HinhAnhDaiDien = await SaveImageAsync(dto.File, "bienthe");
         }
 
-        // Thêm gallery mới
         if (dto.GalleryFiles != null && dto.GalleryFiles.Count > 0)
         {
             foreach (var gf in dto.GalleryFiles.Take(10))
@@ -403,8 +405,6 @@ public class QuanLySanPhamController : ControllerBase
         await _context.SaveChangesAsync();
         return Ok(new { message = "Cập nhật biến thể thành công." });
     }
-
-    // DELETE api/QuanLySanPham/bienthe/{maBienThe}
     [HttpDelete("bienthe/{maBienThe}")]
     public async Task<IActionResult> DeleteBienThe(string maBienThe)
     {
@@ -448,12 +448,6 @@ public class QuanLySanPhamController : ControllerBase
 
         return Ok(new { message = "Đã xóa biến thể." });
     }
-
-    // ================================================================
-    // GALLERY ẢNH BIẾN THỂ
-    // ================================================================
-
-    // GET api/QuanLySanPham/bienthe/{maBienThe}/gallery
     [HttpGet("bienthe/{maBienThe}/gallery")]
     public async Task<IActionResult> GetGalleryBT(string maBienThe)
     {
@@ -463,8 +457,6 @@ public class QuanLySanPhamController : ControllerBase
             .ToListAsync();
         return Ok(list);
     }
-
-    // POST api/QuanLySanPham/bienthe/{maBienThe}/gallery
     [HttpPost("bienthe/{maBienThe}/gallery")]
     public async Task<IActionResult> AddGalleryBT(string maBienThe, [FromForm] GalleryUploadDto dto)
     {
@@ -487,8 +479,6 @@ public class QuanLySanPhamController : ControllerBase
 
         return Ok(new { message = $"Đã thêm {added.Count} ảnh.", images = added });
     }
-
-    // DELETE api/QuanLySanPham/bienthe/gallery/{maHa}
     [HttpDelete("bienthe/gallery/{maHa:int}")]
     public async Task<IActionResult> DeleteGalleryBT(int maHa)
     {
@@ -499,10 +489,6 @@ public class QuanLySanPhamController : ControllerBase
         await _context.SaveChangesAsync();
         return Ok(new { message = "Đã xóa ảnh." });
     }
-
-    // ================================================================
-    // KHÁCH HÀNG: INIT
-    // ================================================================
     [HttpGet("init")]
     public async Task<IActionResult> GetInit()
     {
@@ -520,10 +506,6 @@ public class QuanLySanPhamController : ControllerBase
 
         return Ok(new { danhMuc, thuongHieu });
     }
-
-    // ================================================================
-    // KHÁCH HÀNG: LỌC + PHÂN TRANG
-    // ================================================================
     [HttpGet("filter")]
     public async Task<IActionResult> Filter(
         [FromQuery] string? search,
@@ -533,6 +515,7 @@ public class QuanLySanPhamController : ControllerBase
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 9)
     {
+        await DongBoTrangThaiTheoSoLuongAsync();
         var query = _context.SanPhams
             .Where(sp => sp.TrangThai == 1)
             .Include(sp => sp.MaDanhMucTheNavigation)
@@ -607,13 +590,10 @@ public class QuanLySanPhamController : ControllerBase
 
         return Ok(new { data = result, totalPages, total });
     }
-
-    // ================================================================
-    // KHÁCH HÀNG: CHI TIẾT SẢN PHẨM
-    // ================================================================
     [HttpGet("{id}")]
     public async Task<IActionResult> GetById(string id)
     {
+        await DongBoTrangThaiTheoSoLuongAsync(id);
         var sp = await _context.SanPhams
             .Include(s => s.MaDanhMucTheNavigation)
             .Include(s => s.Thuonghieu)
@@ -669,8 +649,6 @@ public class QuanLySanPhamController : ControllerBase
                 sp.Thuonghieu.TenThuongHieu,
                 sp.Thuonghieu.HinhAnh,
             },
-
-            // Gallery ảnh sản phẩm
             HinhAnhs = sp.Hinhanhsps.Select(h => new { h.MaHa, h.DuongDan }).ToList(),
 
             BienThes = btHD.Select(bt => new
@@ -681,7 +659,6 @@ public class QuanLySanPhamController : ControllerBase
                 bt.SoLuongTon,
                 bt.HinhAnhDaiDien,
                 bt.PhanTramHoaHong,
-                // Gallery ảnh biến thể
                 HinhAnhs = bt.HinhanhBTs.Select(h => new { h.MaHa, h.DuongDan }).ToList(),
             }).ToList(),
 
@@ -692,6 +669,27 @@ public class QuanLySanPhamController : ControllerBase
             SoLuongDanhGia = danhGia.Count,
             SuggestedProducts = goiY,
         });
+    }
+    private static void ChuanHoaTrangThaiBienThe(BienTheSanpham bt)
+    {
+        bt.TrangThai = (bt.SoLuongTon ?? 0) > 0 ? 1 : 0;
+    }
+    private async Task DongBoTrangThaiTheoSoLuongAsync(string? maSanPham = null)
+    {
+        var query = _context.BienTheSanphams.Where(bt =>
+            ((bt.SoLuongTon ?? 0) == 0 && bt.TrangThai == 1) ||
+            ((bt.SoLuongTon ?? 0) > 0 && bt.TrangThai == 0));
+
+        if (!string.IsNullOrWhiteSpace(maSanPham))
+            query = query.Where(bt => bt.MaSanPham == maSanPham);
+
+        var lechs = await query.ToListAsync();
+        if (lechs.Count == 0) return;
+
+        foreach (var bt in lechs)
+            bt.TrangThai = (bt.SoLuongTon ?? 0) > 0 ? 1 : 0;
+
+        await _context.SaveChangesAsync();
     }
 }
 
@@ -707,7 +705,7 @@ public class CreateSanPhamDto
     public string? MaTh { get; set; }
     public int? TrangThai { get; set; }
     public IFormFile? File { get; set; }
-    public List<IFormFile>? GalleryFiles { get; set; }   // ← ảnh gallery
+    public List<IFormFile>? GalleryFiles { get; set; }
 }
 
 public class UpdateSanPhamDto
@@ -717,7 +715,7 @@ public class UpdateSanPhamDto
     public string? MaTh { get; set; }
     public int? TrangThai { get; set; }
     public IFormFile? File { get; set; }
-    public List<IFormFile>? GalleryFiles { get; set; }   // ← ảnh gallery mới thêm
+    public List<IFormFile>? GalleryFiles { get; set; }
 }
 
 public class ToggleStatusDto
@@ -735,7 +733,9 @@ public class CreateBienTheDto
     public decimal? PhanTramHoaHong { get; set; }
     public int? TrangThai { get; set; }
     public IFormFile? File { get; set; }
-    public List<IFormFile>? GalleryFiles { get; set; }   // ← ảnh gallery
+    public List<IFormFile>? GalleryFiles { get; set; }
+    public string? MaNv { get; set; }
+    public string? GhiChu { get; set; }
 }
 
 public class UpdateBienTheDto
@@ -747,7 +747,9 @@ public class UpdateBienTheDto
     public decimal? PhanTramHoaHong { get; set; }
     public int? TrangThai { get; set; }
     public IFormFile? File { get; set; }
-    public List<IFormFile>? GalleryFiles { get; set; }   // ← ảnh gallery mới thêm
+    public List<IFormFile>? GalleryFiles { get; set; }
+    public string? MaNv { get; set; }
+    public string? GhiChu { get; set; }
 }
 
 public class GalleryUploadDto
