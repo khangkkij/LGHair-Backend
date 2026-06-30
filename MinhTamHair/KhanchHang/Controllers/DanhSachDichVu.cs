@@ -40,6 +40,24 @@ namespace MinhTamHair.KhanchHang.Controllers
                 })
                 .ToListAsync();
 
+            // ================= HOT SERVICES (đếm số lần đặt) =================
+            // Top 3 dịch vụ được đặt nhiều nhất TRONG TỪNG DANH MỤC (mỗi danh mục có 3 hot riêng)
+            var hotServiceIds = (await _context.ChitietLichdats
+                .Where(x => x.MaDv != null)
+                .Join(
+                    _context.Dichvus,
+                    ct => ct.MaDv,
+                    dv => dv.MaDv,
+                    (ct, dv) => new { ct.MaDv, dv.MaDm }
+                )
+                .GroupBy(x => new { x.MaDv, x.MaDm })
+                .Select(g => new { g.Key.MaDv, g.Key.MaDm, SoLuong = g.Count() })
+                .ToListAsync())
+                .GroupBy(x => x.MaDm)
+                .SelectMany(g => g.OrderByDescending(x => x.SoLuong).Take(3))
+                .Select(x => x.MaDv)
+                .ToHashSet();
+
             // ================= SERVICES (SAFE LOAD) =================
             var servicesRaw = await _context.Dichvus
                 .Where(x => x.TrangThai == 1)
@@ -67,6 +85,9 @@ namespace MinhTamHair.KhanchHang.Controllers
                     MaDm = x.MaDm,
 
                     HinhAnh = x.Hinhanhs.FirstOrDefault()?.DuongDan,
+
+                    // ĐÁNH DẤU HOT
+                    IsHot = hotServiceIds.Contains(x.MaDv),
 
                     // BƠM DỮ LIỆU SALE RA CHUẨN NHƯ HÀM FILTER
                     FlashSale = flash == null ? null : new
@@ -99,7 +120,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                     GiaGoc = x.Gia,
 
-                    Gia = flash == null ? x.Gia: x.Gia - (x.Gia * flash.PhanTramGiam / 100),
+                    Gia = flash == null ? x.Gia : x.Gia - (x.Gia * flash.PhanTramGiam / 100),
 
                     x.MoTa,
                     x.HinhAnh,
@@ -177,6 +198,24 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             var totalItems = await query.CountAsync();
 
+            // ================= HOT SERVICES =================
+            // Top 3 dịch vụ được đặt nhiều nhất TRONG TỪNG DANH MỤC (mỗi danh mục có 3 hot riêng)
+            var hotServiceIds = (await _context.ChitietLichdats
+                .Where(x => x.MaDv != null)
+                .Join(
+                    _context.Dichvus,
+                    ct => ct.MaDv,
+                    dv => dv.MaDv,
+                    (ct, dv) => new { ct.MaDv, dv.MaDm }
+                )
+                .GroupBy(x => new { x.MaDv, x.MaDm })
+                .Select(g => new { g.Key.MaDv, g.Key.MaDm, SoLuong = g.Count() })
+                .ToListAsync())
+                .GroupBy(x => x.MaDm)
+                .SelectMany(g => g.OrderByDescending(x => x.SoLuong).Take(3))
+                .Select(x => x.MaDv)
+                .ToHashSet();
+
             // ================= LOAD SAFE (NO PROJECTION IN SQL) =================
             var list = await query
                 .Include(x => x.Hinhanhs)
@@ -206,6 +245,9 @@ namespace MinhTamHair.KhanchHang.Controllers
                     x.MoTa,
 
                     HinhAnh = x.Hinhanhs.FirstOrDefault()?.DuongDan,
+
+                    // ĐÁNH DẤU HOT
+                    IsHot = hotServiceIds.Contains(x.MaDv),
 
                     FlashSale = flash == null ? null : new
                     {
