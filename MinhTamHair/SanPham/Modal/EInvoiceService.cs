@@ -133,6 +133,50 @@ namespace MinhTamHair.Services
                 return new EInvoiceResult { Success = false, ErrorMessage = hoaDonDT.GhiChuLoi };
             }
 
+            // ===== PHÂN BỔ GIẢM GIÁ VOUCHER (NẾU CÓ) VÀO TỪNG DÒNG HÀNG =====
+            // HoaDon.ThanhTien là số tiền khách THỰC TRẢ (đã trừ voucher, cộng thêm phí ship nếu có).
+            // Nếu không phân bổ, hóa đơn sẽ ghi sai cao hơn số tiền khách thực trả.
+            decimal phiShip = 0m;
+            var thongTinGH = await _context.ThongtinGiaohangs.FirstOrDefaultAsync(t => t.MaHd == hoaDonDT.MaHd);
+            if (thongTinGH != null) phiShip = thongTinGH.PhiShip ?? 0m;
+
+            decimal tongTruocGiam = items.Sum(i => i.Quantity * i.UnitPrice);
+            decimal tongThucTraHangHoa = (hoaDon?.ThanhTien ?? tongTruocGiam) - phiShip;
+            decimal tongGiamGia = tongTruocGiam - tongThucTraHangHoa;
+
+            if (tongGiamGia > 0 && tongTruocGiam > 0)
+            {
+                decimal daPhanBo = 0m;
+                for (int i = 0; i < items.Count; i++)
+                {
+                    decimal tyLe = (items[i].Quantity * items[i].UnitPrice) / tongTruocGiam;
+                    decimal giamCuaDong = Math.Round(tongGiamGia * tyLe, 0);
+
+                    // Dòng cuối nhận phần dư làm tròn để tổng khớp chính xác tuyệt đối
+                    if (i == items.Count - 1)
+                        giamCuaDong = tongGiamGia - daPhanBo;
+
+                    items[i].DiscountAmount = giamCuaDong;
+                    daPhanBo += giamCuaDong;
+                }
+            }
+
+            // Thêm dòng phí vận chuyển riêng (nếu có), không áp dụng giảm giá
+            if (phiShip > 0)
+            {
+                items.Add(new EInvoiceItemDto
+                {
+                    LineNumber = lineNo++,
+                    LineType = 1,
+                    ItemCode = "PHISHIP",
+                    ItemName = "Phi van chuyen",
+                    Unit = "Lan",
+                    Quantity = 1,
+                    UnitPrice = phiShip,
+                    TaxRate = hoaDonDT.LoaiKhach == 1 ? 10 : null
+                });
+            }
+
             var buyer = new EInvoiceBuyerDto
             {
                 Type = hoaDonDT.LoaiKhach == 1 ? "company" : "personal",
@@ -173,7 +217,8 @@ namespace MinhTamHair.Services
                     unit = i.Unit,
                     quantity = i.Quantity,
                     unit_price = i.UnitPrice,
-                    tax_rate = i.TaxRate
+                    tax_rate = i.TaxRate,
+                    discount_amount = i.DiscountAmount > 0 ? (decimal?)i.DiscountAmount : null
                 }),
                 notes = $"Don hang {hoaDonDT.MaHd}"
             };

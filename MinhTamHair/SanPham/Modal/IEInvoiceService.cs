@@ -39,4 +39,5 @@ public class EInvoiceItemDto
     public decimal Quantity { get; set; }
     public decimal UnitPrice { get; set; }
     public int? TaxRate { get; set; }   // bắt buộc khi xuất HĐ GTGT: 0/5/8/10, -1, -2
+    public decimal DiscountAmount { get; set; } = 0m; // Số tiền chiết khấu phân bổ cho dòng này (nếu đơn có áp voucher)
 }
