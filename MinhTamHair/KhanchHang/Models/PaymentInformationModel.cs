@@ -21,6 +21,7 @@
         public string? MaCode { get; set; } = string.Empty;
         /// <summary>Tối đa 1 mã voucher. Ưu tiên hơn <see cref="MaCode"/> khi có phần tử.</summary>
         public List<string>? MaCodes { get; set; } = new();
+        public InvoiceInfoDto? InvoiceInfo { get; set; }
     }
 
     public class ServiceItemRequest

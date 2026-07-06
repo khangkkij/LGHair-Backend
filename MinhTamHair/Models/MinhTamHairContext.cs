@@ -85,9 +85,28 @@ public partial class MinhTamHairContext : DbContext
     public  DbSet<YeuThichSanPham> YeuThichSanPhams { get; set; }
     public DbSet<HinhanhBT> HinhanhBTs { get; set; }
     public virtual DbSet<LichSuTonKho> LichSuTonKhos { get; set; }
+    public virtual DbSet<HoaDonDienTu> HoaDonDienTus { get; set; }
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+        modelBuilder.Entity<HoaDonDienTu>(entity =>
+        {
+            entity.HasKey(e => e.MaHddt);
+            entity.ToTable("HOA_DON_DIEN_TU");
+
+            entity.Property(e => e.MaHddt).HasMaxLength(50).IsUnicode(false);
+            entity.Property(e => e.MaHd).HasMaxLength(50).IsUnicode(false);
+            entity.Property(e => e.Mst).HasMaxLength(20).IsUnicode(false);
+            entity.Property(e => e.ReferenceCode).HasMaxLength(100);
+            entity.Property(e => e.SoHoaDon).HasMaxLength(20);
+            entity.Property(e => e.KyHieu).HasMaxLength(20);
+            entity.Property(e => e.TenNguoiMua).HasMaxLength(200);
+            entity.Property(e => e.DiaChiXuatHd).HasMaxLength(300);
+            entity.Property(e => e.EmailNhanHd).HasMaxLength(100);
+            entity.Property(e => e.LinkPdf).HasMaxLength(500);
+            entity.Property(e => e.LinkXml).HasMaxLength(500);
+            entity.Property(e => e.GhiChuLoi).HasMaxLength(500);
+        });
         modelBuilder.Entity<LichSuTonKho>(entity =>
         {
             entity.HasKey(e => e.MaLich);
@@ -117,7 +136,7 @@ public partial class MinhTamHairContext : DbContext
                 .HasColumnName("tonSau");
 
             entity.Property(e => e.MaChungTu)
-                .HasMaxLength(10)
+                .HasMaxLength(50)
                 .IsUnicode(false)
                 .HasColumnName("maChungTu");
 

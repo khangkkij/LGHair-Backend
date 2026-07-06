@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using MinhTamHair.KhanchHang.Models;
 using MinhTamHair.Models;
 using MinhTamHair.Services;
@@ -15,12 +16,14 @@ namespace MinhTamHair.KhanchHang.Controllers
         private readonly MinhTamHairContext _context;
         private readonly IConfiguration _configuration;
         private readonly IQrEmailService _qrEmailService;
+        private readonly IServiceScopeFactory _scopeFactory;
 
-        public ThanhToanTongController(MinhTamHairContext context, IConfiguration configuration, IQrEmailService qrEmailService)
+        public ThanhToanTongController(MinhTamHairContext context, IConfiguration configuration, IQrEmailService qrEmailService, IServiceScopeFactory scopeFactory)
         {
             _context = context;
             _configuration = configuration;
             _qrEmailService = qrEmailService;
+            _scopeFactory = scopeFactory;
         }
 
         // TẢI DANH SÁCH DỊCH VỤ 
@@ -297,11 +300,25 @@ namespace MinhTamHair.KhanchHang.Controllers
                                 DonGiaLucBan = p.Gia,
                                 ThanhTien = p.Gia * p.SoLuong
                             });
-
+                            //Phần lịch sử tồn kho liên quan đến bán hàng
                             var bienthe = await _context.BienTheSanphams.FindAsync(p.Id);
                             if (bienthe != null && bienthe.SoLuongTon >= p.SoLuong)
                             {
+                                var tonTruoc = bienthe.SoLuongTon ?? 0;
                                 bienthe.SoLuongTon -= p.SoLuong;
+
+                                _context.LichSuTonKhos.Add(new LichSuTonKho
+                                {
+                                    MaBienThe = bienthe.MaBienThe,
+                                    LoaiBienDong = "BAN",
+                                    SoLuongThayDoi = -p.SoLuong,
+                                    TonTruoc = tonTruoc,
+                                    TonSau = bienthe.SoLuongTon.Value,
+                                    MaChungTu = maHd,
+                                    MaNv = null,
+                                    GhiChu = $"Bán hàng theo đơn {maHd}",
+                                    ThoiGian = DateTime.Now
+                                });
                             }
                         }
 
@@ -340,6 +357,34 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                     await _context.SaveChangesAsync();
                     await transaction.CommitAsync();
+
+                    // PHẦN XUẤT HÓA ĐƠN ĐIỆN TỬ
+                    // Luật yêu cầu MỌI giao dịch bán hàng đều phải xuất hóa đơn, không phụ thuộc khách có yêu cầu hay không.
+                    // req.InvoiceInfo chỉ dùng để xác định đây là hóa đơn cá nhân hay doanh nghiệp (có MST) và thông tin xuất hóa đơn riêng (nếu khác thông tin giao hàng).
+                    {
+                        bool laDoanhNghiep = req.InvoiceInfo?.LaDoanhNghiep ?? false;
+                        var maHddt = "HD" + DateTime.Now.ToString("yyMMddHHmmss");
+                        _context.HoaDonDienTus.Add(new HoaDonDienTu
+                        {
+                            MaHddt = maHddt,
+                            MaHd = maHd,
+                            LoaiKhach = laDoanhNghiep ? (byte)1 : (byte)0,
+                            TenNguoiMua = laDoanhNghiep ? req.InvoiceInfo?.TenCongTy : (req.CustomerName ?? "Khach hang"),
+                            Mst = laDoanhNghiep ? req.InvoiceInfo?.Mst : null,
+                            DiaChiXuatHd = req.InvoiceInfo?.DiaChiXuatHD ?? req.DeliveryInfo?.DiaChi,
+                            EmailNhanHd = req.InvoiceInfo?.EmailNhanHD ?? req.Email,
+                            TrangThai = 0
+                        });
+                        await _context.SaveChangesAsync();
+
+                        _ = Task.Run(async () =>
+                        {
+                            using var scope = _scopeFactory.CreateScope();
+                            var eInvoiceService = scope.ServiceProvider.GetRequiredService<IEInvoiceService>();
+                            await eInvoiceService.PhatHanhHoaDonAsync(maHddt);
+                        }); // fire-and-forget với scope riêng, không dùng _context của request đã kết thúc
+
+                    }
 
 
                     // BƯỚC 6: TẠO LINK VNPAY HOẶC MOMO
@@ -618,6 +663,9 @@ namespace MinhTamHair.KhanchHang.Controllers
         public string? PaymentMode { get; set; }
         public string? ServicePaymentMethod { get; set; }
         public string? ProductPaymentMethod { get; set; }
+
+        // Phần hóa đơn điện tử
+        public InvoiceInfoDto? InvoiceInfo { get; set; }
     }
 
     [System.ComponentModel.DataAnnotations.Schema.NotMapped]
