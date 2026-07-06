@@ -26,7 +26,13 @@ public class SanPhamController : ControllerBase
 
         var thuongHieu = await _context.Thuonghieus
             .Where(th => th.TrangThai == 1)
-            .Select(th => new { th.MaTh, th.TenThuongHieu })
+            .Select(th => new
+            {
+                th.MaTh,
+                th.TenThuongHieu,
+                th.HinhAnh,
+                SoLuongSP = th.Sanphams.Count(sp => sp.TrangThai == 1)
+            })
             .OrderBy(th => th.TenThuongHieu)
             .ToListAsync();
 
@@ -173,7 +179,7 @@ public class SanPhamController : ControllerBase
 
         // Tất cả biến thể còn active (kể cả hết hàng) — để hiển thị trên trang chi tiết
         var btHienThi = sp.BienTheSanphams
-            .Where(bt => bt.TrangThai == 1 || bt.TrangThai==0)
+            .Where(bt => bt.TrangThai == 1 || bt.TrangThai == 0)
             .OrderBy(bt => bt.SoLuongTon == 0 ? 1 : 0) // biến thể còn hàng lên trước
             .ThenBy(bt => bt.GiaBan)
             .ToList();

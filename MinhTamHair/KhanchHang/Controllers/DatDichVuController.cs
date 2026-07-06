@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using MinhTamHair.KhanchHang.Models;
 using MinhTamHair.KhanchHang.Models;
 using MinhTamHair.Models;
@@ -18,11 +19,13 @@ namespace MinhTamHair.KhanchHang.Controllers
         private readonly MinhTamHairContext _context;
         private readonly IConfiguration _configuration;
         private readonly IQrEmailService _qrEmailService;
-        public DatDichVuController(MinhTamHairContext context, IConfiguration configuration, IQrEmailService qrEmailService)
+        private readonly IServiceScopeFactory _scopeFactory;
+        public DatDichVuController(MinhTamHairContext context, IConfiguration configuration, IQrEmailService qrEmailService, IServiceScopeFactory scopeFactory)
         {
             _context = context;
             _configuration = configuration;
             _qrEmailService = qrEmailService;
+            _scopeFactory = scopeFactory;
         }
         [HttpGet("data-booking")]
         public IActionResult GetAll()
@@ -523,6 +526,38 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                     // 9. LƯU VÀO DATABASE CHÍNH THỨC
                     await transaction.CommitAsync();
+
+                    // ===== XUẤT HÓA ĐƠN ĐIỆN TỬ =====
+                    // Dùng model.InvoiceInfo nếu khách đã chọn (Datdichvu.vue), fallback về cá nhân nếu không có.
+                    // Nếu chỉ đặt cọc (paymentMode == "10"): dịch vụ chưa thực hiện -> HOÃN xuất, để
+                    // CheckInController.ConfirmFinalPayment xuất thật khi nhân viên xác nhận hoàn tất.
+                    {
+                        bool laDatCoc = paymentMode == "10";
+                        bool laDoanhNghiep = model.InvoiceInfo?.LaDoanhNghiep ?? false;
+                        var maHddt = "HD" + DateTime.Now.ToString("yyMMddHHmmss");
+                        _context.HoaDonDienTus.Add(new HoaDonDienTu
+                        {
+                            MaHddt = maHddt,
+                            MaHd = maHdTạm,
+                            LoaiKhach = laDoanhNghiep ? (byte)1 : (byte)0,
+                            TenNguoiMua = laDoanhNghiep ? model.InvoiceInfo?.TenCongTy : (!string.IsNullOrWhiteSpace(model.HoTen) ? model.HoTen : "Khach hang"),
+                            Mst = laDoanhNghiep ? model.InvoiceInfo?.Mst : null,
+                            DiaChiXuatHd = model.InvoiceInfo?.DiaChiXuatHD,
+                            EmailNhanHd = model.InvoiceInfo?.EmailNhanHD ?? model.Email,
+                            TrangThai = laDatCoc ? (byte)3 : (byte)0 // 3 = chờ hoàn tất dịch vụ
+                        });
+                        await _context.SaveChangesAsync();
+
+                        if (!laDatCoc)
+                        {
+                            _ = Task.Run(async () =>
+                            {
+                                using var scope = _scopeFactory.CreateScope();
+                                var eInvoiceService = scope.ServiceProvider.GetRequiredService<IEInvoiceService>();
+                                await eInvoiceService.PhatHanhHoaDonAsync(maHddt);
+                            });
+                        }
+                    }
 
                     // 10. GỬI EMAIL QR SAU KHI LƯU THÀNH CÔNG
                     try

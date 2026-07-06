@@ -834,6 +834,34 @@ namespace MinhTamHair.Migrations
                     b.ToTable("HINHANH", (string)null);
                 });
 
+            modelBuilder.Entity("MinhTamHair.Models.HinhanhBT", b =>
+                {
+                    b.Property<int>("MaHa")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasColumnName("maHA");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("MaHa"));
+
+                    b.Property<string>("DuongDan")
+                        .HasMaxLength(255)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(255)")
+                        .HasColumnName("duongDan");
+
+                    b.Property<string>("MaBienThe")
+                        .HasMaxLength(10)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(10)")
+                        .HasColumnName("maBienThe");
+
+                    b.HasKey("MaHa");
+
+                    b.HasIndex("MaBienThe");
+
+                    b.ToTable("HINHANH_BT", (string)null);
+                });
+
             modelBuilder.Entity("MinhTamHair.Models.Hinhanhsp", b =>
                 {
                     b.Property<int>("MaHa")
@@ -931,6 +959,74 @@ namespace MinhTamHair.Migrations
                     b.HasIndex("MaNv");
 
                     b.ToTable("HOA_DON", (string)null);
+                });
+
+            modelBuilder.Entity("MinhTamHair.Models.HoaDonDienTu", b =>
+                {
+                    b.Property<string>("MaHddt")
+                        .HasMaxLength(50)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<string>("DiaChiXuatHd")
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<string>("EmailNhanHd")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("GhiChuLoi")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("KyHieu")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("LinkPdf")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("LinkXml")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<byte>("LoaiKhach")
+                        .HasColumnType("tinyint");
+
+                    b.Property<string>("MaHd")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<string>("Mst")
+                        .HasMaxLength(20)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(20)");
+
+                    b.Property<DateTime?>("NgayXuat")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ReferenceCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("SoHoaDon")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("TenNguoiMua")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<byte>("TrangThai")
+                        .HasColumnType("tinyint");
+
+                    b.HasKey("MaHddt");
+
+                    b.ToTable("HOA_DON_DIEN_TU", (string)null);
                 });
 
             modelBuilder.Entity("MinhTamHair.Models.Khachhang", b =>
@@ -1040,6 +1136,71 @@ namespace MinhTamHair.Migrations
                     b.HasIndex("MaDv");
 
                     b.ToTable("KIFUTOC", (string)null);
+                });
+
+            modelBuilder.Entity("MinhTamHair.Models.LichSuTonKho", b =>
+                {
+                    b.Property<long>("MaLich")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("maLich");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("MaLich"));
+
+                    b.Property<string>("GhiChu")
+                        .HasMaxLength(255)
+                        .HasColumnType("nvarchar(255)")
+                        .HasColumnName("ghiChu");
+
+                    b.Property<string>("LoaiBienDong")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(20)")
+                        .HasColumnName("loaiBienDong");
+
+                    b.Property<string>("MaBienThe")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(10)")
+                        .HasColumnName("maBienThe");
+
+                    b.Property<string>("MaChungTu")
+                        .HasMaxLength(50)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(50)")
+                        .HasColumnName("maChungTu");
+
+                    b.Property<string>("MaNv")
+                        .HasMaxLength(10)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(10)")
+                        .HasColumnName("maNV");
+
+                    b.Property<int>("SoLuongThayDoi")
+                        .HasColumnType("int")
+                        .HasColumnName("soLuongThayDoi");
+
+                    b.Property<DateTime>("ThoiGian")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime")
+                        .HasColumnName("thoiGian")
+                        .HasDefaultValueSql("(getdate())");
+
+                    b.Property<int>("TonSau")
+                        .HasColumnType("int")
+                        .HasColumnName("tonSau");
+
+                    b.Property<int>("TonTruoc")
+                        .HasColumnType("int")
+                        .HasColumnName("tonTruoc");
+
+                    b.HasKey("MaLich");
+
+                    b.HasIndex("MaBienThe");
+
+                    b.ToTable("LICHSU_TONKHO", (string)null);
                 });
 
             modelBuilder.Entity("MinhTamHair.Models.Lichdat", b =>
@@ -2121,6 +2282,16 @@ namespace MinhTamHair.Migrations
                     b.Navigation("MaDvNavigation");
                 });
 
+            modelBuilder.Entity("MinhTamHair.Models.HinhanhBT", b =>
+                {
+                    b.HasOne("MinhTamHair.Models.BienTheSanpham", "MaBienTheNavigation")
+                        .WithMany("HinhanhBTs")
+                        .HasForeignKey("MaBienThe")
+                        .HasConstraintName("FK_HINHANH_BT_BIENTHE");
+
+                    b.Navigation("MaBienTheNavigation");
+                });
+
             modelBuilder.Entity("MinhTamHair.Models.Hinhanhsp", b =>
                 {
                     b.HasOne("MinhTamHair.Models.SanPham", "MaSpNavigation")
@@ -2180,6 +2351,18 @@ namespace MinhTamHair.Migrations
                         .HasConstraintName("FK__KIFUTOC__maDV__5AEE82B9");
 
                     b.Navigation("MaDvNavigation");
+                });
+
+            modelBuilder.Entity("MinhTamHair.Models.LichSuTonKho", b =>
+                {
+                    b.HasOne("MinhTamHair.Models.BienTheSanpham", "MaBienTheNavigation")
+                        .WithMany()
+                        .HasForeignKey("MaBienThe")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("FK_LICHSU_TONKHO_BIENTHE");
+
+                    b.Navigation("MaBienTheNavigation");
                 });
 
             modelBuilder.Entity("MinhTamHair.Models.Lichdat", b =>
@@ -2384,6 +2567,8 @@ namespace MinhTamHair.Migrations
                     b.Navigation("ChitietHoadonSps");
 
                     b.Navigation("ChitietPhieunhaps");
+
+                    b.Navigation("HinhanhBTs");
                 });
 
             modelBuilder.Entity("MinhTamHair.Models.Combo", b =>

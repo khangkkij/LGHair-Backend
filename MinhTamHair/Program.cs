@@ -174,7 +174,10 @@ builder.Services.AddHttpClient<IZaloService, ZaloService>(client =>
 {
     client.Timeout = TimeSpan.FromSeconds(60);
 });
-
+builder.Services.Configure<EInvoiceOptions>(builder.Configuration.GetSection("EInvoice"));
+builder.Services.AddScoped<IEInvoiceService, EInvoiceService>();
+builder.Services.AddHttpClient();
+builder.Services.AddMemoryCache();
 
 builder.Services.Configure<CloudinarySetings>(builder.Configuration.GetSection("Cloudinary"));
 //                  DI CLOUDINARY

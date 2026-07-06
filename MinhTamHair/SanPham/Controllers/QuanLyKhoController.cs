@@ -581,8 +581,81 @@ public class QuanLyKhoController : ControllerBase
     }
 
     // ════════════════════════════════════════════════════════════
-    // CẢNH BÁO SẮP HẾT HÀNG
+    // ĐỐI SOÁT KHO - HÓA ĐƠN ĐIỆN TỬ
+    // Mỗi lượt xuất kho BÁN HÀNG (LichSuTonKho) phải có 1 hóa đơn điện tử
+    // đã xuất thành công (HoaDonDienTu.TrangThai = 1) tương ứng qua MaChungTu -> MaHd
     // ════════════════════════════════════════════════════════════
+    [HttpGet("doisoathoadon")]
+    public async Task<IActionResult> GetDoiSoatHoaDon(
+        [FromQuery] DateTime? tuNgay,
+        [FromQuery] DateTime? denNgay,
+        [FromQuery] string? trangThai, // "", "khop", "thieu"
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20)
+    {
+        if (page < 1) page = 1;
+        if (pageSize < 1 || pageSize > 200) pageSize = 20;
+
+        var q = _db.LichSuTonKhos
+            .Include(l => l.MaBienTheNavigation)
+                .ThenInclude(b => b!.MaSpNavigation)
+            .Where(l => l.LoaiBienDong == "BAN")
+            .AsQueryable();
+
+        if (tuNgay.HasValue) q = q.Where(l => l.ThoiGian >= tuNgay.Value);
+        if (denNgay.HasValue) q = q.Where(l => l.ThoiGian <= denNgay.Value.AddDays(1));
+
+        // Gộp thông tin hóa đơn điện tử tương ứng (nếu có) qua MaChungTu = HoaDonDienTu.MaHd
+        var joined = from l in q
+                     join hddt in _db.HoaDonDienTus on l.MaChungTu equals hddt.MaHd into hddtGroup
+                     from hddt in hddtGroup.DefaultIfEmpty()
+                     select new
+                     {
+                         l.MaLich,
+                         l.MaBienThe,
+                         TenBienThe = l.MaBienTheNavigation != null ? l.MaBienTheNavigation.TenBienThe : null,
+                         TenSanPham = l.MaBienTheNavigation != null && l.MaBienTheNavigation.MaSpNavigation != null
+                             ? l.MaBienTheNavigation.MaSpNavigation.TenSp : null,
+                         l.SoLuongThayDoi,
+                         l.ThoiGian,
+                         MaDonHang = l.MaChungTu,
+                         CoHoaDon = hddt != null,
+                         TrangThaiHoaDon = hddt != null ? (int?)hddt.TrangThai : null,
+                         SoHoaDon = hddt != null ? hddt.SoHoaDon : null,
+                         LinkPdf = hddt != null ? hddt.LinkPdf : null,
+                         GhiChuLoi = hddt != null ? hddt.GhiChuLoi : null
+                     };
+
+        // Trạng thái: "khop" = đã có hóa đơn xuất thành công (TrangThai=1); "thieu" = chưa có hoặc lỗi/pending
+        if (trangThai == "khop") joined = joined.Where(x => x.TrangThaiHoaDon == 1);
+        else if (trangThai == "thieu") joined = joined.Where(x => x.TrangThaiHoaDon == null || x.TrangThaiHoaDon != 1);
+
+        var total = await joined.CountAsync();
+
+        // Thống kê tổng quan (tính trên toàn bộ tập đã lọc theo ngày, chưa phân trang)
+        var statsQuery = from l in q
+                         join hddt in _db.HoaDonDienTus on l.MaChungTu equals hddt.MaHd into hddtGroup2
+                         from hddt in hddtGroup2.DefaultIfEmpty()
+                         select hddt != null && hddt.TrangThai == 1 ? 1 : 0;
+        var tongLuot = await q.CountAsync();
+        var daKhop = await statsQuery.SumAsync();
+
+        var list = await joined
+            .OrderByDescending(x => x.ThoiGian)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync();
+
+        return Ok(new
+        {
+            total,
+            page,
+            pageSize,
+            stats = new { tongLuot, daKhop, chuaKhop = tongLuot - daKhop },
+            items = list
+        });
+    }
+
     [HttpGet("canhbaoton")]
     public async Task<IActionResult> GetCanhBaoTon([FromQuery] int nguong = 10)
     {

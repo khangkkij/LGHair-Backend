@@ -4,7 +4,9 @@ using MinhTamHair.Admin.Models;
 using MinhTamHair.KhanchHang.Models;
 using MinhTamHair.KhanchHang.Models;
 using MinhTamHair.Models;
+using MinhTamHair.Services;
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MinhTamHair.Admin.Controllers
 {
@@ -19,10 +21,13 @@ namespace MinhTamHair.Admin.Controllers
 
 
         // Sửa lại Constructor để nhận IConfiguration
-        public CheckInController(MinhTamHairContext context, IConfiguration configuration)
+        private readonly IServiceScopeFactory _scopeFactory;
+
+        public CheckInController(MinhTamHairContext context, IConfiguration configuration, IServiceScopeFactory scopeFactory)
         {
             _context = context;
-            _configuration = configuration; // Gán giá trị vào biến dùng chung
+            _configuration = configuration;
+            _scopeFactory = scopeFactory;
         }
 
         // 1. Lấy danh sách khách hàng chờ check-in theo ngày
@@ -475,6 +480,27 @@ namespace MinhTamHair.Admin.Controllers
             // 3. Hoàn tất lịch đặt (Dùng chung cho cả trả đủ, nợ 0đ, hoặc trả tiền mặt)
             ld.TrangThai = 3;
             await _context.SaveChangesAsync();
+
+            // ===== XUẤT HÓA ĐƠN ĐIỆN TỬ (nếu đơn này có hóa đơn đang "chờ hoàn tất dịch vụ") =====
+            var maHdThuc = hoaDon?.MaHd ?? req.MaLd;
+            var hoaDonChoXuat = await _context.HoaDonDienTus
+                .Where(h => h.MaHd == maHdThuc && h.TrangThai == 3)
+                .OrderByDescending(h => h.MaHddt)
+                .FirstOrDefaultAsync();
+
+            if (hoaDonChoXuat != null)
+            {
+                hoaDonChoXuat.TrangThai = 0;
+                await _context.SaveChangesAsync();
+
+                var maHddtCanXuat = hoaDonChoXuat.MaHddt;
+                _ = Task.Run(async () =>
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var eInvoiceService = scope.ServiceProvider.GetRequiredService<IEInvoiceService>();
+                    await eInvoiceService.PhatHanhHoaDonAsync(maHddtCanXuat);
+                });
+            }
 
             return Ok(new { message = "Hoàn tất phục vụ và đã ghi nhận doanh thu" });
         }
