@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
 using System.Security.Claims;
+using MinhTamHair.Services.Chat;
+
 namespace MinhTamHair.NhanVien.Controllers
 {
 	[Route("api/nhan-vien/ca-lam")]
@@ -11,10 +13,12 @@ namespace MinhTamHair.NhanVien.Controllers
 	public class NhanVienCaLamController : ControllerBase
 	{
 		private readonly MinhTamHairContext _context;
+		private readonly IFirestoreService _firestoreService;
 
-		public NhanVienCaLamController(MinhTamHairContext context)
+		public NhanVienCaLamController(MinhTamHairContext context, IFirestoreService firestoreService)
 		{
 			_context = context;
+			_firestoreService = firestoreService;
 		}
 
 		// Hàm phụ để lấy MaNv từ Token đăng nhập
@@ -93,11 +97,20 @@ namespace MinhTamHair.NhanVien.Controllers
 			// Xác định giờ bắt đầu dựa vào tên ca (Hiếu nhớ chỉnh lại giờ cho đúng với Salon nhé)
 			switch (lich.CaLam)
 			{
-				case "Ca ngày":
-					shiftStartTime = new TimeSpan(7, 0, 0); // Ca ngày bắt đầu lúc 07:00
+				case "Ca sáng (7h-17h)":
+					shiftStartTime = new TimeSpan(7, 0, 0); 
 					break;
-				case "Ca tối":
-					shiftStartTime = new TimeSpan(13, 0, 0); // Ca tối bắt đầu lúc 13:00
+				case "Ca tối (13h-20h)":
+					shiftStartTime = new TimeSpan(13, 0, 0); 
+					break;
+				case "Ca sáng (Part-time)":
+					shiftStartTime = new TimeSpan(7, 0, 0); 
+					break;
+				case "Ca chiều (Part-time)":
+					shiftStartTime = new TimeSpan(13, 0, 0); 
+					break;
+				case "Ca tối (Part-time)":
+					shiftStartTime = new TimeSpan(16, 0, 0); 
 					break;
 				default:
 					// Dành cho các ca linh động hoặc ghi chú khác, tạm thời không block giờ
@@ -122,6 +135,85 @@ namespace MinhTamHair.NhanVien.Controllers
 			await _context.SaveChangesAsync();
 
 			return Ok(new { success = true, message = "Điểm danh thành công! Chúc bạn làm việc hiệu quả." });
+		}
+
+		[HttpPatch("diem-danh-qr/{maLich}")]
+		public async Task<IActionResult> CheckInQR(int maLich, [FromQuery] string maNv, [FromBody] string qrCode)
+		{
+			if (string.IsNullOrEmpty(maNv)) return BadRequest(new { message = "Thiếu mã nhân viên" });
+
+			var dateStr = DateTime.Now.ToString("yyyyMMdd");
+			var expectedQR = $"MinhTamHair-DiemDanh-{dateStr}";
+
+			if (qrCode != expectedQR)
+			{
+				return BadRequest(new { message = "Mã QR không hợp lệ hoặc đã hết hạn." });
+			}
+
+			// Tìm lịch theo maLich và maNv được truyền từ Vue.js xuống
+			var lich = await _context.Lichlamviecs.FirstOrDefaultAsync(l => l.MaLich == maLich && l.MaNv == maNv);
+
+			if (lich == null) return NotFound(new { message = "Không tìm thấy ca làm của bạn." });
+			if (lich.CaLam == "Chưa xếp") return BadRequest(new { message = "Ca làm chưa được xếp, không thể điểm danh." });
+			if (lich.TrangThai == 2) return BadRequest(new { message = "Bạn đã điểm danh rồi." });
+
+			// ==========================================
+			// THÊM MỚI: KIỂM TRA GIỜ GIẤC ĐIỂM DANH
+			// ==========================================
+			var now = DateTime.Now.TimeOfDay; // Lấy giờ phút hiện tại
+			TimeSpan shiftStartTime;
+
+			// Xác định giờ bắt đầu dựa vào tên ca
+			switch (lich.CaLam)
+			{
+				case "Ca sáng (7h-17h)":
+					shiftStartTime = new TimeSpan(7, 0, 0); 
+					break;
+				case "Ca tối (13h-20h)":
+					shiftStartTime = new TimeSpan(13, 0, 0); 
+					break;
+				case "Ca sáng (Part-time)":
+					shiftStartTime = new TimeSpan(7, 0, 0); 
+					break;
+				case "Ca chiều (Part-time)":
+					shiftStartTime = new TimeSpan(13, 0, 0); 
+					break;
+				case "Ca tối (Part-time)":
+					shiftStartTime = new TimeSpan(16, 0, 0); 
+					break;
+				default:
+					shiftStartTime = new TimeSpan(0, 0, 0);
+					break;
+			}
+
+			if (shiftStartTime.TotalHours > 0)
+			{
+				var allowedCheckInTime = shiftStartTime.Subtract(TimeSpan.FromMinutes(30));
+
+				if (now < allowedCheckInTime)
+				{
+					return BadRequest(new { message = $"Chưa đến giờ làm! {lich.CaLam} bắt đầu lúc {shiftStartTime:hh\\:mm}. Bạn chỉ được điểm danh sớm 30 phút." });
+				}
+
+				var lateTime = shiftStartTime.Add(TimeSpan.FromMinutes(15));
+				if (now > lateTime)
+				{
+					lich.TrangThai = 6; // Đi muộn
+					lich.GhiChu = $"Điểm danh muộn lúc {now:hh\\:mm}";
+				}
+				else
+				{
+					lich.TrangThai = 2; // Đánh dấu Có mặt đúng giờ
+				}
+			}
+			else
+			{
+				lich.TrangThai = 2; // Nếu không xác định được giờ (ca linh động), mặc định là Có mặt
+			}
+
+			await _context.SaveChangesAsync();
+
+			return Ok(new { success = true, message = "Điểm danh mã QR thành công! Chúc bạn làm việc hiệu quả." });
 		}
 
 		// LÀM TƯƠNG TỰ CHO API RỜI CA SỚM (NẾU CÓ)
@@ -168,17 +260,65 @@ namespace MinhTamHair.NhanVien.Controllers
 		}
 		// 3. API GỬI YÊU CẦU ĐỔI CA (Trạng thái 4)
 		[HttpPatch("gui-yeu-cau/{maLich}")]
-		public async Task<IActionResult> RequestChange(int maLich, [FromBody] string lyDo)
+		public async Task<IActionResult> RequestChange(int maLich, [FromQuery] string? maNv, [FromBody] MinhTamHair.Admin.Models.CaLamDTO.YeuCauDoiCaRequest request)
 		{
-			var maNv = GetCurrentMaNv();
-			var lich = await _context.Lichlamviecs.FirstOrDefaultAsync(l => l.MaLich == maLich && l.MaNv == maNv);
+			if (string.IsNullOrEmpty(maNv)) maNv = GetCurrentMaNv();
+			if (string.IsNullOrEmpty(maNv)) return Unauthorized();
 
-			if (lich == null) return NotFound();
+			var lich = await _context.Lichlamviecs
+				.Include(l => l.MaNvNavigation)
+				.FirstOrDefaultAsync(l => l.MaLich == maLich && l.MaNv == maNv);
 
-			lich.TrangThai = 4; // Trạng thái yêu cầu
-								// lich.GhiChu = lyDo;
+			if (lich == null && maLich != 0) return NotFound();
+
+			if (lich == null && maLich == 0)
+			{
+				var date = DateOnly.FromDateTime(DateTime.Now);
+				lich = await _context.Lichlamviecs
+					.Include(l => l.MaNvNavigation)
+					.FirstOrDefaultAsync(l => l.MaNv == maNv && l.NgayLamViec == date);
+
+				if (lich == null)
+				{
+					lich = new Lichlamviec
+					{
+						MaNv = maNv,
+						NgayLamViec = date,
+						CaLam = "Chưa xếp",
+						TrangThai = 4,
+						GhiChu = $"Xin xếp ca: {request.CaMoi}. Lý do: {request.LyDo}"
+					};
+					_context.Lichlamviecs.Add(lich);
+				}
+				else
+				{
+					lich.TrangThai = 4;
+					lich.GhiChu = $"Xin đổi ca thành: {request.CaMoi}. Lý do: {request.LyDo}";
+				}
+			}
+			else
+			{
+				lich.TrangThai = 4; // Trạng thái yêu cầu
+				lich.GhiChu = $"Xin đổi ca thành: {request.CaMoi}. Lý do: {request.LyDo}";
+			}
 
 			await _context.SaveChangesAsync();
+
+			// Gửi thông báo cho Admin qua Firebase
+			string tenNv = lich.MaNvNavigation?.HoTenNv ?? maNv;
+			string title = "Yêu cầu đổi ca / Nghỉ phép";
+			string desc = $"Nhân viên {tenNv} xin đổi ca {lich.CaLam} thành {request.CaMoi}. Lý do: {request.LyDo}";
+			string link = $"/admin/quan-ly-ca-lam?search={maNv}";
+
+			try 
+			{
+				await _firestoreService.PushAdminNotificationAsync(title, desc, link, maNv);
+			} 
+			catch (Exception ex) 
+			{
+				Console.WriteLine("Lỗi khi gửi thông báo Firebase: " + ex.Message);
+			}
+
 			return Ok(new { success = true, message = "Yêu cầu đã được gửi tới quản lý." });
 		}
 	}
