@@ -579,10 +579,12 @@ namespace MinhTamHair.KhanchHang.Controllers
                 TimeOnly start = TimeOnly.Parse(request.GioBatDau);
                 TimeOnly end = start.AddMinutes(request.TongThoiGian);
 
-                var caCanThiet = new List<string> { "Cả ngày" };
-                if (start >= new TimeOnly(8, 0) && end <= new TimeOnly(12, 0)) caCanThiet.Add("Sáng");
-                else if (start >= new TimeOnly(13, 0) && end <= new TimeOnly(17, 0)) caCanThiet.Add("Chiều");
-                else if (start >= new TimeOnly(17, 0) && end <= new TimeOnly(21, 0)) caCanThiet.Add("Tối");
+                var caCanThiet = new List<string>();
+                if (start >= new TimeOnly(7, 0) && end <= new TimeOnly(17, 0)) caCanThiet.Add("Ca sáng (7h-17h)");
+                if (start >= new TimeOnly(13, 0) && end <= new TimeOnly(20, 0)) caCanThiet.Add("Ca tối (13h-20h)");
+                if (start >= new TimeOnly(7, 0) && end <= new TimeOnly(11, 0)) caCanThiet.Add("Ca sáng (Part-time)");
+                if (start >= new TimeOnly(13, 0) && end <= new TimeOnly(17, 0)) caCanThiet.Add("Ca chiều (Part-time)");
+                if (start >= new TimeOnly(16, 0) && end <= new TimeOnly(20, 0)) caCanThiet.Add("Ca tối (Part-time)");
 
                 // 2. LẤY THỢ ĐI LÀM (Bỏ Include để EF Core không bị ngáo)
                 var thoDiLam = await _context.Lichlamviecs

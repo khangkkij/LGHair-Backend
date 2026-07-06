@@ -14,6 +14,7 @@ namespace MinhTamHair.Services.Chat
         Task AddMessageAsync(string roomId, ChatMessage message);
         Task UpdateChatRoomLastMessageAsync(string roomId, string lastMessage, bool forceActive = false);
         Task ToggleRoomStatusAsync(string roomId, string status);
+        Task PushAdminNotificationAsync(string title, string description, string link, string maNv);
     }
 
     public class FirestoreService : IFirestoreService
@@ -21,15 +22,19 @@ namespace MinhTamHair.Services.Chat
         private readonly HttpClient _httpClient;
         private readonly string _projectId;
         private readonly string _baseUrl;
+        private readonly string _adminBaseUrl;
 
         public FirestoreService(IHttpClientFactory httpClientFactory, IConfiguration configuration)
         {
             _httpClient = httpClientFactory.CreateClient();
             _projectId = configuration["Firebase:ProjectId"]
                 ?? throw new InvalidOperationException("Firebase:ProjectId chưa được cấu hình.");
+            
+            var adminProjectId = configuration["Firebase:AdminProjectId"] ?? "YOUR_ADMIN_PROJECT_ID_HERE";
 
             // Base URL của Firestore REST API (không cần xác thực vì dùng Rules public cho dev)
             _baseUrl = $"https://firestore.googleapis.com/v1/projects/{_projectId}/databases/(default)/documents";
+            _adminBaseUrl = $"https://firestore.googleapis.com/v1/projects/{adminProjectId}/databases/(default)/documents";
         }
 
         /// <summary>
@@ -146,6 +151,30 @@ namespace MinhTamHair.Services.Chat
             var url = $"{_baseUrl}/ChatRooms/{roomId}?updateMask.fieldPaths=status&updateMask.fieldPaths=updatedAt";
             var request = new HttpRequestMessage(HttpMethod.Patch, url) { Content = content };
             var response = await _httpClient.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+        }
+
+        /// <summary>
+        /// Gửi thông báo cho Admin qua collection "AdminNotifications"
+        /// </summary>
+        public async Task PushAdminNotificationAsync(string title, string description, string link, string maNv)
+        {
+            var body = new
+            {
+                fields = new
+                {
+                    title = new { stringValue = title },
+                    description = new { stringValue = description },
+                    link = new { stringValue = link },
+                    maNv = new { stringValue = maNv },
+                    isRead = new { booleanValue = false },
+                    createdAt = new { timestampValue = DateTime.UtcNow.ToString("o") }
+                }
+            };
+
+            var content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+            var url = $"{_adminBaseUrl}/AdminNotifications";
+            var response = await _httpClient.PostAsync(url, content);
             response.EnsureSuccessStatusCode();
         }
     }

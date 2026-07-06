@@ -63,6 +63,16 @@ namespace MinhTamHair.Admin.Controllers
 			var accessToken = GenerateJwtToken(nhanVien);
 			var refreshToken = GenerateRefreshToken();
 
+			// Kiểm tra khắt khe: Mỗi nhân viên chỉ được 1 phiên đăng nhập
+			// Xóa toàn bộ token cũ của nhân viên này để thiết bị cũ bị đăng xuất
+			var oldTokens = await _context.Refreshtokens
+				.Where(rt => rt.UserId == nhanVien.MaNv)
+				.ToListAsync();
+			if (oldTokens.Any())
+			{
+				_context.Refreshtokens.RemoveRange(oldTokens);
+			}
+
 			var rtRecord = new Refreshtoken
 			{
 				UserId = nhanVien.MaNv,
@@ -110,7 +120,24 @@ namespace MinhTamHair.Admin.Controllers
 			{
 				Response.Cookies.Delete("adminAccessToken");
 				Response.Cookies.Delete("adminRefreshToken");
+
+				// Nếu token hết hạn, dọn luôn nó khỏi DB
+				if (rtRecord != null && rtRecord.ExpiredAt <= DateTime.UtcNow)
+				{
+					_context.Refreshtokens.Remove(rtRecord);
+					await _context.SaveChangesAsync();
+				}
+
 				return Unauthorized(new { message = "Refresh Token không hợp lệ hoặc đã hết hạn." });
+			}
+
+			// Dọn dẹp các token rác khác của nhân viên này
+			var expiredTokens = await _context.Refreshtokens
+				.Where(rt => rt.UserId == rtRecord.UserId && rt.ExpiredAt <= DateTime.UtcNow && rt.Id != rtRecord.Id)
+				.ToListAsync();
+			if (expiredTokens.Any())
+			{
+				_context.Refreshtokens.RemoveRange(expiredTokens);
 			}
 
 			var nhanVien = await _context.Nhanviens

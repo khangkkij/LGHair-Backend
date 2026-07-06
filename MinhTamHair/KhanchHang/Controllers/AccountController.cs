@@ -81,6 +81,15 @@ namespace MinhTamHair.KhanchHang.Controllers
             var accessToken = GenerateJwtToken(khachHang);
             var refreshToken = GenerateRefreshToken();
 
+            // Dọn dẹp các token đã hết hạn của khách hàng này
+            var expiredTokens = await _context.Refreshtokens
+                .Where(rt => rt.UserId == khachHang.MaKh && rt.ExpiredAt <= DateTime.Now)
+                .ToListAsync();
+            if (expiredTokens.Any())
+            {
+                _context.Refreshtokens.RemoveRange(expiredTokens);
+            }
+
             // Lưu Refresh Token
             var refreshTokenEntity = new Refreshtoken
             {
@@ -634,7 +643,24 @@ namespace MinhTamHair.KhanchHang.Controllers
                 var cookieOptions = new CookieOptions { Secure = true, SameSite = SameSiteMode.None };
                 Response.Cookies.Delete("accessToken", cookieOptions);
                 Response.Cookies.Delete("refreshToken", cookieOptions);
+
+                // Nếu token hết hạn, xóa nó khỏi DB
+                if (rtRecord != null && rtRecord.ExpiredAt <= DateTime.UtcNow)
+                {
+                    _context.Refreshtokens.Remove(rtRecord);
+                    await _context.SaveChangesAsync();
+                }
+
                 return Unauthorized(new { message = "Vui lòng đăng nhập lại." });
+            }
+
+            // Dọn dẹp các token rác khác của khách hàng này
+            var expiredTokens = await _context.Refreshtokens
+                .Where(rt => rt.UserId == rtRecord.UserId && rt.ExpiredAt <= DateTime.UtcNow && rt.Id != rtRecord.Id)
+                .ToListAsync();
+            if (expiredTokens.Any())
+            {
+                _context.Refreshtokens.RemoveRange(expiredTokens);
             }
 
             // 3. Lấy thông tin khách hàng
