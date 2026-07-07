@@ -25,6 +25,7 @@ namespace MinhTamHair.Admin.Services
     public class SalaryService : ISalaryService
     {
         private readonly MinhTamHairContext _context;
+        private int soCa;
 
         // Số ngày công quy định trong 1 tháng (tiêu chuẩn salon)
         // Đây là mẫu số trong công thức: Lương/Ca = LuongCoBan / SO_NGAY_CONG_QUY_DINH
@@ -68,21 +69,31 @@ namespace MinhTamHair.Admin.Services
             //
             // Điều kiện TrangThai: Tính lương cho ca có mặt (2) + rời sớm (3) + muộn (6)
             // Nhưng theo thực tế, chỉ TrangThai = 2 (Đã điểm danh) là ca hoàn thành chắc chắn
-            var soCaLamDict = await _context.Lichlamviecs
+            // Lấy danh sách ca đã điểm danh kèm tên ca để phân loại FT/PT
+            var caLamRaw = await _context.Lichlamviecs
                 .Where(l =>
                     l.NgayLamViec >= ngayDauDate &&     // Từ đầu tháng
                     l.NgayLamViec <= ngayCuoiDate &&    // Đến cuối tháng
                     l.TrangThai == 2 &&                 // CHỈ tính ca đã điểm danh thành công
                     l.MaNv != null)                     // Có mã NV hợp lệ
-                .GroupBy(l => l.MaNv!)                  // Nhóm theo từng NV
-                .Select(g => new
-                {
-                    MaNv = g.Key,
-                    SoCa = g.Count()                    // Đếm số ca hoàn thành
-                })
-                .ToDictionaryAsync(x => x.MaNv, x => x.SoCa);
-                // Kết quả: { "NV001": 22, "NV002": 18, ... }
-                // Sau đó dùng Dictionary để lookup O(1) thay vì N+1 query
+                .Select(l => new { l.MaNv, l.CaLam })  // Chỉ lấy 2 cột cần thiết
+                .ToListAsync();
+
+            // Phân loại Fulltime / Part-time và tính công quy đổi (in-memory)
+            //   Part-time: tên ca chứa "Part-time" → hệ số 0.5 công
+            //   Fulltime : các ca còn lại            → hệ số 1.0 công
+            var soCaLamDict = caLamRaw
+                .GroupBy(x => x.MaNv!)
+                .ToDictionary(
+                    g => g.Key,
+                    g => new
+                    {
+                        SoCaFT     = g.Count(x => !(x.CaLam ?? "").Contains("Part-time")),
+                        SoCaPT     = g.Count(x =>  (x.CaLam ?? "").Contains("Part-time")),
+                        SoCaQuyDoi = (decimal)g.Count(x => !(x.CaLam ?? "").Contains("Part-time")) * 1.0m
+                                   + (decimal)g.Count(x =>  (x.CaLam ?? "").Contains("Part-time")) * 0.5m
+                    });
+                // Kết quả: { "NV001": { SoCaFT=20, SoCaPT=4, SoCaQuyDoi=22.0 }, ... }
 
             // -----------------------------------------------
             // BƯỚC 3: TRUY VẤN HOA HỒNG DỊCH VỤ (BATCH QUERY #2)
@@ -127,31 +138,52 @@ namespace MinhTamHair.Admin.Services
                     TongHoaHong = g.Sum(ct => ct.TienHoaHongDv ?? 0)
                 })
                 .ToDictionaryAsync(x => x.MaNv, x => x.TongHoaHong);
-                // Kết quả: { "NV001": 500000m, "NV002": 320000m, ... }
 
             // -----------------------------------------------
             // BƯỚC 4: TRUY VẤN DANH SÁCH NHÂN VIÊN + LƯƠNG CƠ BẢN (BATCH QUERY #3)
             // -----------------------------------------------
-            // Mục tiêu: Lấy info cơ bản + lương tháng chuẩn từ Loainhanvien
-            // Chỉ lấy NV đang hoạt động (TrangThai = 1)
             var danhSachNhanVien = await _context.Nhanviens
-                .Where(nv => nv.TrangThai == 1)     // Chỉ NV đang làm việc
+                .Where(nv => nv.TrangThai == 1)
                 .Select(nv => new
                 {
                     nv.MaNv,
                     HoTenNv = nv.HoTenNv ?? "Chưa cập nhật",
                     nv.HinhAnh,
-                    // Lương cơ bản lấy từ bảng Loainhanvien - đây là lương THÁNG chuẩn
-                    // Nếu chưa gán loại NV thì lương = 0 (sẽ hiện cảnh báo ở Frontend)
                     LuongCoBan = nv.MaLoaiNvNavigation != null
                         ? (nv.MaLoaiNvNavigation.Luong ?? 0)
                         : 0,
                     TenLoaiNv = nv.MaLoaiNvNavigation != null
                         ? (nv.MaLoaiNvNavigation.TenLoai ?? "Chưa phân loại")
-                        : "Chưa phân loại"
+                        : "Chưa phân loại",
+                    // Cờ phân biệt THỢ CHÍNH (DuocDatLich=true) vs THỢ PHỤ
+                    LaThoChinh = nv.MaLoaiNvNavigation != null
+                        && (nv.MaLoaiNvNavigation.DuocDatLich ?? false)
                 })
-                .OrderBy(nv => nv.HoTenNv)         // Sắp xếp A-Z cho dễ đọc
+                .OrderBy(nv => nv.HoTenNv)
                 .ToListAsync();
+
+            // -----------------------------------------------
+            // BƯỚC 4b: TRUY VẤN HOA HỒNG SẢN PHẨM (BATCH QUERY #4)
+            // -----------------------------------------------
+            // CHỈ THỢ CHÍNH (DuocDatLich=true) mới nhận hoa hồng SP
+            // Nguồn: ChitietHoadonSp.TienHoaHongSp → HoaDon đã thanh toán (TrangThai=1)
+            var hoaHongSpDict = await _context.ChitietHoadonSps
+                .Where(ct =>
+                    ct.MaNv != null &&
+                    ct.TienHoaHongSp != null &&
+                    ct.MaHdNavigation != null &&
+                    ct.MaHdNavigation.TrangThai == 1 &&
+                    ct.MaHdNavigation.NgayTao >= ngayDau &&
+                    ct.MaHdNavigation.NgayTao <= ngayCuoi)
+                .GroupBy(ct => ct.MaNv!)
+                .Select(g => new
+                {
+                    MaNv = g.Key,
+                    TongHoaHongSp = g.Sum(ct => ct.TienHoaHongSp ?? 0)
+                })
+                .ToDictionaryAsync(x => x.MaNv, x => x.TongHoaHongSp);
+                // Kết quả: { "NV001": 200000m, ... } – chỉ thợ chính có giá trị > 0
+
 
             // -----------------------------------------------
             // BƯỚC 5: GHÉP DỮ LIỆU VÀ TÍNH TOÁN (IN-MEMORY)
@@ -161,28 +193,26 @@ namespace MinhTamHair.Admin.Services
             var ketQua = danhSachNhanVien.Select(nv =>
             {
                 // Lookup O(1) từ Dictionary đã chuẩn bị
-                var soCa = soCaLamDict.GetValueOrDefault(nv.MaNv, 0);
-                var hoaHong = hoaHongDict.GetValueOrDefault(nv.MaNv, 0);
+                var caData     = soCaLamDict.GetValueOrDefault(nv.MaNv);
+                var soCaFT     = caData?.SoCaFT     ?? 0;
+                var soCaPT     = caData?.SoCaPT     ?? 0;
+                var soCaQuyDoi = caData?.SoCaQuyDoi ?? 0m;
 
-                // ============================================================
-                // CÔNG THỨC TÍNH LƯƠNG THEO CA LÀM VIỆC THỰC TẾ:
-                //
-                //   LuongTheoNgayCong = (LuongCoBan / SoNgayCongQuyDinh) × SoCaLamThucTe
-                //
-                // Ý nghĩa: 
-                //   - LuongCoBan: Lương tháng chuẩn theo loại NV (ví dụ: 8,000,000đ)
-                //   - SoNgayCongQuyDinh: Số ca chuẩn/tháng (ví dụ: 26 ca)
-                //   - Lương/ca: 8,000,000 / 26 ≈ 307,692đ
-                //   - Nếu NV làm 22 ca: 307,692 × 22 = 6,769,230đ
-                //
-                // TỔNG THU NHẬP = LuongTheoNgayCong + TongHoaHong
-                // ============================================================
+                // HOA HỒNG DỊCH VỤ: cả thợ chính lẫn thợ phụ đều nhận
+                var hoaHongDv  = hoaHongDict.GetValueOrDefault(nv.MaNv, 0);
+
+                // HOA HỒNG SẢN PHẨM: chỉ thợ chính (DuocDatLich=true) mới nhận
+                var hoaHongSp  = nv.LaThoChinh
+                    ? hoaHongSpDict.GetValueOrDefault(nv.MaNv, 0)
+                    : 0m;
+
+ 
                 var luongMoiCa = SO_NGAY_CONG_QUY_DINH > 0
                     ? nv.LuongCoBan / SO_NGAY_CONG_QUY_DINH
                     : 0;
 
-                var luongTheoNgayCong = Math.Round(luongMoiCa * soCa, 0); // Làm tròn đơn vị đồng
-                var tongThuNhap = luongTheoNgayCong + hoaHong;
+                var luongTheoNgayCong = Math.Round(luongMoiCa * soCaQuyDoi, 0); // Tính theo công QUY ĐỔI
+                var tongThuNhap = luongTheoNgayCong + hoaHongDv + hoaHongSp;
 
                 return new NhanVienLuongDto
                 {
@@ -191,9 +221,14 @@ namespace MinhTamHair.Admin.Services
                     TenLoaiNv = nv.TenLoaiNv,
                     HinhAnh = nv.HinhAnh,
                     LuongCoBan = nv.LuongCoBan,
+                    LaThoChinh = nv.LaThoChinh,
                     SoNgayCongQuyDinh = SO_NGAY_CONG_QUY_DINH,
-                    SoCaLamThucTe = soCa,
-                    TongHoaHong = hoaHong,
+                    SoCaLamThucTe  = soCaFT + soCaPT,
+                    SoCaFulltime   = soCaFT,
+                    SoCaParttime   = soCaPT,
+                    SoCaChuanQuyDoi = soCaQuyDoi,
+                    TongHoaHongDv = hoaHongDv,
+                    TongHoaHongSp = hoaHongSp,
                     LuongTheoNgayCong = luongTheoNgayCong,
                     TongThuNhap = tongThuNhap,
                     Thang = month,
@@ -234,35 +269,37 @@ namespace MinhTamHair.Admin.Services
                         : 0,
                     TenLoaiNv = nv.MaLoaiNvNavigation != null
                         ? (nv.MaLoaiNvNavigation.TenLoai ?? "Chưa phân loại")
-                        : "Chưa phân loại"
+                        : "Chưa phân loại",
+                    LaThoChinh = nv.MaLoaiNvNavigation != null
+                        && (nv.MaLoaiNvNavigation.DuocDatLich ?? false)
                 })
                 .FirstOrDefaultAsync();
 
-            // NV không tồn tại hoặc đã nghỉ việc
             if (nhanVien == null) return null;
 
-            // -----------------------------------------------
-            // BƯỚC 2: XÁC ĐỊNH KHOẢNG THỜI GIAN
-            // -----------------------------------------------
-            var ngayDauDate = new DateOnly(year, month, 1);
-            var ngayCuoiDate = ngayDauDate.AddMonths(1).AddDays(-1);
+            
+            var ngayDau = new DateTime(year, month, 1, 0, 0, 0);
+            var ngayCuoi = ngayDau.AddMonths(1).AddSeconds(-1);
+            var ngayDauDate = DateOnly.FromDateTime(ngayDau);
+            var ngayCuoiDate = DateOnly.FromDateTime(ngayCuoi);
 
-            // -----------------------------------------------
-            // BƯỚC 3: ĐẾM SỐ CA ĐÃ LÀM CỦA NV NÀY
-            // -----------------------------------------------
-            // Chỉ đếm của 1 NV cụ thể → truy vấn nhanh hơn API Admin
-            var soCaLam = await _context.Lichlamviecs
-                .CountAsync(l =>
+         
+            var caLamRawMy = await _context.Lichlamviecs
+                .Where(l =>
                     l.MaNv == employeeId &&
                     l.NgayLamViec >= ngayDauDate &&
                     l.NgayLamViec <= ngayCuoiDate &&
-                    l.TrangThai == 2); // Chỉ tính ca đã điểm danh
+                    l.TrangThai == 2)   // Chỉ tính ca đã điểm danh
+                .Select(l => new { l.CaLam })
+                .ToListAsync();
 
-            // -----------------------------------------------
-            // BƯỚC 4: TÍNH TỔNG HOA HỒNG CỦA NV NÀY
-            // -----------------------------------------------
-            // Logic giống API Admin nhưng lọc theo 1 NV cụ thể
-            var tongHoaHong = await _context.ChitietLichdats
+            // Part-time: tên ca chứa "Part-time" → 0.5 công; còn lại → 1.0 công
+            var soCaFTMy     = caLamRawMy.Count(x => !(x.CaLam ?? "").Contains("Part-time"));
+            var soCaPTMy     = caLamRawMy.Count(x =>  (x.CaLam ?? "").Contains("Part-time"));
+            var soCaQuyDoiMy = soCaFTMy * 1.0m + soCaPTMy * 0.5m;
+
+           
+            var tongHoaHongDv = await _context.ChitietLichdats
                 .Where(ct =>
                     ct.MaNv == employeeId &&                         // Chỉ DV của NV này
                     ct.TienHoaHongDv != null &&
@@ -275,6 +312,21 @@ namespace MinhTamHair.Admin.Services
                         hd.TrangThai == 1))                          // HĐ đã thanh toán
                 .SumAsync(ct => ct.TienHoaHongDv ?? 0);
 
+            // 4b. Hoa hồng sản phẩm (chỉ thợ chính có DuocDatLich=true)
+            var tongHoaHongSp = 0m;
+            if (nhanVien.LaThoChinh)
+            {
+                tongHoaHongSp = await _context.ChitietHoadonSps
+                    .Where(ct =>
+                        ct.MaNv == employeeId &&
+                        ct.TienHoaHongSp != null &&
+                        ct.MaHdNavigation != null &&
+                        ct.MaHdNavigation.TrangThai == 1 &&
+                        ct.MaHdNavigation.NgayTao >= ngayDau &&
+                        ct.MaHdNavigation.NgayTao <= ngayCuoi)
+                    .SumAsync(ct => ct.TienHoaHongSp ?? 0);
+            }
+
             // -----------------------------------------------
             // BƯỚC 5: TÍNH TOÁN VÀ TRẢ VỀ KẾT QUẢ
             // -----------------------------------------------
@@ -282,8 +334,9 @@ namespace MinhTamHair.Admin.Services
                 ? nhanVien.LuongCoBan / SO_NGAY_CONG_QUY_DINH
                 : 0;
 
-            var luongTheoNgayCong = Math.Round(luongMoiCa * soCaLam, 0);
-            var tongThuNhap = luongTheoNgayCong + tongHoaHong;
+            // Tính theo công QUY ĐỔI (FT=1.0, PT=0.5)
+            var luongTheoNgayCong = Math.Round(luongMoiCa * soCaQuyDoiMy, 0);
+            var tongThuNhap = luongTheoNgayCong + tongHoaHongDv + tongHoaHongSp;
 
             return new NhanVienLuongDto
             {
@@ -292,9 +345,14 @@ namespace MinhTamHair.Admin.Services
                 TenLoaiNv = nhanVien.TenLoaiNv,
                 HinhAnh = nhanVien.HinhAnh,
                 LuongCoBan = nhanVien.LuongCoBan,
+                LaThoChinh = nhanVien.LaThoChinh,
                 SoNgayCongQuyDinh = SO_NGAY_CONG_QUY_DINH,
-                SoCaLamThucTe = soCaLam,
-                TongHoaHong = tongHoaHong,
+                SoCaLamThucTe   = soCaFTMy + soCaPTMy,
+                SoCaFulltime    = soCaFTMy,
+                SoCaParttime    = soCaPTMy,
+                SoCaChuanQuyDoi = soCaQuyDoiMy,
+                TongHoaHongDv = tongHoaHongDv,
+                TongHoaHongSp = tongHoaHongSp,
                 LuongTheoNgayCong = luongTheoNgayCong,
                 TongThuNhap = tongThuNhap,
                 Thang = month,
