@@ -27,6 +27,7 @@ public class AdminVoucherController : ControllerBase
     public async Task<IActionResult> GetAll([FromQuery] string? lifecycle = null)
     {
         var now = DateTime.Now;
+        await MinhTamHair.VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, now);
         var key = NormalizeLifecycleKey(lifecycle);
 
         try
@@ -102,6 +103,7 @@ public class AdminVoucherController : ControllerBase
 
         try
         {
+            await MinhTamHair.VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, DateTime.Now);
             var head = await _context.Vouchers
                 .AsNoTracking()
                 .Where(x => x.MaCode == maCode)
@@ -245,6 +247,7 @@ public class AdminVoucherController : ControllerBase
     {
         try
         {
+            await MinhTamHair.VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, DateTime.Now);
             var v = await _context.Vouchers
                 .AsNoTracking()
                 .Where(x => x.MaCode == maCode)

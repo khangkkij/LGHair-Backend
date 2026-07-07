@@ -47,21 +47,23 @@ namespace MinhTamHair.KhanchHang.Controllers
                 }
             }
 
+            await VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, DateTime.Now);
+
             var query = _context.Vouchers.AsQueryable();
 
             // Không lọc theo rank ở bước hiển thị (ưu đãi rank xử lý khi Collect).
 
             var now = DateTime.Now;
-            // Chỉ đưa vào danh sách công khai: còn hiệu lực + trong thời gian + còn lượt.
-            // Vẫn trả về các mã khách đã nhận (kể cả hết hạn/hết lượt) để tab "Của tôi" hoạt động.
+            // Chỉ đưa vào danh sách công khai: còn hiệu lực + trong thời gian.
+            // Ẩn hoàn toàn các voucher đã hết hạn hoặc bị vô hiệu khỏi trang chủ/khách hàng.
             query = query.Where(v =>
-                (
-                    (v.TrangThai == null || v.TrangThai == 1)
-                    && (!v.NgayBatDau.HasValue || v.NgayBatDau <= now)
-                    && (!v.NgayKetThuc.HasValue || v.NgayKetThuc >= now)
-                    && (!v.SoLuong.HasValue || (v.SoLuongDaDung ?? 0) < v.SoLuong)
-                )
-                || (collectedCodes.Count > 0 && collectedCodes.Contains(v.MaCode)));
+                (v.TrangThai == null || v.TrangThai == 1)
+                && (!v.NgayBatDau.HasValue || v.NgayBatDau <= now)
+                && (!v.NgayKetThuc.HasValue || v.NgayKetThuc >= now)
+                && (
+                    (!v.SoLuong.HasValue || (v.SoLuongDaDung ?? 0) < v.SoLuong)
+                    || (collectedCodes.Count > 0 && collectedCodes.Contains(v.MaCode))
+                ));
 
             var vouchers = await query
                 .OrderByDescending(v => v.NgayBatDau ?? DateTime.MinValue)
@@ -111,8 +113,11 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             var usedCodeSet = usedCodes.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var now = DateTime.Now;
+            await VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, now);
 
-            var result = khachHang.MaCodes.Select(v => new
+            var result = khachHang.MaCodes
+                .Where(v => (v.TrangThai == null || v.TrangThai == 1) && (!v.NgayKetThuc.HasValue || v.NgayKetThuc >= now))
+                .Select(v => new
             {
                 maCode = v.MaCode,
                 moTa = v.MoTa,

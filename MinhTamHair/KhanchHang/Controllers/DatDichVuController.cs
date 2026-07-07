@@ -103,6 +103,7 @@ namespace MinhTamHair.KhanchHang.Controllers
         public async Task<IActionResult> GetMyVouchers(string maKH, [FromQuery] decimal subTotal,
             [FromQuery] DateTime? ngayGioHen, [FromQuery] string? serviceIds)
         {
+            await VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, DateTime.Now);
             var kh = await _context.Khachhangs
                 .Include(k => k.MaCodes)
                 .FirstOrDefaultAsync(k => k.MaKh == maKH);
