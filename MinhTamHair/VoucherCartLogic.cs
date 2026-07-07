@@ -185,4 +185,33 @@ public static class VoucherCartLogic
 
         return (true, null);
     }
+
+    /// <summary>Tự động chuyển TrangThai = 0 (vô hiệu) cho các voucher đã hết hạn (NgayKetThuc < now).</summary>
+    public static async Task AutoDisableExpiredVouchersAsync(MinhTamHairContext ctx, DateTime now, CancellationToken ct = default)
+    {
+        try
+        {
+            var expired = await ctx.Vouchers
+                .Where(v => (v.TrangThai == null || v.TrangThai == 1) && v.NgayKetThuc.HasValue && v.NgayKetThuc < now)
+                .ToListAsync(ct);
+            if (expired.Count > 0)
+            {
+                foreach (var v in expired)
+                {
+                    v.TrangThai = 0;
+                }
+                await ctx.SaveChangesAsync(ct);
+            }
+        }
+        catch
+        {
+            try
+            {
+                await ctx.Database.ExecuteSqlInterpolatedAsync(
+                    $"UPDATE VOUCHER SET trangThai = 0 WHERE (trangThai IS NULL OR trangThai = 1) AND ngayKetThuc IS NOT NULL AND ngayKetThuc < {now}",
+                    ct);
+            }
+            catch { }
+        }
+    }
 }
