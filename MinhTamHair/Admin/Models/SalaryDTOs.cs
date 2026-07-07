@@ -41,17 +41,51 @@ namespace MinhTamHair.Admin.Models
         public int SoNgayCongQuyDinh { get; set; } = 26;
 
         /// <summary>
-        /// Số ca làm việc đã hoàn thành thực tế trong tháng.
+        /// Tổng số ca làm việc thực tế (Fulltime + Part-time) trong tháng.
         /// Điều kiện: Lichlamviec.TrangThai = 2 (Đã điểm danh có mặt).
         /// </summary>
         public int SoCaLamThucTe { get; set; }
 
         /// <summary>
+        /// Số ca full-time đã làm (ca dài ≥ 7 tiếng: sáng/tối fullday) — hệ số 1.0 công.
+        /// </summary>
+        public int SoCaFulltime { get; set; }
+
+        /// <summary>
+        /// Số ca part-time đã làm (ca 4 tiếng: sáng/chiều/tối part-time) — hệ số 0.5 công.
+        /// </summary>
+        public int SoCaParttime { get; set; }
+
+        /// <summary>
+        /// Số công quy đổi thực tế = SoCaFulltime × 1.0 + SoCaParttime × 0.5.
+        /// Đây là TỬ SỐ trong công thức: LuongTheoNgayCong = (LuongCoBan / 26) × SoCaChuanQuyDoi.
+        /// </summary>
+        public decimal SoCaChuanQuyDoi { get; set; }
+
+        /// <summary>
         /// Tổng tiền hoa hồng dịch vụ tích lũy trong tháng.
         /// Lấy từ: ChitietLichdat.TienHoaHongDv của các lịch đặt thuộc hóa đơn
-        /// đã được thanh toán thành công (Lichdat.TrangThai = 2 hoặc 3).
+        /// đã được thanh toán thành công. Cả THỢ CHÍNH và THỢ PHỤ đều có.
         /// </summary>
-        public decimal TongHoaHong { get; set; }
+        public decimal TongHoaHongDv { get; set; }
+
+        /// <summary>
+        /// Tổng tiền hoa hồng sản phẩm tích lũy trong tháng.
+        /// Lấy từ: ChitietHoadonSp.TienHoaHongSp của các hóa đơn SP đã thanh toán.
+        /// CHỈ THỢ CHÍNH (DuocDatLich=true) mới được nhận, THỢ PHỤ = 0.
+        /// </summary>
+        public decimal TongHoaHongSp { get; set; }
+
+        /// <summary>
+        /// Tổng hoa hồng gộp = TongHoaHongDv + TongHoaHongSp (trước đây là TongHoaHong)
+        /// </summary>
+        public decimal TongHoaHong => TongHoaHongDv + TongHoaHongSp;
+
+        /// <summary>
+        /// Cờ phân loại: true = Thợ chính (DuocDatLich=true), false = Thợ phụ.
+        /// Thợ chính nhận được cả hoa hồng DV lẫn hoa hồng SP.
+        /// </summary>
+        public bool LaThoChinh { get; set; }
 
         /// <summary>
         /// Phần lương cơ bản được tính dựa trên số ca thực làm.

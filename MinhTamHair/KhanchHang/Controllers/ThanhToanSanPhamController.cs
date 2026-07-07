@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -66,41 +66,71 @@ namespace MinhTamHair.KhanchHang.Controllers
         public async Task<IActionResult> GetMyVouchers(string maKH, [FromQuery] decimal subTotal, [FromQuery] string? productIds)
         {
             var kh = await _context.Khachhangs.Include(k => k.MaCodes).FirstOrDefaultAsync(k => k.MaKh == maKH);
-            if (kh == null) return Ok(Array.Empty<object>());
 
             var now = DateTime.Now;
             var cartIds = string.IsNullOrWhiteSpace(productIds) ? new List<string>() : productIds.Split(',').ToList();
 
-            string? maRank = kh.MaRank;
+            string? maRank = kh?.MaRank;
             int? rankCap = null;
             if (!string.IsNullOrWhiteSpace(maRank))
             {
-                var rank = await _context.Hangthanhviens.AsNoTracking().FirstOrDefaultAsync(r => r.MaRank == maRank);
+                var rank = await _context.Hangthanhviens.AsNoTracking().FirstOrDefaultAsync(r => r.MaRank == maRank && (r.TrangThai == null || r.TrangThai == 1));
                 rankCap = rank?.PhanTramGiamGia;
             }
 
+            var publicVouchers = await _context.Vouchers.AsNoTracking()
+                .Where(v => (v.TrangThai == null || v.TrangThai == 1)
+                         && (!v.NgayBatDau.HasValue || v.NgayBatDau <= now)
+                         && (!v.NgayKetThuc.HasValue || v.NgayKetThuc >= now)
+                         && (!v.SoLuong.HasValue || (v.SoLuongDaDung ?? 0) < v.SoLuong))
+                .ToListAsync();
+
+            var myCodes = kh != null ? kh.MaCodes : new List<Voucher>();
+            var allVouchers = myCodes.Concat(publicVouchers)
+                .GroupBy(v => v.MaCode, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.First())
+                .ToList();
+
             var usageMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            foreach (var c in kh.MaCodes.Select(v => v.MaCode))
+            foreach (var c in allVouchers.Select(v => v.MaCode))
             {
-                usageMap[c] = await _context.HoaDons.CountAsync(h => h.MaKh == maKH && h.MaCode == c);
+                usageMap[c] = await _context.HoaDons.AsNoTracking().CountAsync(h => h.MaKh == maKH && h.MaCode == c);
             }
 
             var result = new List<object>();
-            foreach (var v in kh.MaCodes)
+            foreach (var v in allVouchers)
             {
+                if (v.TrangThai != null && v.TrangThai != 1) continue;
+                if (v.NgayBatDau.HasValue && now < v.NgayBatDau.Value) continue;
+                if (v.NgayKetThuc.HasValue && now > v.NgayKetThuc.Value) continue;
+                if (v.SoLuong.HasValue && (v.SoLuongDaDung ?? 0) >= v.SoLuong.Value) continue;
+
                 var uses = usageMap.GetValueOrDefault(v.MaCode, 0);
                 var err = VoucherCartLogic.ValidateAndCalculate(v, uses, subTotal, cartIds, now, now, maRank, rankCap, out var tienGiam, out _);
-                if (err == null)
+
+                decimal displayDiscount = tienGiam;
+                if (displayDiscount == 0)
                 {
-                    result.Add(new
-                    {
-                        id = v.MaCode,
-                        code = v.MaCode,
-                        discount = tienGiam,
-                        desc = v.MoTa,
-                        expiry = v.NgayKetThuc != null ? v.NgayKetThuc.Value.ToString("dd/MM/yyyy") : ""
-                    });
+                    if (v.SoTienGiam.HasValue && v.SoTienGiam > 0)
+                        displayDiscount = v.SoTienGiam.Value;
+                    else if (v.PhanTramGiam.HasValue && v.PhanTramGiam > 0 && subTotal > 0)
+                        displayDiscount = Math.Round(subTotal * v.PhanTramGiam.Value / 100m, 0);
                 }
+
+                string desc = v.MoTa ?? "";
+                if (v.GiaTriToiThieu.HasValue && v.GiaTriToiThieu > 0 && subTotal < v.GiaTriToiThieu.Value)
+                {
+                    desc += $" (Đơn tối thiểu {v.GiaTriToiThieu.Value:N0}đ)";
+                }
+
+                result.Add(new
+                {
+                    id = v.MaCode,
+                    code = v.MaCode,
+                    discount = displayDiscount,
+                    desc = desc,
+                    expiry = v.NgayKetThuc != null ? v.NgayKetThuc.Value.ToString("dd/MM/yyyy") : "Vĩnh viễn"
+                });
             }
             return Ok(result);
         }
