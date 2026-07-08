@@ -48,5 +48,25 @@ namespace MinhTamHair.Admin.Models
 			[Required]
 			public string GhiChu { get; set; } = null!; // Bắt buộc nhập lý do rời ca sớm
 		}
+
+		// DTO để nhận yêu cầu Đổi ca / Xin nghỉ
+		public class YeuCauDoiCaRequest
+		{
+			[Required]
+			public string CaMoi { get; set; } = null!;
+			[Required]
+			public string LyDo { get; set; } = null!;
+		}
+
+		// DTO để nhận yêu cầu Nghỉ lễ chung cho toàn bộ nhân viên
+		public class NghiLeChungRequest
+		{
+			[Required]
+			public string TuNgay { get; set; } = null!;
+			[Required]
+			public string DenNgay { get; set; } = null!;
+			[Required]
+			public string LyDo { get; set; } = null!;
+		}
 	}
 }

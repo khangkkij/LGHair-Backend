@@ -99,11 +99,20 @@ namespace MinhTamHair.Admin.Controllers
             TimeOnly caStart, caEnd;
             switch (lich.CaLam)
             {
-                case "Ca ngày":
+                case "Ca sáng (7h-17h)":
                     caStart = new TimeOnly(7, 0); caEnd = new TimeOnly(17, 0);
                     break;
-                case "Ca tối":
+                case "Ca tối (13h-20h)":
                     caStart = new TimeOnly(13, 0); caEnd = new TimeOnly(20, 0);
+                    break;
+                case "Ca sáng (Part-time)":
+                    caStart = new TimeOnly(7, 0); caEnd = new TimeOnly(11, 0);
+                    break;
+                case "Ca chiều (Part-time)":
+                    caStart = new TimeOnly(13, 0); caEnd = new TimeOnly(17, 0);
+                    break;
+                case "Ca tối (Part-time)":
+                    caStart = new TimeOnly(16, 0); caEnd = new TimeOnly(20, 0);
                     break;
                 default:
                     // Nếu không xác định được ca, mặc định chặn xóa nếu ngày đó có bất kỳ lịch đặt nào
@@ -144,7 +153,37 @@ namespace MinhTamHair.Admin.Controllers
             if (!DateOnly.TryParse(request.NgayLamViec, out DateOnly ngaySua))
                 return BadRequest(new { message = "Ngày không hợp lệ." });
 
-            // Tìm xem hôm nay đã có dòng dữ liệu (do tự động tạo hoặc có sẵn) chưa
+            // 1. Xác định khung giờ của CA MỚI
+            TimeOnly newStart, newEnd;
+            switch (request.CaLam)
+            {
+                case "Ca sáng (7h-17h)": newStart = new TimeOnly(7, 0); newEnd = new TimeOnly(17, 0); break;
+                case "Ca tối (13h-20h)": newStart = new TimeOnly(13, 0); newEnd = new TimeOnly(20, 0); break;
+                case "Ca sáng (Part-time)": newStart = new TimeOnly(7, 0); newEnd = new TimeOnly(11, 0); break;
+                case "Ca chiều (Part-time)": newStart = new TimeOnly(13, 0); newEnd = new TimeOnly(17, 0); break;
+                case "Ca tối (Part-time)": newStart = new TimeOnly(16, 0); newEnd = new TimeOnly(20, 0); break;
+                default: 
+                    // Nếu đổi thành "Chưa xếp" hoặc ca không hợp lệ, không cho phép đổi nếu đang có khách đặt trong ngày
+                    newStart = TimeOnly.MaxValue; newEnd = TimeOnly.MinValue; 
+                    break;
+            }
+
+            // 2. Kiểm tra xem có lịch đặt nào nằm ngoài khung giờ của CA MỚI không
+            var hasConflictingBooking = await _context.ChitietLichdats
+                .Include(ct => ct.MaLdNavigation)
+                .AnyAsync(ct =>
+                    ct.MaNv == request.MaNv &&
+                    ct.MaLdNavigation!.NgayHen == ngaySua &&
+                    ct.MaLdNavigation.TrangThai != 0 &&
+                    (ct.MaLdNavigation.GioBatDau < newStart || ct.MaLdNavigation.GioKetThuc > newEnd)
+                );
+
+            if (hasConflictingBooking)
+            {
+                return BadRequest(new { message = $"Không thể đổi thành '{request.CaLam}' vì nhân viên đã có lịch khách đặt nằm ngoài khung giờ này." });
+            }
+
+            // 3. Tìm xem hôm nay đã có dòng dữ liệu (do tự động tạo hoặc có sẵn) chưa
             var lichHienTai = await _context.Lichlamviecs
                 .FirstOrDefaultAsync(l => l.MaNv == request.MaNv && l.NgayLamViec == ngaySua);
 
@@ -214,8 +253,11 @@ namespace MinhTamHair.Admin.Controllers
             TimeOnly start, end;
             switch (lich.CaLam)
             {
-                case "Ca ngày": start = new TimeOnly(7, 0); end = new TimeOnly(17, 0); break;
-                case "Ca tối": start = new TimeOnly(13, 0); end = new TimeOnly(20, 0); break;
+                case "Ca sáng (7h-17h)": start = new TimeOnly(7, 0); end = new TimeOnly(17, 0); break;
+                case "Ca tối (13h-20h)": start = new TimeOnly(13, 0); end = new TimeOnly(20, 0); break;
+                case "Ca sáng (Part-time)": start = new TimeOnly(7, 0); end = new TimeOnly(11, 0); break;
+                case "Ca chiều (Part-time)": start = new TimeOnly(13, 0); end = new TimeOnly(17, 0); break;
+                case "Ca tối (Part-time)": start = new TimeOnly(16, 0); end = new TimeOnly(20, 0); break;
                 default: return BadRequest(new { message = "Ca làm không hợp lệ." });
             }
 
@@ -378,7 +420,7 @@ namespace MinhTamHair.Admin.Controllers
 
 				var mauCaLam = caLamGiaoDien
 					.GroupBy(l => l.MaNv)
-					.ToDictionary(g => g.Key!, g => g.FirstOrDefault()?.CaLam ?? "Chưa xếp"); // Sửa fallback mặc định thành "Chưa xếp"
+					.ToDictionary(g => g.Key!, g => g.FirstOrDefault(l => l.CaLam != "Chưa xếp" && l.CaLam != "Nghỉ lễ")?.CaLam ?? "Chưa xếp"); // Sửa fallback mặc định thành "Chưa xếp"
 
 				// --- BƯỚC KIỂM TRA MỚI ---
 				// Lọc ra danh sách mã nhân viên đang bị "Chưa xếp" ca
@@ -422,7 +464,7 @@ namespace MinhTamHair.Admin.Controllers
 						// Nếu thợ này chưa có lịch trong ngày hôm đó -> Tạo mới
 						if (!caDaCo.Contains(nv.MaNv))
 						{
-							var caMacDinh = mauCaLam.GetValueOrDefault(nv.MaNv, "Ca ngày");
+							var caMacDinh = mauCaLam.GetValueOrDefault(nv.MaNv, "Ca sáng (7h-17h)");
 							_context.Lichlamviecs.Add(new Lichlamviec
 							{
 								MaNv = nv.MaNv,
@@ -442,6 +484,83 @@ namespace MinhTamHair.Admin.Controllers
 			{
 				return StatusCode(500, new { success = false, message = "Lỗi khi tạo lịch: " + ex.Message });
 			}
+		}
+
+		[HttpPost("nghi-le-chung")]
+		public async Task<IActionResult> SetCompanyWideHoliday([FromBody] NghiLeChungRequest request)
+		{
+			if (!DateOnly.TryParse(request.TuNgay, out DateOnly fromDate) || 
+			    !DateOnly.TryParse(request.DenNgay, out DateOnly toDate))
+			{
+				return BadRequest(new { message = "Định dạng ngày không hợp lệ." });
+			}
+
+			if (fromDate > toDate)
+			{
+				return BadRequest(new { message = "Từ ngày không được lớn hơn Đến ngày." });
+			}
+
+			try
+			{
+				// 1. Lấy danh sách thợ hợp lệ
+				var danhSachTho = await _context.Nhanviens
+					.Include(nv => nv.MaLoaiNvNavigation)
+					.Where(nv => nv.TrangThai == 1 && nv.MaLoaiNvNavigation!.DuocDatLich == true)
+					.ToListAsync();
+
+				int countUpdated = 0;
+				int countCreated = 0;
+
+				// 2. Lấy tất cả ca làm của các thợ trong khoảng thời gian này
+				var existingShifts = await _context.Lichlamviecs
+					.Where(l => l.NgayLamViec >= fromDate && l.NgayLamViec <= toDate)
+					.ToListAsync();
+
+				// 3. Xử lý từng ngày
+				for (var date = fromDate; date <= toDate; date = date.AddDays(1))
+				{
+					foreach (var nv in danhSachTho)
+					{
+						var shift = existingShifts.FirstOrDefault(l => l.MaNv == nv.MaNv && l.NgayLamViec == date);
+						if (shift != null)
+						{
+							if (shift.CaLam != "Nghỉ lễ")
+							{
+								shift.CaLam = "Nghỉ lễ";
+								shift.GhiChu = request.LyDo;
+								countUpdated++;
+							}
+						}
+						else
+						{
+							_context.Lichlamviecs.Add(new Lichlamviec
+							{
+								MaNv = nv.MaNv,
+								NgayLamViec = date,
+								CaLam = "Nghỉ lễ",
+								TrangThai = 1,
+								GhiChu = request.LyDo
+							});
+							countCreated++;
+						}
+					}
+				}
+
+				await _context.SaveChangesAsync();
+				return Ok(new { success = true, message = $"Đã áp dụng nghỉ lễ chung. Tạo mới {countCreated} ca nghỉ, cập nhật {countUpdated} ca." });
+			}
+			catch (Exception ex)
+			{
+				return StatusCode(500, new { success = false, message = "Lỗi khi thiết lập nghỉ chung: " + ex.Message });
+			}
+		}
+
+		[HttpGet("qr-diem-danh")]
+		public IActionResult GetDailyQRCode()
+		{
+			var dateStr = DateTime.Now.ToString("yyyyMMdd");
+			var qrCode = $"MinhTamHair-DiemDanh-{dateStr}";
+			return Ok(new { success = true, qrCode = qrCode });
 		}
 	}
 }

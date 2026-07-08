@@ -103,11 +103,10 @@ namespace MinhTamHair.KhanchHang.Controllers
         public async Task<IActionResult> GetMyVouchers(string maKH, [FromQuery] decimal subTotal,
             [FromQuery] DateTime? ngayGioHen, [FromQuery] string? serviceIds)
         {
+            await VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, DateTime.Now);
             var kh = await _context.Khachhangs
                 .Include(k => k.MaCodes)
                 .FirstOrDefaultAsync(k => k.MaKh == maKH);
-            if (kh == null)
-                return Ok(Array.Empty<object>());
 
             var now = DateTime.Now;
             var ngayDichVu = ngayGioHen ?? now;
@@ -115,7 +114,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 ? new List<string>()
                 : serviceIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
-            string? maRank = kh.MaRank;
+            string? maRank = kh?.MaRank;
             int? rankCap = null;
             if (!string.IsNullOrWhiteSpace(maRank))
             {
@@ -124,31 +123,58 @@ namespace MinhTamHair.KhanchHang.Controllers
                 rankCap = rank?.PhanTramGiamGia;
             }
 
-            var codeList = kh.MaCodes.Select(v => v.MaCode).ToList();
+            var publicVouchers = await _context.Vouchers.AsNoTracking()
+                .Where(v => (v.TrangThai == null || v.TrangThai == 1)
+                         && (!v.NgayBatDau.HasValue || v.NgayBatDau <= now)
+                         && (!v.NgayKetThuc.HasValue || v.NgayKetThuc >= now)
+                         && (!v.SoLuong.HasValue || (v.SoLuongDaDung ?? 0) < v.SoLuong))
+                .ToListAsync();
+
+            var myCodes = kh != null ? kh.MaCodes : new List<Voucher>();
+            var allVouchers = myCodes.Concat(publicVouchers)
+                .GroupBy(v => v.MaCode, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.First())
+                .ToList();
+
             var usageMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            foreach (var c in codeList)
+            foreach (var c in allVouchers.Select(v => v.MaCode))
             {
-                var n = await _context.HoaDons.AsNoTracking()
-                    .CountAsync(h => h.MaKh == maKH && h.MaCode == c);
-                usageMap[c] = n;
+                usageMap[c] = await _context.HoaDons.AsNoTracking().CountAsync(h => h.MaKh == maKH && h.MaCode == c);
             }
 
             var result = new List<object>();
-            foreach (var v in kh.MaCodes)
+            foreach (var v in allVouchers)
             {
+                if (v.TrangThai != null && v.TrangThai != 1) continue;
+                if (v.NgayBatDau.HasValue && now < v.NgayBatDau.Value) continue;
+                if (v.NgayKetThuc.HasValue && now > v.NgayKetThuc.Value) continue;
+                if (v.SoLuong.HasValue && (v.SoLuongDaDung ?? 0) >= v.SoLuong.Value) continue;
+
                 var uses = usageMap.GetValueOrDefault(v.MaCode, 0);
-                var err = VoucherCartLogic.ValidateAndCalculate(v, uses, subTotal, cartIds, ngayDichVu, now, maRank, rankCap,
-                    out var tienGiam, out _);
-                if (err != null)
-                    continue;
+                var err = VoucherCartLogic.ValidateAndCalculate(v, uses, subTotal, cartIds, ngayDichVu, now, maRank, rankCap, out var tienGiam, out _);
+
+                decimal displayDiscount = tienGiam;
+                if (displayDiscount == 0)
+                {
+                    if (v.SoTienGiam.HasValue && v.SoTienGiam > 0)
+                        displayDiscount = v.SoTienGiam.Value;
+                    else if (v.PhanTramGiam.HasValue && v.PhanTramGiam > 0 && subTotal > 0)
+                        displayDiscount = Math.Round(subTotal * v.PhanTramGiam.Value / 100m, 0);
+                }
+
+                string desc = v.MoTa ?? "";
+                if (v.GiaTriToiThieu.HasValue && v.GiaTriToiThieu > 0 && subTotal < v.GiaTriToiThieu.Value)
+                {
+                    desc += $" (Đơn tối thiểu {v.GiaTriToiThieu.Value:N0}đ)";
+                }
 
                 result.Add(new
                 {
                     id = v.MaCode,
                     code = v.MaCode,
-                    discount = tienGiam,
-                    desc = v.MoTa,
-                    expiry = v.NgayKetThuc != null ? v.NgayKetThuc.Value.ToString("dd/MM/yyyy") : ""
+                    discount = displayDiscount,
+                    desc = desc,
+                    expiry = v.NgayKetThuc != null ? v.NgayKetThuc.Value.ToString("dd/MM/yyyy") : "Vĩnh viễn"
                 });
             }
 
@@ -614,10 +640,12 @@ namespace MinhTamHair.KhanchHang.Controllers
                 TimeOnly start = TimeOnly.Parse(request.GioBatDau);
                 TimeOnly end = start.AddMinutes(request.TongThoiGian);
 
-                var caCanThiet = new List<string> { "Cả ngày" };
-                if (start >= new TimeOnly(8, 0) && end <= new TimeOnly(12, 0)) caCanThiet.Add("Sáng");
-                else if (start >= new TimeOnly(13, 0) && end <= new TimeOnly(17, 0)) caCanThiet.Add("Chiều");
-                else if (start >= new TimeOnly(17, 0) && end <= new TimeOnly(21, 0)) caCanThiet.Add("Tối");
+                var caCanThiet = new List<string>();
+                if (start >= new TimeOnly(7, 0) && end <= new TimeOnly(17, 0)) caCanThiet.Add("Ca sáng (7h-17h)");
+                if (start >= new TimeOnly(13, 0) && end <= new TimeOnly(20, 0)) caCanThiet.Add("Ca tối (13h-20h)");
+                if (start >= new TimeOnly(7, 0) && end <= new TimeOnly(11, 0)) caCanThiet.Add("Ca sáng (Part-time)");
+                if (start >= new TimeOnly(13, 0) && end <= new TimeOnly(17, 0)) caCanThiet.Add("Ca chiều (Part-time)");
+                if (start >= new TimeOnly(16, 0) && end <= new TimeOnly(20, 0)) caCanThiet.Add("Ca tối (Part-time)");
 
                 // 2. LẤY THỢ ĐI LÀM (Bỏ Include để EF Core không bị ngáo)
                 var thoDiLam = await _context.Lichlamviecs
