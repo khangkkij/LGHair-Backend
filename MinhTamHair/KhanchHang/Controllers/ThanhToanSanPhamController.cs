@@ -174,7 +174,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 using var transaction = await _context.Database.BeginTransactionAsync();
                 try
                 {
-                    string maHd = "SP" + DateTime.Now.ToString("yyMMddHHmmss");
+                    string maHd = "SP" + DateTime.Now.ToString("ddHHmmss");
                     decimal subTotal = req.Products.Sum(p => p.GiaBan * p.SoLuong);
                     decimal tongSauGiam = subTotal;
                     string? maCodeChinh = req.VoucherIds?.FirstOrDefault();
@@ -368,7 +368,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         }
                     }
 
-                    return Ok(new { success = true, isOnlinePayment = !string.IsNullOrEmpty(paymentUrl), url = paymentUrl });
+                    return Ok(new { success = true, isOnlinePayment = !string.IsNullOrEmpty(paymentUrl), url = paymentUrl, maHd = maHd });
                 }
                 catch (Exception ex)
                 {

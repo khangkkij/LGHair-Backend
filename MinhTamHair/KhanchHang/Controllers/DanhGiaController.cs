@@ -1,10 +1,11 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http; 
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.KhanchHang.Models;
 using MinhTamHair.Models;
-using Microsoft.AspNetCore.Http; 
 using System.IO;                
-using Microsoft.AspNetCore.Hosting;
+using System.Security.Claims;
 
 namespace MinhTamHair.KhanchHang.Controllers
 {
@@ -511,6 +512,209 @@ namespace MinhTamHair.KhanchHang.Controllers
             catch (Exception ex)
             {
                 return StatusCode(500, "Lỗi tính sao: " + ex.Message);
+            }
+        }
+        [HttpGet("pending-products-to-rate/{maKh}")]
+        public IActionResult GetPendingProducts(string maKh)
+        {
+            // 1. Tìm các hóa đơn đã giao thành công của khách hàng
+            var pendingOrders = _context.HoaDons
+                .Where(hd => hd.MaKh == maKh && hd.TrangThai == 1) // Hóa đơn đã xong / giao thành công
+                .Where(hd => hd.ChitietHoadonSps.Any()) // Chỉ lấy các hóa đơn có chứa sản phẩm
+                .Select(hd => new
+                {
+                    MaHd = hd.MaHd, 
+                    NgayTao = hd.NgayTao ?? DateTime.Now, 
+
+                    // 2. Lấy danh sách sản phẩm từ bảng chi tiết hóa đơn sản phẩm
+                    Products = hd.ChitietHoadonSps.Select(ct => new {
+                        MaBienThe = ct.MaBienThe, 
+                        TenSp = ct.MaBienTheNavigation.TenBienThe, 
+
+                        // Kiểm tra chéo với bảng DanhgiaSanpham xem đã đánh giá chưa
+                        IsAlreadyRated = _context.DanhgiaSanphams.Any(dg =>
+                            dg.MaHd == hd.MaHd &&
+                            dg.MaSanPham == ct.MaBienThe) //[cite: 1, 3]
+                    }).ToList()
+                })
+                .ToList(); // Tải dữ liệu vào RAM
+
+            // 3. LỌC HÓA ĐƠN: Chỉ trả về những hóa đơn CÒN sản phẩm chưa được đánh giá
+            var finalResult = pendingOrders
+                .Where(hd => hd.Products.Any(p => !p.IsAlreadyRated)) 
+                .OrderByDescending(hd => hd.NgayTao) 
+                .ToList(); //
+
+            return Ok(finalResult); //
+        }
+
+        // 2. API lưu đánh giá sản phẩm
+        [HttpPost("submit-product-reviews")]
+        public async Task<IActionResult> SubmitProductReviews([FromForm] string maHd, [FromForm] List<ProductRatingDTO> reviews) //[cite: 3, 4]
+        {
+            // 1. Kiểm tra dữ liệu đầu vào[cite: 3]
+            if (string.IsNullOrEmpty(maHd) || reviews == null || !reviews.Any()) //[cite: 3]
+            {
+                return BadRequest("Dữ liệu không hợp lệ hoặc chưa chọn số sao."); //[cite: 3]
+            }
+
+            try
+            {
+                foreach (var item in reviews) //[cite: 3]
+                {
+                    string? imagePath = null; //[cite: 3]
+
+                    // 2. Xử lý lưu file ảnh nếu khách hàng có đính kèm[cite: 3]
+                    if (item.HinhAnhFile != null && item.HinhAnhFile.Length > 0) //[cite: 3, 4]
+                    {
+                        // Tạo tên file ngẫu nhiên để tránh trùng lặp[cite: 3]
+                        var fileName = Guid.NewGuid().ToString() + Path.GetExtension(item.HinhAnhFile.FileName); //[cite: 3]
+                        var uploadsFolder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "images", "reviews"); //[cite: 3]
+
+                        if (!Directory.Exists(uploadsFolder)) //[cite: 3]
+                        {
+                            Directory.CreateDirectory(uploadsFolder); //[cite: 3]
+                        }
+
+                        var filePath = Path.Combine(uploadsFolder, fileName); //[cite: 3]
+
+                        using (var stream = new FileStream(filePath, FileMode.Create)) //[cite: 3]
+                        {
+                            await item.HinhAnhFile.CopyToAsync(stream); //[cite: 3]
+                        }
+
+                        imagePath = "/images/reviews/" + fileName; //[cite: 3]
+                    }
+
+                    // 3. TẠO MỚI bản ghi Đánh Giá Sản Phẩm[cite: 1, 3]
+                    var newReview = new DanhgiaSanpham //[cite: 1, 3]
+                    {
+                        MaHd = maHd, //[cite: 1, 3]
+                        MaSanPham = item.MaBienThe, // Lưu mã biến thể sản phẩm[cite: 1, 3]
+                        MaKh = User.FindFirstValue("MaKh"), // Lấy mã KH từ token đăng nhập[cite: 3]
+                        SoSao = item.SoSao, //[cite: 1, 4]
+                        NoiDung = item.NoiDung, //[cite: 1, 4]
+                        HinhAnh = imagePath, // Lưu đường dẫn ảnh vừa upload[cite: 1, 3]
+                        NgayDanhGia = DateTime.Now, //[cite: 1, 3]
+                        TrangThai = 1 //[cite: 1, 3]
+                    };
+
+                    _context.DanhgiaSanphams.Add(newReview); //[cite: 3]
+                }
+
+                // 4. Lưu tất cả thay đổi vào Database[cite: 3]
+                await _context.SaveChangesAsync(); //[cite: 3]
+
+                return Ok(new { message = "Đánh giá sản phẩm thành công!" }); //[cite: 3]
+            }
+            catch (Exception ex) //[cite: 3]
+            {
+                Console.WriteLine("LỖI KHI LƯU ĐÁNH GIÁ: " + ex.Message); //[cite: 3]
+                return StatusCode(500, new { message = "Lỗi hệ thống khi lưu đánh giá." }); //[cite: 3]
+            }
+        }
+        [HttpGet("product-rated-history/{maKH}")]
+        public async Task<IActionResult> GetProductRatedHistory(string maKH)
+        {
+            try
+            {
+                var rawRatings = await _context.DanhgiaSanphams //[cite: 1, 3]
+                    .Include(dg => dg.MaHdNavigation) //[cite: 1, 3]
+                    .Include(dg => dg.MaSpNavigation) //[cite: 1]
+                    .Where(dg => dg.MaKh == maKH || dg.MaHdNavigation.MaKh == maKH) // Đảm bảo lấy đúng khách hàng[cite: 1, 3]
+                    .ToListAsync(); //[cite: 3]
+
+                var result = rawRatings
+                    .GroupBy(dg => dg.MaHd) // Gom nhóm theo hóa đơn[cite: 3]
+                    .Select(group => new {
+                        id = group.Key, //[cite: 3]
+                        date = group.First().NgayDanhGia?.ToString("yyyy-MM-dd") ?? "", //[cite: 3]
+                        products = group.Select(s => new {
+                            id = s.MaSanPham, //[cite: 1, 3]
+                            name = s.MaSpNavigation?.TenSp ?? "Sản phẩm", // Lấy tên sản phẩm[cite: 1, 2, 3]
+                            rating = s.SoSao, //[cite: 1, 3]
+                            comment = s.NoiDung, //[cite: 1, 3]
+                            image = s.HinhAnh, //[cite: 1, 3]
+                            reply = s.PhanHoi, // Lấy phản hồi của Admin (nếu có)[cite: 1, 3]
+                            Ngay = s.NgayDanhGia?.ToString("dd/MM/yyyy HH:mm") ?? "" //[cite: 1, 3]
+                        }).ToList()
+                    })
+                    .OrderByDescending(x => x.id) //[cite: 3]
+                    .ToList(); //[cite: 3]
+
+                return Ok(result); //[cite: 3]
+            }
+            catch (Exception ex) //[cite: 3]
+            {
+                return StatusCode(500, ex.Message); //[cite: 3]
+            }
+        }
+        [HttpDelete("delete-product-rating/{maHd}/{maBienThe}")]
+        public async Task<IActionResult> DeleteProductRating(string maHd, string maBienThe)
+        {
+            try
+            {
+                // 1. Tìm bản ghi đánh giá sản phẩm cụ thể
+                var rating = await _context.DanhgiaSanphams
+                    .FirstOrDefaultAsync(dg => dg.MaHd == maHd && dg.MaSanPham == maBienThe);
+
+                if (rating == null) return NotFound("Không tìm thấy dữ liệu đánh giá sản phẩm.");
+
+                // 2. Xóa ảnh vật lý trên server nếu có đính kèm
+                if (!string.IsNullOrEmpty(rating.HinhAnh))
+                {
+                    var filePath = Path.Combine(_env.WebRootPath, rating.HinhAnh.TrimStart('/'));
+                    if (System.IO.File.Exists(filePath))
+                    {
+                        System.IO.File.Delete(filePath);
+                    }
+                }
+
+                // 3. Xóa bản ghi trong Database
+                _context.DanhgiaSanphams.Remove(rating);
+                await _context.SaveChangesAsync();
+
+                return Ok(new { message = "Xóa đánh giá sản phẩm thành công!" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, ex.Message);
+            }
+        }
+        [HttpDelete("delete-order-product-rating/{maHd}")]
+        public async Task<IActionResult> DeleteOrderProductRating(string maHd)
+        {
+            try
+            {
+                // 1. Tìm tất cả các đánh giá sản phẩm thuộc hóa đơn này
+                var ratings = await _context.DanhgiaSanphams
+                    .Where(dg => dg.MaHd == maHd)
+                    .ToListAsync();
+
+                if (!ratings.Any()) return NotFound("Không tìm thấy đánh giá sản phẩm nào cho hóa đơn này.");
+
+                // 2. Lặp qua danh sách để xóa toàn bộ ảnh vật lý trên server (nếu có)
+                foreach (var r in ratings)
+                {
+                    if (!string.IsNullOrEmpty(r.HinhAnh))
+                    {
+                        var filePath = Path.Combine(_env.WebRootPath, r.HinhAnh.TrimStart('/'));
+                        if (System.IO.File.Exists(filePath))
+                        {
+                            System.IO.File.Delete(filePath);
+                        }
+                    }
+                }
+
+                // 3. Xóa hàng loạt bản ghi trong Database
+                _context.DanhgiaSanphams.RemoveRange(ratings);
+                await _context.SaveChangesAsync();
+
+                return Ok(new { message = "Đã xóa toàn bộ đánh giá sản phẩm của hóa đơn!" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, ex.Message);
             }
         }
     }
