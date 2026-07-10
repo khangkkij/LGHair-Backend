@@ -29,5 +29,10 @@ namespace MinhTamHair.Controllers
             })
             .ToArray();
         }
+        [HttpGet("test")]
+        public IActionResult Test()
+        {
+            return Ok(new { now = DateTime.Now, utcNow = DateTime.UtcNow });
+        }
     }
 }

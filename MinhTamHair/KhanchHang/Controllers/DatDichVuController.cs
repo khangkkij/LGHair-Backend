@@ -2,13 +2,13 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using MinhTamHair.KhanchHang.Models;
-using MinhTamHair.KhanchHang.Models;
 using MinhTamHair.Models;
-using System.Text; // Để dùng Encoding
-using System.Security.Cryptography; // Để dùng HMACSHA256
-using System.Net.Http.Json; // Để dùng PostAsJsonAsync cho MoMo
+using System.Text; 
+using System.Security.Cryptography; 
+using System.Net.Http.Json;
 using MinhTamHair.Services;
-using MinhTamHair;
+using MinhTamHair.Services.TimeHelper;
+
 
 namespace MinhTamHair.KhanchHang.Controllers
 {
@@ -27,10 +27,11 @@ namespace MinhTamHair.KhanchHang.Controllers
             _qrEmailService = qrEmailService;
             _scopeFactory = scopeFactory;
         }
+
         [HttpGet("data-booking")]
         public IActionResult GetAll()
         {
-            var now = DateTime.Now;
+            var now = VnTimeHelper.Now();
             var services = _context.Dichvus
                 .Where(s => s.TrangThai == 1)
                 .Include(x => x.ChitietFlashsales)
@@ -80,6 +81,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             return Ok(new { services, combos });
         }
+
         [HttpGet("get-stylists")]
         public IActionResult GetStylists()
         {
@@ -106,12 +108,12 @@ namespace MinhTamHair.KhanchHang.Controllers
         public async Task<IActionResult> GetMyVouchers(string maKH, [FromQuery] decimal subTotal,
             [FromQuery] DateTime? ngayGioHen, [FromQuery] string? serviceIds)
         {
-            await VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, DateTime.Now);
+            await VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, VnTimeHelper.Now());
             var kh = await _context.Khachhangs
                 .Include(k => k.MaCodes)
                 .FirstOrDefaultAsync(k => k.MaKh == maKH);
 
-            var now = DateTime.Now;
+            var now = VnTimeHelper.Now();
             var ngayDichVu = ngayGioHen ?? now;
             var cartIds = string.IsNullOrWhiteSpace(serviceIds)
                 ? new List<string>()
@@ -220,7 +222,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     return BadRequest(new { message = $"Bạn không sở hữu mã: {c}" });
             }
 
-            var now = DateTime.Now;
+            var now = VnTimeHelper.Now();
             var ngayDichVu = ngayGioHen ?? now;
             var cartIds = string.IsNullOrWhiteSpace(serviceIds)
                 ? new List<string>()
@@ -264,18 +266,21 @@ namespace MinhTamHair.KhanchHang.Controllers
                 var vnp_Url = _configuration["Vnpay:BaseUrl"];
                 var vnp_ReturnUrl = _configuration["Vnpay:ReturnUrlDichVu"];
 
+                var vnpayNow = VnTimeHelper.Now();
+
                 vnpay.AddRequestData("vnp_Version", "2.1.0");
                 vnpay.AddRequestData("vnp_Command", "pay");
                 vnpay.AddRequestData("vnp_TmnCode", vnp_TmnCode);
                 vnpay.AddRequestData("vnp_Amount", ((long)(model.Amount * 100)).ToString());
-                vnpay.AddRequestData("vnp_CreateDate", DateTime.Now.ToString("yyyyMMddHHmmss"));
+                vnpay.AddRequestData("vnp_CreateDate", vnpayNow.ToString("yyyyMMddHHmmss"));
+                vnpay.AddRequestData("vnp_ExpireDate", vnpayNow.AddMinutes(15).ToString("yyyyMMddHHmmss")); // Đã bổ sung ExpireDate
                 vnpay.AddRequestData("vnp_CurrCode", "VND");
                 vnpay.AddRequestData("vnp_IpAddr", "127.0.0.1");
                 vnpay.AddRequestData("vnp_Locale", "vn");
-                vnpay.AddRequestData("vnp_OrderInfo", "Thanh toan lich hen " + DateTime.Now.Ticks);
+                vnpay.AddRequestData("vnp_OrderInfo", "Thanh toan lich hen " + vnpayNow.Ticks);
                 vnpay.AddRequestData("vnp_OrderType", "other");
                 vnpay.AddRequestData("vnp_ReturnUrl", vnp_ReturnUrl);
-                vnpay.AddRequestData("vnp_TxnRef", DateTime.Now.ToString("yyyyMMddHHmmss"));
+                vnpay.AddRequestData("vnp_TxnRef", vnpayNow.ToString("yyyyMMddHHmmss"));
 
                 var paymentUrl = vnpay.CreateRequestUrl(vnp_Url, vnp_HashSecret);
                 return Ok(new { url = paymentUrl });
@@ -289,7 +294,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             var redirectUrl = _configuration["Momo:ReturnUrlDichVu"];
             var ipnUrl = _configuration["Momo:NotifyUrl"];
 
-            string orderId = DateTime.Now.ToString("yyyyMMddHHmmss");
+            string orderId = VnTimeHelper.Now().ToString("yyyyMMddHHmmss");
             string requestId = Guid.NewGuid().ToString();
             long amount = (long)model.Amount;
             string orderInfo = "Thanh toan lich hen Minh Tam Hair";
@@ -321,6 +326,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             if (result != null && result.resultCode == 0) return Ok(new { url = result.payUrl });
             return BadRequest(result?.message ?? "Lỗi MoMo");
         }
+
         [HttpPost("save-booking-final")]
         public async Task<IActionResult> SaveBooking([FromBody] BookingRequest model, [FromQuery] string paymentMode, [FromQuery] string? maStylist)
         {
@@ -358,7 +364,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                                 Email = model.Email,
                                 MatKhau = null,
                                 TrangThai = 1,
-                                NgayTao = DateTime.Now,
+                                NgayTao = VnTimeHelper.Now(),
                                 DiemTichLuy = 0,
                                 MaRank = "RANK01"
                             };
@@ -433,7 +439,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         var cartIds = model.Services.Select(s => s.Id).ToList();
                         var (vErr, _, sau) = await VoucherCartLogic.ValidateStackedAsync(
                             _context, codesList, currentMaKh, subtotal, cartIds,
-                            model.NgayHen, DateTime.Now, maRank, rankCap);
+                            model.NgayHen, VnTimeHelper.Now(), maRank, rankCap);
 
                         if (vErr != null)
                         {
@@ -474,8 +480,9 @@ namespace MinhTamHair.KhanchHang.Controllers
                         }
                     }
 
+                    // SỬA LỖI UTC DATE TẠI ĐÂY (Ép về giờ VN để tránh lỗi trên server Azure)
+                    var localTime = model.NgayHen.ToUniversalTime().AddHours(7);
 
-                    var localTime = model.NgayHen.ToLocalTime();
                     var lichDat = new Lichdat
                     {
                         MaLd = shortMaLd,
@@ -498,7 +505,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         MaHd = shortMaLd,
                         MaLd = shortMaLd,
                         MaKh = currentMaKh,
-                        NgayTao = DateTime.Now,
+                        NgayTao = VnTimeHelper.Now(),
                         TongTien = subtotal,
                         ThanhTien = tongSauGiam,
                         TienDaTra = daThanhToan,
@@ -563,7 +570,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     {
                         bool laDatCoc = paymentMode == "10";
                         bool laDoanhNghiep = model.InvoiceInfo?.LaDoanhNghiep ?? false;
-                        var maHddt = "HD" + DateTime.Now.ToString("yyMMddHHmmss");
+                        var maHddt = "HD" + VnTimeHelper.Now().ToString("yyMMddHHmmss");
                         _context.HoaDonDienTus.Add(new HoaDonDienTu
                         {
                             MaHddt = maHddt,
@@ -615,6 +622,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 }
             }); // Kết thúc ExecuteAsync<IActionResult>
         }
+
         private string SignHmacSHA256(string message, string key)
         {
             byte[] keyByte = Encoding.UTF8.GetBytes(key);
@@ -625,6 +633,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 return BitConverter.ToString(hashmessage).Replace("-", "").ToLower();
             }
         }
+
         // Class hứng dữ liệu gửi lên từ Vue
         public class CheckStylistRequest
         {

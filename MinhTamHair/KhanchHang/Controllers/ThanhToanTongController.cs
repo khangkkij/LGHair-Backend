@@ -6,6 +6,7 @@ using MinhTamHair.Models;
 using MinhTamHair.Services;
 using System.Security.Cryptography;
 using System.Text;
+using MinhTamHair.Services.TimeHelper;
 
 namespace MinhTamHair.KhanchHang.Controllers
 {
@@ -112,12 +113,12 @@ namespace MinhTamHair.KhanchHang.Controllers
         [HttpGet("get-my-vouchers/{maKH}")]
         public async Task<IActionResult> GetMyVouchers(string maKH, [FromQuery] decimal subTotal, [FromQuery] string? itemIds)
         {
-            await VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, DateTime.Now);
+            await VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, VnTimeHelper.Now());
             var kh = await _context.Khachhangs
                 .Include(k => k.MaCodes)
                 .FirstOrDefaultAsync(k => k.MaKh == maKH);
 
-            var now = DateTime.Now;
+            var now = VnTimeHelper.Now();
             var cartIds = string.IsNullOrWhiteSpace(itemIds) ? new List<string>() : itemIds.Split(',').ToList();
 
             string? maRank = kh?.MaRank;
@@ -319,7 +320,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             var cartIds = string.IsNullOrWhiteSpace(itemIds) ? new List<string>() : itemIds.Split(',').ToList();
 
-            var (err, totalGiam, sau) = await VoucherCartLogic.ValidateStackedAsync(_context, parts, maKH, subTotal, cartIds, DateTime.Now, DateTime.Now, maRank, rankCap);
+            var (err, totalGiam, sau) = await VoucherCartLogic.ValidateStackedAsync(_context, parts, maKH, subTotal, cartIds, VnTimeHelper.Now(), VnTimeHelper.Now(), maRank, rankCap);
 
             if (err != null) return BadRequest(new { message = err });
             return Ok(new { totalDiscount = totalGiam, finalAmount = sau, codes = parts });
@@ -338,7 +339,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 using var transaction = await _context.Database.BeginTransactionAsync();
                 try
                 {
-                    string maHd = "TH" + DateTime.Now.ToString("HHmmssff");
+                    string maHd = "TH" + VnTimeHelper.Now().ToString("HHmmssff");
 
                     // BƯỚC 1: TẠO KHÁCH HÀNG (Nếu chưa có)
                     string safeKhachHang = req.MaKh;
@@ -363,7 +364,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                                     Sdt = req.Phone,
                                     Email = req.Email ?? "",
                                     TrangThai = 1,
-                                    NgayTao = DateTime.Now,
+                                    NgayTao = VnTimeHelper.Now(),
                                     DiemTichLuy = 0,
                                     MaRank = "RANK01"
                                 });
@@ -378,10 +379,15 @@ namespace MinhTamHair.KhanchHang.Controllers
                     if (req.Services != null && req.Services.Any())
                     {
                         // Sinh 10 số random liên tục từ thời gian + mili-giây
-                        maLd = DateTime.Now.ToString("yyHHmmssff");
+                        maLd = VnTimeHelper.Now().ToString("yyHHmmssff");
 
                         int tongThoiGianPhut = req.Services.Sum(s => s.Duration);
-                        var localTime = req.BookingDate ?? DateTime.Now;
+
+                        // CHUYỂN ĐỔI CHUẨN ISO TỪ VUE SANG GIỜ VN ĐỂ TRÁNH LỖI LỆCH MÚI GIỜ KHI FALLBACK
+                        var localTime = req.BookingDate.HasValue
+                            ? req.BookingDate.Value.ToUniversalTime().AddHours(7)
+                            : VnTimeHelper.Now();
+
                         var gioBatDau = TimeOnly.FromDateTime(localTime);
                         var gioKetThuc = gioBatDau.AddMinutes(tongThoiGianPhut);
 
@@ -434,7 +440,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         MaHd = maHd,
                         MaKh = safeKhachHang,
                         MaLd = maLd,
-                        NgayTao = DateTime.Now,
+                        NgayTao = VnTimeHelper.Now(),
                         TongTien = totalOriginal,
                         ThanhTien = req.GrandTotal,
                         TienDaTra = req.PaidAmount,
@@ -475,7 +481,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                                     MaChungTu = maHd,
                                     MaNv = null,
                                     GhiChu = $"Bán hàng theo đơn {maHd}",
-                                    ThoiGian = DateTime.Now
+                                    ThoiGian = VnTimeHelper.Now()
                                 });
                             }
                         }
@@ -521,7 +527,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     // req.InvoiceInfo chỉ dùng để xác định đây là hóa đơn cá nhân hay doanh nghiệp (có MST) và thông tin xuất hóa đơn riêng (nếu khác thông tin giao hàng).
                     {
                         bool laDoanhNghiep = req.InvoiceInfo?.LaDoanhNghiep ?? false;
-                        var maHddt = "HD" + DateTime.Now.ToString("yyMMddHHmmss");
+                        var maHddt = "HD" + VnTimeHelper.Now().ToString("yyMMddHHmmss");
                         _context.HoaDonDienTus.Add(new HoaDonDienTu
                         {
                             MaHddt = maHddt,
@@ -556,7 +562,10 @@ namespace MinhTamHair.KhanchHang.Controllers
                             vnpay.AddRequestData("vnp_Command", "pay");
                             vnpay.AddRequestData("vnp_TmnCode", _configuration["Vnpay:TmnCode"] ?? "");
                             vnpay.AddRequestData("vnp_Amount", ((long)(req.PaidAmount * 100)).ToString());
-                            vnpay.AddRequestData("vnp_CreateDate", DateTime.Now.ToString("yyyyMMddHHmmss"));
+
+                            var vnpayNow = VnTimeHelper.Now();
+                            vnpay.AddRequestData("vnp_CreateDate", vnpayNow.ToString("yyyyMMddHHmmss"));
+                            vnpay.AddRequestData("vnp_ExpireDate", vnpayNow.AddMinutes(15).ToString("yyyyMMddHHmmss"));
                             vnpay.AddRequestData("vnp_CurrCode", "VND");
                             vnpay.AddRequestData("vnp_IpAddr", "127.0.0.1");
                             vnpay.AddRequestData("vnp_Locale", "vn");
@@ -696,7 +705,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         if (!string.IsNullOrWhiteSpace(emailNhan))
                         {
                             var ld = await _context.Lichdats.FirstOrDefaultAsync(l => l.MaLd == hoaDon.MaLd);
-                            DateTime ngayHenDateTime = DateTime.Now;
+                            DateTime ngayHenDateTime = VnTimeHelper.Now();
 
                             if (ld != null && ld.NgayHen.HasValue && ld.GioBatDau.HasValue)
                             {
