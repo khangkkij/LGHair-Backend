@@ -50,4 +50,12 @@
         public string? GeneralComment { get; set; }
         public IFormFile? HinhAnhFile { get; set; } // Thuộc tính để nhận file ảnh
     }
+    // Thêm vào file DTO hiện tại của bạn
+    public class ProductRatingDTO
+    {
+        public string MaBienThe { get; set; }
+        public int SoSao { get; set; }
+        public string? NoiDung { get; set; }
+        public IFormFile? HinhAnhFile { get; set; }
+    }
 }

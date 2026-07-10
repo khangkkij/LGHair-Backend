@@ -282,27 +282,66 @@ namespace MinhTamHair.Controllers
         // 6. API: XÓA SẠCH GIỎ HÀNG (CLEAR ALL)
         // ========================================================
         [HttpDelete("xoa-sach")]
-        public async Task<IActionResult> ClearCart()
+        public async Task<IActionResult> ClearCart([FromQuery] string? loai)
         {
             try
             {
                 var ctx = GetCartContext();
-                await _cache.RemoveAsync(ctx.key);
-
-                if (ctx.isAuthenticated && ctx.userId != null)
+                if (string.IsNullOrEmpty(loai))
                 {
-                    var chiTiets = await _context.ChitietGiohangs
-                        .Where(c => c.MaGhNavigation.MaKh == ctx.userId)
-                        .ToListAsync();
-
-                    if (chiTiets.Any())
+                    // Trường hợp 1: Không truyền 'loai' -> Xóa sạch toàn bộ (cả cache và SQL DB)
+                    await _cache.RemoveAsync(ctx.key);
+                    if (ctx.isAuthenticated && ctx.userId != null)
                     {
-                        _context.ChitietGiohangs.RemoveRange(chiTiets);
-                        await _context.SaveChangesAsync();
+                        var chiTiets = await _context.ChitietGiohangs
+                            .Where(c => c.MaGhNavigation.MaKh == ctx.userId)
+                            .ToListAsync();
+                        if (chiTiets.Any())
+                        {
+                            _context.ChitietGiohangs.RemoveRange(chiTiets);
+                            await _context.SaveChangesAsync();
+                        }
                     }
+                    return Ok(new GioHangDto { CartOwner = ctx.ownerName });
                 }
-
-                return Ok(new GioHangDto { CartOwner = ctx.ownerName });
+                else
+                {
+                    // Trường hợp 2: Có truyền 'loai' -> Chỉ lọc xóa đúng loại được yêu cầu
+                    var cachedData = await _cache.GetStringAsync(ctx.key);
+                    if (!string.IsNullOrEmpty(cachedData))
+                    {
+                        var cart = JsonSerializer.Deserialize<GioHangDto>(cachedData)!;
+                        if (loai == "BIENTHE")
+                        {
+                            // Chỉ lọc bỏ các sản phẩm BIENTHE trong Cache, giữ lại Dịch vụ/Combo
+                            cart.Items = cart.Items.Where(x => x.Loai != "BIENTHE").ToList();
+                        }
+                        else if (loai == "DICHVU")
+                        {
+                            // Chỉ lọc bỏ Dịch vụ (DICHVU) và Combo (COMBO) trong Cache, giữ lại Sản phẩm
+                            cart.Items = cart.Items.Where(x => x.Loai != "DICHVU" && x.Loai != "COMBO").ToList();
+                        }
+                        await SaveCartToCacheAsync(ctx.key, cart);
+                    }
+                    // Nếu loại xóa là sản phẩm (BIENTHE) và đã đăng nhập -> Xóa các sản phẩm trong SQL Database
+                    if (loai == "BIENTHE" && ctx.isAuthenticated && ctx.userId != null)
+                    {
+                        var chiTiets = await _context.ChitietGiohangs
+                            .Where(c => c.MaGhNavigation.MaKh == ctx.userId)
+                            .ToListAsync();
+                        if (chiTiets.Any())
+                        {
+                            _context.ChitietGiohangs.RemoveRange(chiTiets);
+                            await _context.SaveChangesAsync();
+                        }
+                    }
+                    // Trả về giỏ hàng mới sau khi đã lọc xóa
+                    var updatedCachedData = await _cache.GetStringAsync(ctx.key);
+                    var updatedCart = string.IsNullOrEmpty(updatedCachedData)
+                        ? new GioHangDto { CartOwner = ctx.ownerName }
+                        : JsonSerializer.Deserialize<GioHangDto>(updatedCachedData)!;
+                    return Ok(updatedCart);
+                }
             }
             catch (Exception ex)
             {

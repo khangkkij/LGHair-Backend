@@ -159,6 +159,49 @@ namespace MinhTamHair.Controllers
 
             return Ok(new { success = true, message = "Đã xóa khỏi danh sách yêu thích!" });
         }
+
+        [HttpGet("employees")]
+        public async Task<IActionResult> GetAllEmployees()
+        {
+            try
+            {
+                var result = await _context.Nhanviens
+                    // .Where(nv => nv.TrangThai == 1) // Bỏ comment nếu chỉ lấy nhân viên đang làm việc
+                    .Select(nv => new
+                    {
+                        Id = nv.MaNv,
+                        Name = nv.HoTenNv,
+                        Image = nv.HinhAnh ?? string.Empty,
+                        Role = "Nhân viên",
+
+                        // 🌟 Tính điểm đánh giá trung bình
+                        // Nếu có đánh giá thì tính trung bình cộng (Average), nếu chưa có thì để mặc định 5.0
+                        Rating = nv.DanhgiaNhanviens.Any()
+                                 ? nv.DanhgiaNhanviens.Average(dg => (double)(dg.SoSao ?? 0))
+                                 : 5.0,
+
+                        Category = "Nhân viên"
+                    })
+                    .ToListAsync();
+
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = "Lỗi khi tải danh sách nhân viên: " + ex.Message });
+            }
+        }
+        [HttpGet("employees/{maKH}")]
+        public async Task<IActionResult> GetFavoriteEmployees(string maKH)
+        {
+            // Giả sử bảng trung gian của bạn tên là YeuThichNhanVien
+            var result = await _context.Set<YeuThichNhanVien>()
+                .Where(y => y.MaKH == maKH)
+                .Select(y => y.MaNV) // Chỉ cần lấy danh sách ID nhân viên
+                .ToListAsync();
+
+            return Ok(result);
+        }
     }
 
     // Class nhận DTO đồng bộ trường dữ liệu với Client Vue.js công khai
