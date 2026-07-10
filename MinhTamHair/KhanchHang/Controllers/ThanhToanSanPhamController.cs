@@ -280,6 +280,12 @@ namespace MinhTamHair.KhanchHang.Controllers
                     // PHẦN XUẤT HÓA ĐƠN ĐIỆN TỬ
                     // Luật yêu cầu MỌI giao dịch bán hàng đều phải xuất hóa đơn, không phụ thuộc khách có yêu cầu hay không.
                     // req.InvoiceInfo chỉ dùng để xác định đây là hóa đơn cá nhân hay doanh nghiệp (có MST) và thông tin xuất hóa đơn riêng (nếu khác thông tin giao hàng).
+                    //
+                    // LƯU Ý VỀ COD: Với đơn COD (chưa thu tiền), ta vẫn tạo sẵn bản ghi HOA_DON_DIEN_TU để giữ lại
+                    // thông tin xuất hóa đơn (MST/tên công ty/địa chỉ...) nhưng để TrangThai = 0 (nháp/chưa phát hành)
+                    // và KHÔNG gọi phát hành ngay. Chỉ khi nhân viên xác nhận đã thu đủ tiền mặt (đổi TrangThai hóa đơn
+                    // sang 1 tại HoaDonController.UpdateStatus) thì hệ thống mới cập nhật bản ghi này sang TrangThai = 1
+                    // và gọi phát hành hóa đơn điện tử thật sự.
                     {
                         bool laDoanhNghiep = req.InvoiceInfo?.LaDoanhNghiep ?? false;
                         var maHddt = "HD" + DateTime.Now.ToString("yyMMddHHmmss");
@@ -296,12 +302,18 @@ namespace MinhTamHair.KhanchHang.Controllers
                         });
                         await _context.SaveChangesAsync();
 
-                        _ = Task.Run(async () =>
+                        // Chỉ phát hành hóa đơn điện tử NGAY nếu KHÔNG phải đơn COD.
+                        // Đơn COD sẽ được phát hành sau, khi nhân viên xác nhận đã thu tiền mặt.
+                        bool laCod = string.Equals(safePayment, "cod", StringComparison.OrdinalIgnoreCase);
+                        if (!laCod)
                         {
-                            using var scope = _scopeFactory.CreateScope();
-                            var eInvoiceService = scope.ServiceProvider.GetRequiredService<IEInvoiceService>();
-                            await eInvoiceService.PhatHanhHoaDonAsync(maHddt);
-                        });
+                            _ = Task.Run(async () =>
+                            {
+                                using var scope = _scopeFactory.CreateScope();
+                                var eInvoiceService = scope.ServiceProvider.GetRequiredService<IEInvoiceService>();
+                                await eInvoiceService.PhatHanhHoaDonAsync(maHddt);
+                            });
+                        }
                     }
 
 

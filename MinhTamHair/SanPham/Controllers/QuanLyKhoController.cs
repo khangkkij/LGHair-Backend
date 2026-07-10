@@ -590,6 +590,7 @@ public class QuanLyKhoController : ControllerBase
         [FromQuery] DateTime? tuNgay,
         [FromQuery] DateTime? denNgay,
         [FromQuery] string? trangThai, // "", "khop", "thieu"
+        [FromQuery] string? search, // tìm theo mã đơn hàng, mã biến thể, tên sản phẩm/biến thể
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 20)
     {
@@ -604,6 +605,19 @@ public class QuanLyKhoController : ControllerBase
 
         if (tuNgay.HasValue) q = q.Where(l => l.ThoiGian >= tuNgay.Value);
         if (denNgay.HasValue) q = q.Where(l => l.ThoiGian <= denNgay.Value.AddDays(1));
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var kw = search.Trim();
+            q = q.Where(l =>
+                (l.MaChungTu != null && l.MaChungTu.Contains(kw)) ||
+                (l.MaBienThe != null && l.MaBienThe.Contains(kw)) ||
+                (l.MaBienTheNavigation != null && l.MaBienTheNavigation.TenBienThe != null && l.MaBienTheNavigation.TenBienThe.Contains(kw)) ||
+                (l.MaBienTheNavigation != null && l.MaBienTheNavigation.MaSpNavigation != null
+                    && l.MaBienTheNavigation.MaSpNavigation.TenSp != null
+                    && l.MaBienTheNavigation.MaSpNavigation.TenSp.Contains(kw))
+            );
+        }
 
         // Gộp thông tin hóa đơn điện tử tương ứng (nếu có) qua MaChungTu = HoaDonDienTu.MaHd
         var joined = from l in q

@@ -28,19 +28,19 @@ namespace MinhTamHair.KhanchHang.Controllers
                 .Include(x => x.Hinhanhs)
                 .AsQueryable();
 
-            // 🔍 tìm kiếm theo tên
+            // tìm kiếm theo tên
             if (!string.IsNullOrEmpty(keyword))
             {
                 query = query.Where(x => x.TenDv.Contains(keyword));
             }
 
-            // 📂 lọc theo danh mục
+            // lọc theo danh mục
             if (!string.IsNullOrEmpty(maDm))
             {
                 query = query.Where(x => x.MaDm == maDm);
             }
 
-            // 🔄 lọc theo trạng thái
+            // lọc theo trạng thái
             if (trangThai.HasValue)
             {
                 query = query.Where(x => x.TrangThai == trangThai);
@@ -52,6 +52,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     dv.MaDv,
                     dv.TenDv,
                     dv.Gia,
+                    dv.PhanTramHoaHong,
                     dv.MoTa,
                     dv.ThoiGianLam,
                     dv.TrangThai,
@@ -75,6 +76,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 MaDv = dto.MaDv,
                 TenDv = dto.TenDv,
                 Gia = dto.Gia,
+                PhanTramHoaHong = dto.PhanTramHoaHong,
                 MaDm = dto.MaDm,
                 MoTa = dto.MoTa,
                 ThoiGianLam = dto.ThoiGianLam,
@@ -126,13 +128,14 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             dv.TenDv = dto.TenDv;
             dv.Gia = dto.Gia;
+            dv.PhanTramHoaHong = dto.PhanTramHoaHong;
             dv.MaDm = dto.MaDm;
             dv.ThoiGianLam = dto.ThoiGianLam;
             dv.MoTa = dto.MoTa;
             dv.TrangThai = dto.TrangThai;
 
             // thêm ảnh mới
-            // ✅ chỉ xử lý khi thực sự có file
+            // chỉ xử lý khi thực sự có file
             if (dto.Files != null && dto.Files.Count > 0)
             {
                 foreach (var file in dto.Files)
@@ -150,7 +153,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     });
                 }
             }
-            // ✅ XÓA ẢNH
+            
             if (dto.DeletedImages != null && dto.DeletedImages.Count > 0)
             {
                 foreach (var imgUrl in dto.DeletedImages)
@@ -222,8 +225,6 @@ namespace MinhTamHair.KhanchHang.Controllers
             {
                 return BadRequest("Dịch vụ đang được sử dụng, không thể xóa!");
             }
-
-            // ✅ 1. XÓA ẢNH DỊCH VỤ
             foreach (var img in dv.Hinhanhs)
             {
                 var path = Path.Combine(
@@ -237,8 +238,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                     System.IO.File.Delete(path);
                 }
             }
-
-            // ✅ 2. XÓA ẢNH TRONG CHI TIẾT TIÊU ĐỀ (QUAN TRỌNG NHẤT)
             foreach (var td in dv.TieudeDichvus)
             {
                 foreach (var ct in td.ChitietTieudes)
@@ -258,20 +257,12 @@ namespace MinhTamHair.KhanchHang.Controllers
                     }
                 }
             }
-
-            // ✅ 3. XÓA CHI TIẾT TIÊU ĐỀ
             foreach (var td in dv.TieudeDichvus)
             {
                 _context.ChitietTieudes.RemoveRange(td.ChitietTieudes);
             }
-
-            // ✅ 4. XÓA TIÊU ĐỀ
             _context.TieudeDichvus.RemoveRange(dv.TieudeDichvus);
-
-            // ✅ 5. XÓA ẢNH DỊCH VỤ TRONG DB
             _context.Hinhanhs.RemoveRange(dv.Hinhanhs);
-
-            // ✅ 6. XÓA DỊCH VỤ
             _context.Dichvus.Remove(dv);
 
             await _context.SaveChangesAsync();

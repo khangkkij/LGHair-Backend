@@ -7,6 +7,7 @@
     public int ThoiGianLam { get; set; }
     public string MoTa { get; set; }
     public int TrangThai { get; set; }
+    public decimal? PhanTramHoaHong { get; set; }
     public List<string>? DeletedImages { get; set; }
 
     public List<IFormFile>? Files { get; set; }
