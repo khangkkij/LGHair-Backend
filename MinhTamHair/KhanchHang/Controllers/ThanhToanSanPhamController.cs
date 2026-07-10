@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using MinhTamHair.KhanchHang.Models;
 using MinhTamHair.Models;
 using MinhTamHair.Services;
+using MinhTamHair.Services.TimeHelper;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -163,6 +164,7 @@ namespace MinhTamHair.KhanchHang.Controllers
         [HttpPost("submit-product-order")]
         public async Task<IActionResult> SubmitProductOrder([FromBody] ProductCheckoutRequest req)
         {
+            var vnNow = VnTimeHelper.Now();
             if (req == null || req.Products == null || !req.Products.Any())
             {
                 return BadRequest(new { success = false, message = "Dữ liệu đơn hàng trống hoặc không hợp lệ!" });
@@ -174,7 +176,9 @@ namespace MinhTamHair.KhanchHang.Controllers
                 using var transaction = await _context.Database.BeginTransactionAsync();
                 try
                 {
-                    string maHd = "SP" + DateTime.Now.ToString("yyMMddHHmmss");
+                  
+
+                    string maHd = "SP" + vnNow.ToString("ddHHmmss");
                     decimal subTotal = req.Products.Sum(p => p.GiaBan * p.SoLuong);
                     decimal tongSauGiam = subTotal;
                     string? maCodeChinh = req.VoucherIds?.FirstOrDefault();
@@ -186,7 +190,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     {
                         var cartIds = req.Products.Select(p => p.MaBienThe).ToList();
                         var (vErr, _, sau) = await VoucherCartLogic.ValidateStackedAsync(
-                            _context, req.VoucherIds, safeKhachHang, subTotal, cartIds, DateTime.Now, DateTime.Now, null, null);
+                            _context, req.VoucherIds, safeKhachHang, subTotal, cartIds, vnNow, vnNow, null, null);
 
                         if (vErr == null) tongSauGiam = sau;
                     }
@@ -198,7 +202,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     {
                         MaHd = maHd,
                         MaKh = safeKhachHang,
-                        NgayTao = DateTime.Now,
+                        NgayTao = vnNow,
                         TongTien = subTotal + req.ShippingFee,
                         ThanhTien = finalTotal,
                         TienDaTra = safePayment == "cod" ? 0 : finalTotal,
@@ -220,7 +224,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     };
                     _context.ThongtinGiaohangs.Add(thongTinGH);
 
-                    // Lưu chi tiết và trừ tồn kho, 
+                    // Lưu chi tiết và trừ tồn kho
                     foreach (var p in req.Products)
                     {
                         if (string.IsNullOrEmpty(p.MaBienThe)) continue;
@@ -245,13 +249,13 @@ namespace MinhTamHair.KhanchHang.Controllers
                             {
                                 MaBienThe = p.MaBienThe,
                                 LoaiBienDong = "BAN",
-                                SoLuongThayDoi = -p.SoLuong, // âm vì là xuất kho bán ra
+                                SoLuongThayDoi = -p.SoLuong,
                                 TonTruoc = tonTruoc,
                                 TonSau = tonSau,
-                                MaChungTu = maHd, // liên kết với HOA_DON để đối soát hóa đơn điện tử sau này
-                                MaNv = null, // đơn hàng khách tự đặt online, không qua nhân viên
+                                MaChungTu = maHd,
+                                MaNv = null,
                                 GhiChu = "Ban hang qua website - Don " + maHd,
-                                ThoiGian = DateTime.Now
+                                ThoiGian = vnNow
                             });
                         }
                     }
@@ -288,7 +292,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     // và gọi phát hành hóa đơn điện tử thật sự.
                     {
                         bool laDoanhNghiep = req.InvoiceInfo?.LaDoanhNghiep ?? false;
-                        var maHddt = "HD" + DateTime.Now.ToString("yyMMddHHmmss");
+                        var maHddt = "HD" + vnNow.ToString("yyMMddHHmmss");
                         _context.HoaDonDienTus.Add(new HoaDonDienTu
                         {
                             MaHddt = maHddt,
@@ -316,17 +320,18 @@ namespace MinhTamHair.KhanchHang.Controllers
                         }
                     }
 
-
                     string paymentUrl = null;
 
                     if (safePayment == "vnpay")
                     {
+                        var vnpayNow = VnTimeHelper.Now();
                         var vnpay = new VnPayLibrary();
                         vnpay.AddRequestData("vnp_Version", "2.1.0");
                         vnpay.AddRequestData("vnp_Command", "pay");
                         vnpay.AddRequestData("vnp_TmnCode", _configuration["Vnpay:TmnCode"] ?? throw new Exception("Thiếu TmnCode"));
                         vnpay.AddRequestData("vnp_Amount", ((long)(finalTotal * 100)).ToString());
-                        vnpay.AddRequestData("vnp_CreateDate", DateTime.Now.ToString("yyyyMMddHHmmss"));
+                        vnpay.AddRequestData("vnp_CreateDate", vnpayNow.ToString("yyyyMMddHHmmss"));
+                        vnpay.AddRequestData("vnp_ExpireDate", vnpayNow.AddMinutes(15).ToString("yyyyMMddHHmmss"));
                         vnpay.AddRequestData("vnp_CurrCode", "VND");
                         vnpay.AddRequestData("vnp_IpAddr", "127.0.0.1");
                         vnpay.AddRequestData("vnp_Locale", "vn");
@@ -380,7 +385,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         }
                     }
 
-                    return Ok(new { success = true, isOnlinePayment = !string.IsNullOrEmpty(paymentUrl), url = paymentUrl });
+                    return Ok(new { success = true, isOnlinePayment = !string.IsNullOrEmpty(paymentUrl), url = paymentUrl, maHd = maHd });
                 }
                 catch (Exception ex)
                 {
@@ -389,6 +394,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 }
             });
         }
+
         private string SignHmacSHA256(string message, string key)
         {
             byte[] keyByte = Encoding.UTF8.GetBytes(key);

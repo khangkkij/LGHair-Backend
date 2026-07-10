@@ -68,27 +68,31 @@ namespace MinhTamHair.KhanchHang.Controllers
                     ngayHen = ld.NgayHen,
                     gioHen = ld.GioBatDau,
 
-                    // 1. Lấy danh sách dịch vụ + Giá gốc (OriginalPrice)
+                    // 1. THÊM LẠI GIỜ KẾT THÚC Ở ĐÂY
+                    gioKetThuc = ld.GioKetThuc,
+
                     items = _context.ChitietLichdats
                         .Where(ct => ct.MaLd == ld.MaLd)
                         .Select(ct => new {
                             name = ct.MaDvNavigation.TenDv ?? ct.MaCbNavigation.TenCombo,
-                            price = ct.GiaLucDat ?? 0m, // Giá thực thu lúc đặt (đã giảm sale)
-                            originalPrice = ct.MaDv != null ? (ct.MaDvNavigation.Gia ?? 0m) : (ct.MaCbNavigation.Gia ?? 0m)
+                            price = ct.GiaLucDat ?? 0m,
+                            originalPrice = ct.MaDv != null ? (ct.MaDvNavigation.Gia ?? 0m) : (ct.MaCbNavigation.Gia ?? 0m),
+
+                            // 2. THÊM LẠI TÊN THỢ VÀO BÊN TRONG HÀM SELECT NÀY
+                            stylistName = ct.MaNvNavigation != null ? ct.MaNvNavigation.HoTenNv : "Chưa chọn thợ"
                         }).ToList(),
 
-                    // 2. Tổng tiền thực tế của các món (sau Sale, nhưng chưa trừ Voucher)
                     subTotal = _context.ChitietLichdats
                         .Where(ct => ct.MaLd == ld.MaLd)
                         .Sum(ct => ct.GiaLucDat) ?? 0m,
 
-                    // 3. Lấy thông tin Voucher đã dùng
                     voucherGiam = _context.HoaDons
                         .Where(hd => hd.MaLd == ld.MaLd && !string.IsNullOrEmpty(hd.MaCode))
                         .Select(hd => new {
                             code = hd.MaCode,
-                            // Số tiền Voucher giảm = Tổng tiền hàng - Số tiền phải trả trên hóa đơn
-                            amount = (hd.TongTien - hd.ThanhTien) > 0 ? (hd.TongTien - hd.ThanhTien) : 0m
+                            amount = ((hd.TongTien ?? 0m) - (hd.ThanhTien ?? 0m)) > 0
+                                    ? ((hd.TongTien ?? 0m) - (hd.ThanhTien ?? 0m))
+                                : 0m
                         }).FirstOrDefault(),
 
                     trangThai = ld.TrangThai
@@ -99,14 +103,8 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             // FIX LỖI CASTING: Ép kiểu sang decimal và xử lý null bằng ?? 0m
             decimal totalOriginal = detail.items.Sum(i => (decimal)i.originalPrice);
-
-            // Tiết kiệm từ Flash Sale = Tổng giá gốc ban đầu - Tổng giá sau sale
             decimal flashSaleDiscount = totalOriginal - detail.subTotal;
-
-            // Voucher giảm giá
             decimal voucherAmount = detail.voucherGiam?.amount ?? 0m;
-
-            // Tổng thanh toán cuối cùng = Giá sau sale - Tiền Voucher
             decimal finalAmount = detail.subTotal - voucherAmount;
 
             return Ok(new
@@ -114,11 +112,12 @@ namespace MinhTamHair.KhanchHang.Controllers
                 detail.maLd,
                 detail.ngayHen,
                 detail.gioHen,
+                detail.gioKetThuc, // 3. NHỚ TRẢ VỀ FRONTEND Ở ĐÂY NỮA
                 detail.items,
-                totalOriginal,         // Tổng giá gốc (chưa sale, chưa voucher)
-                flashSaleDiscount,     // Số tiền hời từ Flash Sale
+                totalOriginal,
+                flashSaleDiscount,
                 voucherGiam = detail.voucherGiam,
-                finalAmount,           // Con số khách đã trả cuối cùng
+                finalAmount,
                 detail.trangThai
             });
         }

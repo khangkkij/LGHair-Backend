@@ -6,6 +6,7 @@ using MinhTamHair.Models;
 using MinhTamHair.Services;
 using System.Security.Cryptography;
 using System.Text;
+using MinhTamHair.Services.TimeHelper;
 
 namespace MinhTamHair.KhanchHang.Controllers
 {
@@ -45,8 +46,18 @@ namespace MinhTamHair.KhanchHang.Controllers
                         icon = s.Hinhanhs.Select(h => h.DuongDan).FirstOrDefault()
                     })
                     .ToListAsync();
+                var combos = await _context.Combos.Where(c => c.TrangThai == 1)
+                    .Select(c => new {
+                        id = c.MaCb,
+                        name = c.TenCombo,
+                        price = c.Gia,
+                        originalPrice = c.Gia,
+                        duration = c.Combo_DichVus.Sum(cd => cd.DichVu.ThoiGianLam ?? 30),
+                        hinhAnh = c.HinhAnh, // Hoặc đường dẫn ảnh nếu có
+                        icon = "fas fa-layer-group",
+                    }).ToListAsync();
 
-                return Ok(new { success = true, services = services });
+                return Ok(new { success = true, services = services, combos = combos });
             }
             catch (Exception ex)
             {
@@ -102,12 +113,12 @@ namespace MinhTamHair.KhanchHang.Controllers
         [HttpGet("get-my-vouchers/{maKH}")]
         public async Task<IActionResult> GetMyVouchers(string maKH, [FromQuery] decimal subTotal, [FromQuery] string? itemIds)
         {
-            await VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, DateTime.Now);
+            await VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, VnTimeHelper.Now());
             var kh = await _context.Khachhangs
                 .Include(k => k.MaCodes)
                 .FirstOrDefaultAsync(k => k.MaKh == maKH);
 
-            var now = DateTime.Now;
+            var now = VnTimeHelper.Now();
             var cartIds = string.IsNullOrWhiteSpace(itemIds) ? new List<string>() : itemIds.Split(',').ToList();
 
             string? maRank = kh?.MaRank;
@@ -175,6 +186,120 @@ namespace MinhTamHair.KhanchHang.Controllers
             return Ok(result);
         }
 
+        [HttpPost("get-available-stylists")]
+        public async Task<IActionResult> GetAvailableStylists([FromBody] ThanhToanCheckStylistRequest request)
+        {
+            try
+            {
+                DateOnly ngayHen = DateOnly.Parse(request.NgayHen);
+                TimeOnly start = TimeOnly.Parse(request.GioBatDau);
+                TimeOnly end = start.AddMinutes(request.TongThoiGian);
+
+                // --- 1. LẤY DANH SÁCH THỢ YÊU THÍCH TỪ DB ---
+                var favoriteStylistIds = new List<string>();
+                if (!string.IsNullOrEmpty(request.MaKh) && request.MaKh != "GUEST")
+                {
+                    favoriteStylistIds = await _context.Set<YeuThichNhanVien>()
+                        .Where(y => y.MaKH == request.MaKh)
+                        .Select(y => y.MaNV.Trim())
+                        .ToListAsync();
+                }
+
+                // LẤY TẤT CẢ THỢ ĐI LÀM TRONG NGÀY
+                var lichLamViecs = await _context.Lichlamviecs
+                    .Include(l => l.MaNvNavigation)
+                    .ThenInclude(nv => nv.MaLoaiNvNavigation)
+                    .Where(l => l.NgayLamViec == ngayHen && l.TrangThai != 0 && l.TrangThai != 5 && l.MaNvNavigation.TrangThai == 1)
+                    .ToListAsync();
+
+                // LẤY CHI TIẾT CÁC LỊCH ĐANG BẬN
+                var cacLichBan = await _context.ChitietLichdats
+                    .Where(ct => ct.MaLdNavigation.NgayHen == ngayHen
+                                 && ct.MaLdNavigation.TrangThai != 0
+                                 && ct.MaLdNavigation.GioBatDau < end
+                                 && ct.MaLdNavigation.GioKetThuc > start)
+                    .Select(ct => new {
+                        MaNv = ct.MaNv,
+                        GioBatDau = ct.MaLdNavigation.GioBatDau,
+                        GioKetThuc = ct.MaLdNavigation.GioKetThuc
+                    })
+                    .ToListAsync();
+
+                var result = new List<object>();
+
+                // XỬ LÝ TỪNG THỢ
+                foreach (var lich in lichLamViecs)
+                {
+                    var nv = lich.MaNvNavigation;
+                    bool isAvailable = true;
+                    string reason = "";
+
+                    bool dungCaLam = false;
+                    string ca = lich.CaLam ?? "";
+                    string gioLamThucTe = ca;
+
+                    // Kiểm tra khớp ca
+                    if ((ca == "Ca sáng (7h-17h)" || ca == "Ca ngày" || ca == "Ca sáng") && start >= new TimeOnly(7, 0) && end <= new TimeOnly(17, 0)) dungCaLam = true;
+                    else if ((ca == "Ca tối (13h-20h)" || ca == "Ca tối") && start >= new TimeOnly(13, 0) && end <= new TimeOnly(20, 0)) dungCaLam = true;
+                    else if ((ca == "Cả ngày" || ca == "Full time") && start >= new TimeOnly(7, 0) && end <= new TimeOnly(20, 0)) dungCaLam = true;
+                    else if (ca == "Ca sáng (Part-time)" && start >= new TimeOnly(7, 0) && end <= new TimeOnly(11, 0)) dungCaLam = true;
+                    else if (ca == "Ca chiều (Part-time)" && start >= new TimeOnly(13, 0) && end <= new TimeOnly(17, 0)) dungCaLam = true;
+                    else if (ca == "Ca tối (Part-time)" && start >= new TimeOnly(16, 0) && end <= new TimeOnly(20, 0)) dungCaLam = true;
+
+                    // Đổi tên ca
+                    if (ca == "Ca sáng (7h-17h)" || ca == "Ca ngày" || ca == "Ca sáng") gioLamThucTe = "07:00 - 17:00";
+                    else if (ca == "Ca tối (13h-20h)" || ca == "Ca tối") gioLamThucTe = "13:00 - 20:00";
+                    else if (ca == "Cả ngày" || ca == "Full time") gioLamThucTe = "07:00 - 20:00";
+                    else if (ca == "Ca sáng (Part-time)") gioLamThucTe = "07:00 - 11:00";
+                    else if (ca == "Ca chiều (Part-time)") gioLamThucTe = "13:00 - 17:00";
+                    else if (ca == "Ca tối (Part-time)") gioLamThucTe = "16:00 - 20:00";
+
+                    var lichKhet = cacLichBan.Where(b => b.MaNv == nv.MaNv).OrderByDescending(b => b.GioKetThuc).FirstOrDefault();
+
+                    if (!dungCaLam)
+                    {
+                        isAvailable = false;
+                        reason = $"Trái ca (Làm {gioLamThucTe})";
+                    }
+                    else if (lichKhet != null)
+                    {
+                        isAvailable = false;
+                        reason = $"Bận khách ({lichKhet.GioBatDau?.ToString(@"hh\:mm")} - {lichKhet.GioKetThuc?.ToString(@"hh\:mm")})";
+                    }
+
+                    var ratingVal = _context.DanhgiaDichvus.Where(dg => _context.HoaDons.Any(hd => dg.MaHd == hd.MaHd && _context.ChitietLichdats.Any(ct => ct.MaLd == hd.MaLd && ct.MaNv == nv.MaNv))).Average(dg => (double?)dg.SoSao);
+
+                    // --- 2. GẮN CỜ YÊU THÍCH VÀO KẾT QUẢ ---
+                    bool isFav = favoriteStylistIds.Contains(nv.MaNv.Trim());
+
+                    result.Add(new
+                    {
+                        id = nv.MaNv.Trim(),
+                        name = nv.HoTenNv,
+                        role = nv.MaLoaiNvNavigation?.TenLoai ?? "Stylist",
+                        img = nv.HinhAnh ?? "/images/no-image.png",
+                        rating = ratingVal != null ? Math.Round(ratingVal.Value, 1) : 5.0,
+                        isAvailable = isAvailable,
+                        unAvailableReason = reason,
+                        caLam = lich.CaLam,
+                        isFavorite = isFav // <--- TRẢ VỀ CHO VUE
+                    });
+                }
+
+                // --- 3. SẮP XẾP ƯU TIÊN LÊN ĐẦU ---
+                var finalResult = result
+                    .OrderByDescending(r => (bool)((dynamic)r).isAvailable)
+                    .ThenByDescending(r => (bool)((dynamic)r).isFavorite)
+                    .ToList();
+
+                return Ok(finalResult);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Lỗi Backend: " + ex.Message });
+            }
+        }
+
         // TÍNH TOÁN TRƯỚC SỐ TIỀN ĐƯỢC GIẢM
         [HttpGet("preview-voucher-stack")]
         public async Task<IActionResult> PreviewVoucherStack(string maKH, [FromQuery] string? codes, [FromQuery] decimal subTotal, [FromQuery] string? itemIds)
@@ -195,7 +320,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             var cartIds = string.IsNullOrWhiteSpace(itemIds) ? new List<string>() : itemIds.Split(',').ToList();
 
-            var (err, totalGiam, sau) = await VoucherCartLogic.ValidateStackedAsync(_context, parts, maKH, subTotal, cartIds, DateTime.Now, DateTime.Now, maRank, rankCap);
+            var (err, totalGiam, sau) = await VoucherCartLogic.ValidateStackedAsync(_context, parts, maKH, subTotal, cartIds, VnTimeHelper.Now(), VnTimeHelper.Now(), maRank, rankCap);
 
             if (err != null) return BadRequest(new { message = err });
             return Ok(new { totalDiscount = totalGiam, finalAmount = sau, codes = parts });
@@ -214,7 +339,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 using var transaction = await _context.Database.BeginTransactionAsync();
                 try
                 {
-                    string maHd = "TH" + DateTime.Now.ToString("HHmmssff");
+                    string maHd = "TH" + VnTimeHelper.Now().ToString("HHmmssff");
 
                     // BƯỚC 1: TẠO KHÁCH HÀNG (Nếu chưa có)
                     string safeKhachHang = req.MaKh;
@@ -228,6 +353,10 @@ namespace MinhTamHair.KhanchHang.Controllers
                             {
                                 string prefixSdt = req.Phone.Length >= 4 ? req.Phone.Substring(0, 4) : "0000";
                                 safeKhachHang = "KH" + prefixSdt + new Random().Next(100, 999).ToString();
+                                if (!string.IsNullOrWhiteSpace(req.Email) && existingKhach.Email != req.Email)
+                                {
+                                    existingKhach.Email = req.Email;
+                                }
                                 _context.Khachhangs.Add(new Khachhang
                                 {
                                     MaKh = safeKhachHang,
@@ -235,7 +364,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                                     Sdt = req.Phone,
                                     Email = req.Email ?? "",
                                     TrangThai = 1,
-                                    NgayTao = DateTime.Now,
+                                    NgayTao = VnTimeHelper.Now(),
                                     DiemTichLuy = 0,
                                     MaRank = "RANK01"
                                 });
@@ -250,10 +379,15 @@ namespace MinhTamHair.KhanchHang.Controllers
                     if (req.Services != null && req.Services.Any())
                     {
                         // Sinh 10 số random liên tục từ thời gian + mili-giây
-                        maLd = DateTime.Now.ToString("yyHHmmssff");
+                        maLd = VnTimeHelper.Now().ToString("yyHHmmssff");
 
                         int tongThoiGianPhut = req.Services.Sum(s => s.Duration);
-                        var localTime = (req.BookingDate ?? DateTime.Now).ToLocalTime();
+
+                        // CHUYỂN ĐỔI CHUẨN ISO TỪ VUE SANG GIỜ VN ĐỂ TRÁNH LỖI LỆCH MÚI GIỜ KHI FALLBACK
+                        var localTime = req.BookingDate.HasValue
+                            ? req.BookingDate.Value.ToUniversalTime().AddHours(7)
+                            : VnTimeHelper.Now();
+
                         var gioBatDau = TimeOnly.FromDateTime(localTime);
                         var gioKetThuc = gioBatDau.AddMinutes(tongThoiGianPhut);
 
@@ -300,13 +434,14 @@ namespace MinhTamHair.KhanchHang.Controllers
                     string? maCodeChinh = req.VoucherIds != null && req.VoucherIds.Any(v => !string.IsNullOrWhiteSpace(v))
                     ? req.VoucherIds.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))
                     : null;
+                    decimal totalOriginal = (req.Services?.Sum(s => s.Price) ?? 0) + (req.Products?.Sum(p => p.Gia * p.SoLuong) ?? 0);
                     var hoaDon = new HoaDon
                     {
                         MaHd = maHd,
                         MaKh = safeKhachHang,
                         MaLd = maLd,
-                        NgayTao = DateTime.Now,
-                        TongTien = req.GrandTotal,
+                        NgayTao = VnTimeHelper.Now(),
+                        TongTien = totalOriginal,
                         ThanhTien = req.GrandTotal,
                         TienDaTra = req.PaidAmount,
                         // Nếu là thanh toán online thì khởi tạo là 0 (Chưa thanh toán), ngược lại (COD/Free) thì là 1
@@ -346,7 +481,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                                     MaChungTu = maHd,
                                     MaNv = null,
                                     GhiChu = $"Bán hàng theo đơn {maHd}",
-                                    ThoiGian = DateTime.Now
+                                    ThoiGian = VnTimeHelper.Now()
                                 });
                             }
                         }
@@ -392,7 +527,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     // req.InvoiceInfo chỉ dùng để xác định đây là hóa đơn cá nhân hay doanh nghiệp (có MST) và thông tin xuất hóa đơn riêng (nếu khác thông tin giao hàng).
                     {
                         bool laDoanhNghiep = req.InvoiceInfo?.LaDoanhNghiep ?? false;
-                        var maHddt = "HD" + DateTime.Now.ToString("yyMMddHHmmss");
+                        var maHddt = "HD" + VnTimeHelper.Now().ToString("yyMMddHHmmss");
                         _context.HoaDonDienTus.Add(new HoaDonDienTu
                         {
                             MaHddt = maHddt,
@@ -427,7 +562,10 @@ namespace MinhTamHair.KhanchHang.Controllers
                             vnpay.AddRequestData("vnp_Command", "pay");
                             vnpay.AddRequestData("vnp_TmnCode", _configuration["Vnpay:TmnCode"] ?? "");
                             vnpay.AddRequestData("vnp_Amount", ((long)(req.PaidAmount * 100)).ToString());
-                            vnpay.AddRequestData("vnp_CreateDate", DateTime.Now.ToString("yyyyMMddHHmmss"));
+
+                            var vnpayNow = VnTimeHelper.Now();
+                            vnpay.AddRequestData("vnp_CreateDate", vnpayNow.ToString("yyyyMMddHHmmss"));
+                            vnpay.AddRequestData("vnp_ExpireDate", vnpayNow.AddMinutes(15).ToString("yyyyMMddHHmmss"));
                             vnpay.AddRequestData("vnp_CurrCode", "VND");
                             vnpay.AddRequestData("vnp_IpAddr", "127.0.0.1");
                             vnpay.AddRequestData("vnp_Locale", "vn");
@@ -567,7 +705,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         if (!string.IsNullOrWhiteSpace(emailNhan))
                         {
                             var ld = await _context.Lichdats.FirstOrDefaultAsync(l => l.MaLd == hoaDon.MaLd);
-                            DateTime ngayHenDateTime = DateTime.Now;
+                            DateTime ngayHenDateTime = VnTimeHelper.Now();
 
                             if (ld != null && ld.NgayHen.HasValue && ld.GioBatDau.HasValue)
                             {
@@ -617,7 +755,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     if (ld != null) bookingInfo = new
                     {
                         ngayHen = ld.NgayHen?.ToString("dd/MM/yyyy"),
-                        gioBatDau = ld.GioBatDau?.ToString(@"hh\:mm"),
+                        gioBatDau = ld.GioBatDau?.ToString(@"HH\:mm"),
                         services = servicesList
                     };
                 }
@@ -720,5 +858,13 @@ namespace MinhTamHair.KhanchHang.Controllers
         public string? SoDienThoai { get; set; }
         public string? DiaChi { get; set; }
         public string? Email { get; set; }
+    }
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public class ThanhToanCheckStylistRequest
+    {
+        public string NgayHen { get; set; }
+        public string GioBatDau { get; set; }
+        public int TongThoiGian { get; set; }
+        public string MaKh { get; set; }
     }
 }
