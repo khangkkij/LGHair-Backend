@@ -37,12 +37,12 @@ namespace MinhTamHair.Admin.Controllers
                     email = ld.MaKhNavigation.Email,
                     ngayHen = $"{ld.NgayHen:yyyy-MM-dd}T{(ld.GioBatDau.HasValue ? ld.GioBatDau.Value.ToString("HH:mm") : "00:00")} - {(ld.GioKetThuc.HasValue ? ld.GioKetThuc.Value.ToString("HH:mm") : "??:??")}",
 
-                    
+
                     tongTien = _context.HoaDons.Where(hd => hd.MaLd == ld.MaLd).Select(hd => hd.TongTien ?? 0).FirstOrDefault(),
                     daThanhToan = _context.HoaDons.Where(hd => hd.MaLd == ld.MaLd).Select(hd => hd.TienDaTra ?? 0).FirstOrDefault(),
 
                     voucher = _context.HoaDons.Where(hd => hd.MaLd == ld.MaLd).Select(hd => hd.MaCode).FirstOrDefault(),
-                    
+
                     tienGiam = _context.HoaDons.Where(hd => hd.MaLd == ld.MaLd).Select(hd => (hd.TongTien ?? 0) - (hd.ThanhTien ?? 0)).FirstOrDefault(),
 
                     maNv = _context.ChitietLichdats
@@ -115,7 +115,7 @@ namespace MinhTamHair.Admin.Controllers
                 email = ld.MaKhNavigation.Email,
                 ngayHen = $"{ld.NgayHen:yyyy-MM-dd}T{ld.GioBatDau:HH\\:mm} - {ld.GioKetThuc:HH\\:mm}",
 
-                
+
                 tongTien = _context.HoaDons.Where(hd => hd.MaLd == ld.MaLd).Select(hd => hd.TongTien ?? 0).FirstOrDefault(),
                 daThanhToan = _context.HoaDons.Where(hd => hd.MaLd == ld.MaLd).Select(hd => hd.TienDaTra ?? 0).FirstOrDefault(),
 

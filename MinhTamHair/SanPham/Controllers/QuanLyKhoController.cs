@@ -315,16 +315,10 @@ public class QuanLyKhoController : ControllerBase
     [HttpPost("phieunhap/{id}/duyet")]
     public async Task<IActionResult> DuyetPhieuNhap(string id)
     {
-        // Nếu DbContext có cấu hình EnableRetryOnFailure, EF Core bắt buộc mọi transaction
-        // phải chạy qua ExecutionStrategy, nếu không sẽ ném InvalidOperationException ngay
-        // khi gọi BeginTransactionAsync (=> lỗi 500 không rõ nguyên nhân ở client).
         var strategy = _db.Database.CreateExecutionStrategy();
 
         return await strategy.ExecuteAsync<IActionResult>(async () =>
         {
-            // Dùng isolation level Serializable: SQL Server sẽ tự khóa các dòng được đọc
-            // trong transaction này cho tới khi commit/rollback, nên 2 request duyệt cùng
-            // một phiếu (hoặc cùng đụng vào 1 biến thể) sẽ chạy tuần tự, không bị cộng tồn 2 lần.
             using var transaction = await _db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
             try
             {
@@ -528,9 +522,6 @@ public class QuanLyKhoController : ControllerBase
         return Ok(list);
     }
 
-    // ════════════════════════════════════════════════════════════
-    // LỊCH SỬ TỒN KHO
-    // ════════════════════════════════════════════════════════════
     [HttpGet("lichsutonkho")]
     public async Task<IActionResult> GetLichSuTonKho(
         [FromQuery] string? maBienThe,
@@ -580,11 +571,6 @@ public class QuanLyKhoController : ControllerBase
         return Ok(new { total, page, pageSize, items = list });
     }
 
-    // ════════════════════════════════════════════════════════════
-    // ĐỐI SOÁT KHO - HÓA ĐƠN ĐIỆN TỬ
-    // Mỗi lượt xuất kho BÁN HÀNG (LichSuTonKho) phải có 1 hóa đơn điện tử
-    // đã xuất thành công (HoaDonDienTu.TrangThai = 1) tương ứng qua MaChungTu -> MaHd
-    // ════════════════════════════════════════════════════════════
     [HttpGet("doisoathoadon")]
     public async Task<IActionResult> GetDoiSoatHoaDon(
         [FromQuery] DateTime? tuNgay,
@@ -619,9 +605,10 @@ public class QuanLyKhoController : ControllerBase
             );
         }
 
-        // Gộp thông tin hóa đơn điện tử tương ứng (nếu có) qua MaChungTu = HoaDonDienTu.MaHd
+        var hddtSanPhamOnly = _db.HoaDonDienTus.Where(h => h.MaHddt != null && !h.MaHddt.EndsWith("D"));
+
         var joined = from l in q
-                     join hddt in _db.HoaDonDienTus on l.MaChungTu equals hddt.MaHd into hddtGroup
+                     join hddt in hddtSanPhamOnly on l.MaChungTu equals hddt.MaHd into hddtGroup
                      from hddt in hddtGroup.DefaultIfEmpty()
                      select new
                      {
@@ -640,15 +627,13 @@ public class QuanLyKhoController : ControllerBase
                          GhiChuLoi = hddt != null ? hddt.GhiChuLoi : null
                      };
 
-        // Trạng thái: "khop" = đã có hóa đơn xuất thành công (TrangThai=1); "thieu" = chưa có hoặc lỗi/pending
         if (trangThai == "khop") joined = joined.Where(x => x.TrangThaiHoaDon == 1);
         else if (trangThai == "thieu") joined = joined.Where(x => x.TrangThaiHoaDon == null || x.TrangThaiHoaDon != 1);
 
         var total = await joined.CountAsync();
 
-        // Thống kê tổng quan (tính trên toàn bộ tập đã lọc theo ngày, chưa phân trang)
         var statsQuery = from l in q
-                         join hddt in _db.HoaDonDienTus on l.MaChungTu equals hddt.MaHd into hddtGroup2
+                         join hddt in hddtSanPhamOnly on l.MaChungTu equals hddt.MaHd into hddtGroup2
                          from hddt in hddtGroup2.DefaultIfEmpty()
                          select hddt != null && hddt.TrangThai == 1 ? 1 : 0;
         var tongLuot = await q.CountAsync();
@@ -694,16 +679,11 @@ public class QuanLyKhoController : ControllerBase
         return Ok(new { nguong, soLuongCanhBao = list.Count, items = list });
     }
 
-    // ════════════════════════════════════════════════════════════
-    // THỐNG KÊ NHẬP KHO THEO THÁNG
-    // ════════════════════════════════════════════════════════════
     [HttpGet("thongkenhapkho")]
     public async Task<IActionResult> GetThongKeNhapKho([FromQuery] int? nam)
     {
         var namXet = nam ?? DateTime.Now.Year;
 
-        // Chỉ tính các phiếu đã duyệt (TrangThai == 1), vì đó là những phiếu thực sự
-        // đã ảnh hưởng tới tồn kho. Phiếu nháp/hủy không tính vào thống kê.
         var raw = await _db.Phieunhaps
             .Where(p => p.TrangThai == 1 && p.NgayNhap.HasValue && p.NgayNhap.Value.Year == namXet)
             .Select(p => new

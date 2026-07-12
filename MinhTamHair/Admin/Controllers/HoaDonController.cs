@@ -103,21 +103,19 @@ namespace MinhTamHair.Admin.Controllers
 
                 if (hd == null) return NotFound(new { success = false, message = "Không tìm thấy hóa đơn" });
 
-                bool vuaChuyenSangDaThanhToan = hd.TrangThai != 1 && request.TrangThai == 1;
+                // HoaDon.TrangThai: 1 = Chờ xử lý, 2 = Đang giao, 3 = Đã hoàn thành.
+                bool vuaHoanThanh = request.TrangThai == 3;
 
                 hd.TrangThai = request.TrangThai;
 
-                if (hd.MaLdNavigation != null)
+                if (hd.MaLdNavigation != null && hd.MaLdNavigation.TrangThai != 4)
                 {
                     hd.MaLdNavigation.TrangThai = request.TrangThai;
                 }
 
                 await _context.SaveChangesAsync();
 
-                // ĐƠN COD: khi nhân viên xác nhận vừa thu đủ tiền mặt (trạng thái chuyển sang 1),
-                // nếu hóa đơn có bản ghi hóa đơn điện tử đang ở dạng nháp (TrangThai = 0, chưa phát hành)
-                // thì tiến hành phát hành hóa đơn điện tử ngay lúc này.
-                if (vuaChuyenSangDaThanhToan)
+                if (vuaHoanThanh)
                 {
                     var hddtNhap = await _context.HoaDonDienTus
                         .Where(x => x.MaHd == maHd && x.TrangThai == 0)
@@ -126,16 +124,44 @@ namespace MinhTamHair.Admin.Controllers
 
                     if (hddtNhap != null)
                     {
-                        hddtNhap.TrangThai = 1;
-                        await _context.SaveChangesAsync();
-
                         var maHddt = hddtNhap.MaHddt;
                         _ = Task.Run(async () =>
                         {
                             using var scope = _scopeFactory.CreateScope();
                             var eInvoiceService = scope.ServiceProvider.GetRequiredService<IEInvoiceService>();
                             await eInvoiceService.PhatHanhHoaDonAsync(maHddt);
-                        }); // fire-and-forget với scope riêng, không dùng _context của request đã kết thúc
+                        });
+                    }
+                    var thanhToan = await _context.Thanhtoans.FirstOrDefaultAsync(t => t.MaHd == maHd);
+                    if (thanhToan != null && thanhToan.TrangThai != 1)
+                    {
+                        thanhToan.TrangThai = 1;
+                        await _context.SaveChangesAsync();
+                    }
+                }
+
+                if (request.TrangThai >= 2)
+                {
+                    bool daXacNhanCheckout = hd.MaLdNavigation != null && hd.MaLdNavigation.TrangThai == 4;
+                    if (daXacNhanCheckout)
+                    {
+                        var hddtGopChoXuat = await _context.HoaDonDienTus
+                            .Where(x => x.MaHd == maHd && x.TrangThai == 3)
+                            .OrderByDescending(x => x.MaHddt)
+                            .FirstOrDefaultAsync();
+
+                        if (hddtGopChoXuat != null)
+                        {
+                            var maHddtGop = hddtGopChoXuat.MaHddt;
+                            hddtGopChoXuat.TrangThai = 0; // Sẵn sàng xuất
+                            await _context.SaveChangesAsync();
+                            _ = Task.Run(async () =>
+                            {
+                                using var scope = _scopeFactory.CreateScope();
+                                var eInvoiceService = scope.ServiceProvider.GetRequiredService<IEInvoiceService>();
+                                await eInvoiceService.PhatHanhHoaDonAsync(maHddtGop);
+                            });
+                        }
                     }
                 }
 

@@ -4,12 +4,6 @@ using MinhTamHair.Models;
 
 namespace MinhTamHair.Controllers;
 
-// ════════════════════════════════════════════════════════════════
-// ĐỐI SOÁT HÓA ĐƠN DỊCH VỤ (bán ra)
-// Mỗi HOA_DON đã hoàn tất (TrangThai = hóa đơn đã chốt) phải có 1
-// hóa đơn điện tử đã xuất thành công (HoaDonDienTu.TrangThai = 1)
-// tương ứng qua HoaDon.MaHd -> HoaDonDienTu.MaHd
-// ════════════════════════════════════════════════════════════════
 [ApiController]
 [Route("api/[controller]")]
 public class QuanLyDoiSoatDichVuController : ControllerBase
@@ -21,8 +15,8 @@ public class QuanLyDoiSoatDichVuController : ControllerBase
     public async Task<IActionResult> GetDoiSoatHoaDon(
         [FromQuery] DateTime? tuNgay,
         [FromQuery] DateTime? denNgay,
-        [FromQuery] string? trangThai, // "", "khop", "thieu"
-        [FromQuery] string? search, // tìm theo mã hóa đơn, tên KH, mã dịch vụ, tên dịch vụ
+        [FromQuery] string? trangThai,
+        [FromQuery] string? search,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 20)
     {
@@ -53,52 +47,74 @@ public class QuanLyDoiSoatDichVuController : ControllerBase
             );
         }
 
-        // Gộp thông tin hóa đơn điện tử tương ứng (nếu có) qua HoaDon.MaHd = HoaDonDienTu.MaHd
-        var joined = from h in q
-                     join hddt in _db.HoaDonDienTus on h.MaHd equals hddt.MaHd into hddtGroup
-                     from hddt in hddtGroup.DefaultIfEmpty()
-                     select new
-                     {
-                         h.MaHd,
-                         h.NgayTao,
-                         h.TongTien,
-                         h.TrangThai,
-                         TenKh = h.MaKhNavigation != null ? h.MaKhNavigation.HoTen : null,
-                         SdtKh = h.MaKhNavigation != null ? h.MaKhNavigation.Sdt : null,
-                         TenNv = h.MaNvNavigation != null ? h.MaNvNavigation.HoTenNv : null,
-                         DanhSachDichVu = h.MaLdNavigation != null
-                             ? h.MaLdNavigation.ChitietLichdats
-                                 .Select(ct => ct.MaDvNavigation != null ? ct.MaDvNavigation.TenDv : null)
-                                 .Where(t => t != null)
-                                 .ToList()
-                             : new List<string?>(),
-                         CoHoaDon = hddt != null,
-                         TrangThaiHoaDon = hddt != null ? (int?)hddt.TrangThai : null,
-                         SoHoaDon = hddt != null ? hddt.SoHoaDon : null,
-                         LinkPdf = hddt != null ? hddt.LinkPdf : null,
-                         GhiChuLoi = hddt != null ? hddt.GhiChuLoi : null
-                     };
+        var hoaDonList = await q.ToListAsync();
+        var maHdList = hoaDonList.Select(h => h.MaHd).ToList();
 
-        // Trạng thái: "khop" = đã có hóa đơn điện tử xuất thành công (TrangThai=1);
-        // "thieu" = chưa có hoặc lỗi/pending
-        if (trangThai == "khop") joined = joined.Where(x => x.TrangThaiHoaDon == 1);
-        else if (trangThai == "thieu") joined = joined.Where(x => x.TrangThaiHoaDon == null || x.TrangThaiHoaDon != 1);
+        var allHddt = await _db.HoaDonDienTus
+            .Where(x => maHdList.Contains(x.MaHd))
+            .ToListAsync();
+        var hddtByMaHd = allHddt.GroupBy(x => x.MaHd).ToDictionary(g => g.Key, g => g.ToList());
 
-        var total = await joined.CountAsync();
+        var joined = hoaDonList.Select(h =>
+        {
+            var hddts = hddtByMaHd.TryGetValue(h.MaHd, out var lst) ? lst : new List<HoaDonDienTu>();
+            var hoaDonDienTus = hddts.Select(hddt => new
+            {
+                MaHddt = hddt.MaHddt,
+                Loai = hddt.MaHddt != null && hddt.MaHddt.EndsWith("D") ? "Dịch vụ"
+                     : hddt.MaHddt != null && hddt.MaHddt.EndsWith("S") ? "Sản phẩm"
+                     : "Gộp",
+                TrangThaiHoaDon = (int?)hddt.TrangThai,
+                SoHoaDon = hddt.SoHoaDon,
+                LinkPdf = hddt.LinkPdf,
+                GhiChuLoi = hddt.GhiChuLoi
+            }).ToList();
+            var hddtGop = hoaDonDienTus.FirstOrDefault(x => x.Loai == "Gộp");
+            var hddtDichVu = hoaDonDienTus.FirstOrDefault(x => x.Loai == "Dịch vụ") ?? hddtGop;
+            var hddtSanPham = hoaDonDienTus.FirstOrDefault(x => x.Loai == "Sản phẩm") ?? hddtGop;
+            bool daKhopHoanToan = hoaDonDienTus.Count > 0 && hoaDonDienTus.All(x => x.TrangThaiHoaDon == 1);
 
-        // Thống kê tổng quan (tính trên toàn bộ tập đã lọc theo ngày, chưa phân trang)
-        var statsQuery = from h in q
-                         join hddt in _db.HoaDonDienTus on h.MaHd equals hddt.MaHd into hddtGroup2
-                         from hddt in hddtGroup2.DefaultIfEmpty()
-                         select hddt != null && hddt.TrangThai == 1 ? 1 : 0;
-        var tongLuot = await q.CountAsync();
-        var daKhop = await statsQuery.SumAsync();
+            return new
+            {
+                h.MaHd,
+                h.NgayTao,
+                h.TongTien,
+                h.TrangThai,
+                TenKh = h.MaKhNavigation != null ? h.MaKhNavigation.HoTen : null,
+                SdtKh = h.MaKhNavigation != null ? h.MaKhNavigation.Sdt : null,
+                TenNv = h.MaNvNavigation != null ? h.MaNvNavigation.HoTenNv : null,
+                DanhSachDichVu = h.MaLdNavigation != null
+                    ? h.MaLdNavigation.ChitietLichdats
+                        .Select(ct => ct.MaDvNavigation != null ? ct.MaDvNavigation.TenDv : null)
+                        .Where(t => t != null)
+                        .ToList()
+                    : new List<string?>(),
+                CoHoaDon = hoaDonDienTus.Count > 0,
+                DaKhopHoanToan = daKhopHoanToan,
+                HoaDonDienTus = hoaDonDienTus,
+                TrangThaiHddtDichVu = hddtDichVu?.TrangThaiHoaDon,
+                SoHoaDonDichVu = hddtDichVu?.SoHoaDon,
+                LinkPdfDichVu = hddtDichVu?.LinkPdf,
+                GhiChuLoiDichVu = hddtDichVu?.GhiChuLoi,
 
-        var list = await joined
+                TrangThaiHddtSanPham = hddtSanPham?.TrangThaiHoaDon,
+                SoHoaDonSanPham = hddtSanPham?.SoHoaDon,
+                LinkPdfSanPham = hddtSanPham?.LinkPdf,
+                GhiChuLoiSanPham = hddtSanPham?.GhiChuLoi
+            };
+        }).AsQueryable();
+        if (trangThai == "khop") joined = joined.Where(x => x.DaKhopHoanToan);
+        else if (trangThai == "thieu") joined = joined.Where(x => !x.DaKhopHoanToan);
+
+        var total = joined.Count();
+        var tongLuot = hoaDonList.Count;
+        var daKhop = joined.Count(x => x.DaKhopHoanToan);
+
+        var list = joined
             .OrderByDescending(x => x.NgayTao)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
-            .ToListAsync();
+            .ToList();
 
         return Ok(new
         {

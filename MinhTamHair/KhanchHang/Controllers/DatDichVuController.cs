@@ -3,8 +3,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using MinhTamHair.KhanchHang.Models;
 using MinhTamHair.Models;
-using System.Text; 
-using System.Security.Cryptography; 
+using System.Text;
+using System.Security.Cryptography;
 using System.Net.Http.Json;
 using MinhTamHair.Services;
 using MinhTamHair.Services.TimeHelper;
@@ -563,12 +563,8 @@ namespace MinhTamHair.KhanchHang.Controllers
                     // 9. LƯU VÀO DATABASE CHÍNH THỨC
                     await transaction.CommitAsync();
 
-                    // ===== XUẤT HÓA ĐƠN ĐIỆN TỬ =====
-                    // Dùng model.InvoiceInfo nếu khách đã chọn (Datdichvu.vue), fallback về cá nhân nếu không có.
-                    // Nếu chỉ đặt cọc (paymentMode == "10"): dịch vụ chưa thực hiện -> HOÃN xuất, để
-                    // CheckInController.ConfirmFinalPayment xuất thật khi nhân viên xác nhận hoàn tất.
+                    // Xuất hóa đơn điện tử
                     {
-                        bool laDatCoc = paymentMode == "10";
                         bool laDoanhNghiep = model.InvoiceInfo?.LaDoanhNghiep ?? false;
                         var maHddt = "HD" + VnTimeHelper.Now().ToString("yyMMddHHmmss");
                         _context.HoaDonDienTus.Add(new HoaDonDienTu
@@ -580,19 +576,10 @@ namespace MinhTamHair.KhanchHang.Controllers
                             Mst = laDoanhNghiep ? model.InvoiceInfo?.Mst : null,
                             DiaChiXuatHd = model.InvoiceInfo?.DiaChiXuatHD,
                             EmailNhanHd = model.InvoiceInfo?.EmailNhanHD ?? model.Email,
-                            TrangThai = laDatCoc ? (byte)3 : (byte)0 // 3 = chờ hoàn tất dịch vụ
+                            // LUÔN = 3 (chờ hoàn tất dịch vụ), bất kể cọc hay thanh toán full lúc đặt.
+                            TrangThai = 3
                         });
                         await _context.SaveChangesAsync();
-
-                        if (!laDatCoc)
-                        {
-                            _ = Task.Run(async () =>
-                            {
-                                using var scope = _scopeFactory.CreateScope();
-                                var eInvoiceService = scope.ServiceProvider.GetRequiredService<IEInvoiceService>();
-                                await eInvoiceService.PhatHanhHoaDonAsync(maHddt);
-                            });
-                        }
                     }
 
                     // 10. GỬI EMAIL QR SAU KHI LƯU THÀNH CÔNG

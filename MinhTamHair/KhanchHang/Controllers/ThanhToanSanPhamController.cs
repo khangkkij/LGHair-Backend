@@ -24,6 +24,50 @@ namespace MinhTamHair.KhanchHang.Controllers
             _configuration = configuration;
             _scopeFactory = scopeFactory;
         }
+
+        [HttpGet("confirm-payment")]
+        public async Task<IActionResult> ConfirmPayment(
+            [FromQuery] string orderId,
+            [FromQuery] string? vnp_ResponseCode = null,
+            [FromQuery] string? resultCode = null)
+        {
+            if (string.IsNullOrEmpty(orderId))
+                return BadRequest(new { success = false, message = "Thiếu mã đơn hàng." });
+
+            try
+            {
+                var hoaDon = await _context.HoaDons
+                    .Include(h => h.Thanhtoans)
+                    .FirstOrDefaultAsync(h => h.MaHd == orderId);
+
+                if (hoaDon == null)
+                    return NotFound(new { success = false, message = "Không tìm thấy đơn hàng." });
+
+                bool isPaymentSuccess = (vnp_ResponseCode == "00") || (resultCode == "0");
+                var thanhToan = hoaDon.Thanhtoans.FirstOrDefault();
+                if (isPaymentSuccess && thanhToan != null && thanhToan.TrangThai != 1)
+                {
+                    thanhToan.TrangThai = 1;
+                    await _context.SaveChangesAsync();
+
+                    // ĐÃ ĐỔI NGHIỆP VỤ: không còn phát hành hóa đơn điện tử ngay khi thanh toán online
+                    // thành công nữa. Dù thanh toán 100% (kể cả online) hay COD, hóa đơn điện tử luôn
+                    // chờ nhân viên xác nhận đơn "Đã hoàn thành/Đã giao hàng" (TrangThai = 3) tại
+                    // HoaDonController.UpdateStatus mới được phát hành. Bản ghi HoaDonDienTu vẫn giữ
+                    // nguyên TrangThai = 0 (nháp) chờ tới lúc đó.
+
+                    return Ok(new { success = true, message = "Đã xác nhận thanh toán." });
+                }
+
+                // Nếu callback báo thất bại/hủy, hoặc đơn đã được xác nhận từ trước, không làm gì thêm.
+                return Ok(new { success = true, message = "Không có thay đổi (đã xử lý trước đó hoặc thanh toán không thành công)." });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
         [HttpGet("search-products-variants")]
         public async Task<IActionResult> SearchProductsWithVariants([FromQuery] string? keyword = "")
         {
@@ -176,7 +220,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 using var transaction = await _context.Database.BeginTransactionAsync();
                 try
                 {
-                  
+
 
                     string maHd = "SP" + vnNow.ToString("ddHHmmss");
                     decimal subTotal = req.Products.Sum(p => p.GiaBan * p.SoLuong);
@@ -185,6 +229,11 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                     string safeKhachHang = (string.IsNullOrWhiteSpace(req.MaKh) || req.MaKh == "GUEST") ? null : req.MaKh;
                     string safePayment = string.IsNullOrWhiteSpace(req.PaymentMethod) ? "cod" : req.PaymentMethod.ToLower();
+
+                    // Xác định sớm COD/online để dùng chung cho HoaDon.TrangThai và HoaDonDienTu bên dưới.
+                    bool laCod = string.Equals(safePayment, "cod", StringComparison.OrdinalIgnoreCase);
+                    bool laOnline = string.Equals(safePayment, "vnpay", StringComparison.OrdinalIgnoreCase)
+                                  || string.Equals(safePayment, "momo", StringComparison.OrdinalIgnoreCase);
 
                     if (req.VoucherIds != null && req.VoucherIds.Any() && safeKhachHang != null)
                     {
@@ -266,7 +315,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         MaHd = maHd,
                         PhuongThuc = safePayment.ToUpper(),
                         SoTien = finalTotal,
-                        TrangThai = safePayment == "cod" ? 0 : 1
+                        TrangThai = (laCod || laOnline) ? 0 : 1
                     });
 
                     await _context.SaveChangesAsync();
@@ -280,16 +329,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                     }
 
                     await transaction.CommitAsync();
-
-                    // PHẦN XUẤT HÓA ĐƠN ĐIỆN TỬ
-                    // Luật yêu cầu MỌI giao dịch bán hàng đều phải xuất hóa đơn, không phụ thuộc khách có yêu cầu hay không.
-                    // req.InvoiceInfo chỉ dùng để xác định đây là hóa đơn cá nhân hay doanh nghiệp (có MST) và thông tin xuất hóa đơn riêng (nếu khác thông tin giao hàng).
-                    //
-                    // LƯU Ý VỀ COD: Với đơn COD (chưa thu tiền), ta vẫn tạo sẵn bản ghi HOA_DON_DIEN_TU để giữ lại
-                    // thông tin xuất hóa đơn (MST/tên công ty/địa chỉ...) nhưng để TrangThai = 0 (nháp/chưa phát hành)
-                    // và KHÔNG gọi phát hành ngay. Chỉ khi nhân viên xác nhận đã thu đủ tiền mặt (đổi TrangThai hóa đơn
-                    // sang 1 tại HoaDonController.UpdateStatus) thì hệ thống mới cập nhật bản ghi này sang TrangThai = 1
-                    // và gọi phát hành hóa đơn điện tử thật sự.
                     {
                         bool laDoanhNghiep = req.InvoiceInfo?.LaDoanhNghiep ?? false;
                         var maHddt = "HD" + vnNow.ToString("yyMMddHHmmss");
@@ -305,19 +344,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                             TrangThai = 0
                         });
                         await _context.SaveChangesAsync();
-
-                        // Chỉ phát hành hóa đơn điện tử NGAY nếu KHÔNG phải đơn COD.
-                        // Đơn COD sẽ được phát hành sau, khi nhân viên xác nhận đã thu tiền mặt.
-                        bool laCod = string.Equals(safePayment, "cod", StringComparison.OrdinalIgnoreCase);
-                        if (!laCod)
-                        {
-                            _ = Task.Run(async () =>
-                            {
-                                using var scope = _scopeFactory.CreateScope();
-                                var eInvoiceService = scope.ServiceProvider.GetRequiredService<IEInvoiceService>();
-                                await eInvoiceService.PhatHanhHoaDonAsync(maHddt);
-                            });
-                        }
+                        // Không còn gọi PhatHanhHoaDonAsync ở đây trong bất kỳ trường hợp nào.
                     }
 
                     string paymentUrl = null;
