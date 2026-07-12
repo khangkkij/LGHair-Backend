@@ -243,7 +243,6 @@ namespace MinhTamHair.Admin.Controllers
             });
         }
 
-        // 4. Thanh toán & Hoàn thành lịch đặt (Chuyển sang trạng thái 4)
         [HttpPost("confirm-payment")]
         public async Task<IActionResult> ConfirmPayment([FromBody] ConfirmCheckoutPaymentRequest req)
         {
@@ -276,29 +275,30 @@ namespace MinhTamHair.Admin.Controllers
                     return Ok(new { payUrl = await CreateMoMoLink(hoaDon.MaHd, (long)req.AmountToPay) });
                 }
             }
-
-            // Đánh dấu Hoàn thành (Lichdat -> 4, HoaDon -> 1)
             ld.TrangThai = 4;
-            hoaDon.TrangThai = 1;
+            if (hoaDon.TrangThai < 1) hoaDon.TrangThai = 1;
             await _context.SaveChangesAsync();
 
-            // Xử lý Hóa đơn điện tử chạy ngầm (Chỉ xuất khi đơn đã hoàn thành)
-            var hoaDonChoXuat = await _context.HoaDonDienTus
-                .Where(h => h.MaHd == hoaDon.MaHd && h.TrangThai == 3)
-                .OrderByDescending(h => h.MaHddt)
-                .FirstOrDefaultAsync();
-
-            if (hoaDonChoXuat != null)
+            bool daDanhDauThanhToan = hoaDon.TrangThai >= 2;
+            if (daDanhDauThanhToan)
             {
-                hoaDonChoXuat.TrangThai = 0; // Sẵn sàng xuất
-                await _context.SaveChangesAsync();
-                var maHddt = hoaDonChoXuat.MaHddt;
-                _ = Task.Run(async () =>
+                var hoaDonChoXuat = await _context.HoaDonDienTus
+                    .Where(h => h.MaHd == hoaDon.MaHd && h.TrangThai == 3)
+                    .OrderByDescending(h => h.MaHddt)
+                    .FirstOrDefaultAsync();
+
+                if (hoaDonChoXuat != null)
                 {
-                    using var scope = _scopeFactory.CreateScope();
-                    var eInvoiceService = scope.ServiceProvider.GetRequiredService<IEInvoiceService>();
-                    await eInvoiceService.PhatHanhHoaDonAsync(maHddt);
-                });
+                    hoaDonChoXuat.TrangThai = 0; // Sẵn sàng xuất
+                    await _context.SaveChangesAsync();
+                    var maHddt = hoaDonChoXuat.MaHddt;
+                    _ = Task.Run(async () =>
+                    {
+                        using var scope = _scopeFactory.CreateScope();
+                        var eInvoiceService = scope.ServiceProvider.GetRequiredService<IEInvoiceService>();
+                        await eInvoiceService.PhatHanhHoaDonAsync(maHddt);
+                    });
+                }
             }
 
             return Ok(new { message = "Thanh toán thành công, đơn hàng đã hoàn tất!" });

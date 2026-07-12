@@ -47,6 +47,26 @@ namespace MinhTamHair.Controllers
         }
 
         // ========================================================
+        // HÀM TRỢ GIÚP: TÍNH GIÁ SAU FLASH SALE (DÙNG CHUNG CHO DỊCH VỤ & COMBO)
+        // Đồng bộ 100% với logic đang dùng ở DanhSachDichVuController,
+        // để giá trong giỏ hàng luôn khớp với giá hiển thị ở trang danh sách/chi tiết.
+        // ========================================================
+        private static (decimal giaGoc, decimal giaBan) TinhGiaSauFlashSale(
+            decimal giaGocGoc,
+            IEnumerable<ChitietFlashsale>? chitietFlashsales,
+            DateTime now)
+        {
+            var flash = chitietFlashsales?
+                .FirstOrDefault(fs =>
+                    fs.MaFlNavigation.TrangThai == 1 &&
+                    fs.MaFlNavigation.NgayBatDau <= now &&
+                    fs.MaFlNavigation.NgayKetThuc >= now);
+
+            var giaBan = flash == null ? giaGocGoc : giaGocGoc - (giaGocGoc * (flash.PhanTramGiam ?? 0) / 100);
+            return (giaGocGoc, giaBan);
+        }
+
+        // ========================================================
         // 1. API: TRUY XUẤT CHI TIẾT GIỎ HÀNG (BIẾT RÕ CỦA AI, CÓ GÌ)
         // ========================================================
         [HttpGet("chi-tiet")]
@@ -65,7 +85,7 @@ namespace MinhTamHair.Controllers
                 if (ctx.isAuthenticated && ctx.userId != null)
                 {
                     // GIỮ LẠI CẢ DỊCH VỤ VÀ COMBO TỪ CACHE
-                    var phanCacheDuocGiuLai = cart.Items.Where(x => x.Loai == "DICHVU" || x.Loai == "COMBO").ToList(); 
+                    var phanCacheDuocGiuLai = cart.Items.Where(x => x.Loai == "DICHVU" || x.Loai == "COMBO").ToList();
 
                     var phanBienTheDb = await _context.ChitietGiohangs
                         .Where(c => c.MaGhNavigation.MaKh == ctx.userId)
@@ -75,19 +95,22 @@ namespace MinhTamHair.Controllers
                             Loai = "BIENTHE",
                             Ten = c.MaBienTheNavigation.TenBienThe ?? "Sản phẩm",
                             Gia = c.MaBienTheNavigation.GiaBan ?? 0,
+                            // Sản phẩm hiện chưa có hệ thống Flash Sale riêng như dịch vụ,
+                            // nên GiaGoc = Gia (không hiển thị gạch ngang).
+                            GiaGoc = c.MaBienTheNavigation.GiaBan ?? 0,
                             HinhAnh = c.MaBienTheNavigation.HinhAnhDaiDien,
                             SoLuong = c.SoLuong ?? 0
                         }).ToListAsync();
 
                     cart.Items = phanBienTheDb.Concat(phanCacheDuocGiuLai).ToList();
-                    await SaveCartToCacheAsync(ctx.key, cart); 
+                    await SaveCartToCacheAsync(ctx.key, cart);
                 }
 
                 return Ok(cart);
             }
             catch (Exception ex)
             {
-                return BadRequest(new { message = ex.Message }); 
+                return BadRequest(new { message = ex.Message });
             }
         }
 
@@ -119,6 +142,9 @@ namespace MinhTamHair.Controllers
                         Loai = "BIENTHE",
                         Ten = bt.TenBienThe ?? "Sản phẩm",
                         Gia = bt.GiaBan ?? 0,
+                        // Sản phẩm hiện chưa có hệ thống Flash Sale riêng như dịch vụ,
+                        // nên GiaGoc = Gia (không hiển thị gạch ngang).
+                        GiaGoc = bt.GiaBan ?? 0,
                         HinhAnh = bt.HinhAnhDaiDien,
                         SoLuong = request.SoLuong
                     });
@@ -153,22 +179,35 @@ namespace MinhTamHair.Controllers
                 var cachedData = await _cache.GetStringAsync(ctx.key);
                 var cart = string.IsNullOrEmpty(cachedData) ? new GioHangDto { CartOwner = ctx.ownerName } : JsonSerializer.Deserialize<GioHangDto>(cachedData)!;
 
+                // ⚠️ BẮT BUỘC Include ChitietFlashsales để tính đúng giá đang sale,
+                // nếu không giỏ hàng sẽ luôn lưu giá gốc dù dịch vụ đang giảm giá.
+                var dv = await _context.Dichvus
+                    .Include(d => d.Hinhanhs)
+                    .Include(d => d.ChitietFlashsales)
+                        .ThenInclude(fs => fs.MaFlNavigation)
+                    .FirstOrDefaultAsync(x => x.MaDv == request.MaDv);
+
+                if (dv == null) return NotFound(new { message = "Không tìm thấy dịch vụ." });
+
+                var (giaGoc, giaBan) = TinhGiaSauFlashSale(dv.Gia ?? 0, dv.ChitietFlashsales, DateTime.Now);
+
                 var existingItem = cart.Items.FirstOrDefault(x => x.Id == request.MaDv && x.Loai == "DICHVU");
                 if (existingItem != null)
                 {
                     existingItem.SoLuong += request.SoLuong;
+                    // Cập nhật lại giá mới nhất (phòng khi Flash Sale vừa bắt đầu/kết thúc)
+                    existingItem.Gia = giaBan;
+                    existingItem.GiaGoc = giaGoc;
                 }
                 else
                 {
-                    var dv = await _context.Dichvus.Include(d => d.Hinhanhs).FirstOrDefaultAsync(x => x.MaDv == request.MaDv);
-                    if (dv == null) return NotFound(new { message = "Không tìm thấy dịch vụ." });
-
                     cart.Items.Add(new GioHangItemDto
                     {
                         Id = dv.MaDv,
                         Loai = "DICHVU",
                         Ten = dv.TenDv ?? "Dịch vụ",
-                        Gia = dv.Gia ?? 0,
+                        Gia = giaBan,
+                        GiaGoc = giaGoc,
                         HinhAnh = dv.Hinhanhs.FirstOrDefault()?.DuongDan,
                         SoLuong = request.SoLuong
                     });
@@ -389,23 +428,32 @@ namespace MinhTamHair.Controllers
                 var cachedData = await _cache.GetStringAsync(ctx.key);
                 var cart = string.IsNullOrEmpty(cachedData) ? new GioHangDto { CartOwner = ctx.ownerName } : JsonSerializer.Deserialize<GioHangDto>(cachedData)!;
 
+                // ⚠️ BẮT BUỘC Include ChitietFlashsales để tính đúng giá đang sale của combo
+                var cb = await _context.Combos
+                    .Include(c => c.ChitietFlashsales)
+                        .ThenInclude(fs => fs.MaFlNavigation)
+                    .FirstOrDefaultAsync(x => x.MaCb == request.MaCb);
+
+                if (cb == null) return NotFound(new { message = "Không tìm thấy combo." });
+
+                var (giaGoc, giaBan) = TinhGiaSauFlashSale(cb.Gia ?? 0, cb.ChitietFlashsales, DateTime.Now);
+
                 var existingItem = cart.Items.FirstOrDefault(x => x.Id == request.MaCb && x.Loai == "COMBO");
                 if (existingItem != null)
                 {
                     existingItem.SoLuong += request.SoLuong;
+                    existingItem.Gia = giaBan;
+                    existingItem.GiaGoc = giaGoc;
                 }
                 else
                 {
-                    // LƯU Ý: Đảm bảo DbContext của bạn có DbSet<Combo> Combos
-                    var cb = await _context.Combos.FirstOrDefaultAsync(x => x.MaCb == request.MaCb);
-                    if (cb == null) return NotFound(new { message = "Không tìm thấy combo." });
-
                     cart.Items.Add(new GioHangItemDto
                     {
                         Id = cb.MaCb,
                         Loai = "COMBO",
                         Ten = cb.TenCombo ?? "Combo Dịch Vụ",
-                        Gia = cb.Gia ?? 0,
+                        Gia = giaBan,
+                        GiaGoc = giaGoc,
                         HinhAnh = cb.HinhAnh, // Thay đổi trường này cho khớp Model Combo của bạn
                         SoLuong = request.SoLuong
                     });

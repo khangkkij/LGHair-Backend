@@ -29,8 +29,6 @@ namespace MinhTamHair.KhanchHang.Controllers
             {
                 return Content(cachedData, "application/json");
             }
-
-            // ================= CATEGORIES =================
             var categories = await _context.DanhMucs
                 .Where(x => x.TrangThai == 1)
                 .Select(x => new
@@ -39,9 +37,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                     x.TenDanhMuc
                 })
                 .ToListAsync();
-
-            // ================= HOT SERVICES (đếm số lần đặt) =================
-            // Top 3 dịch vụ được đặt nhiều nhất TRONG TỪNG DANH MỤC (mỗi danh mục có 3 hot riêng)
             var hotServiceIds = (await _context.ChitietLichdats
                 .Where(x => x.MaDv != null)
                 .Join(
@@ -57,8 +52,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                 .SelectMany(g => g.OrderByDescending(x => x.SoLuong).Take(3))
                 .Select(x => x.MaDv)
                 .ToHashSet();
-
-            // ================= SERVICES (SAFE LOAD) =================
             var servicesRaw = await _context.Dichvus
                 .Where(x => x.TrangThai == 1)
                 .Include(x => x.Hinhanhs)
@@ -68,7 +61,6 @@ namespace MinhTamHair.KhanchHang.Controllers
             var now = DateTime.Now;
             var services = servicesRaw.Select(x =>
             {
-                // KIỂM TRA DỊCH VỤ CÓ ĐANG TRONG THỜI GIAN SALE KHÔNG
                 var flash = x.ChitietFlashsales
                     .FirstOrDefault(fs =>
                         fs.MaFlNavigation.TrangThai == 1 &&
@@ -84,12 +76,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     x.MoTa,
                     MaDm = x.MaDm,
 
-                    HinhAnh = x.Hinhanhs.FirstOrDefault()?.DuongDan,
-
-                    // ĐÁNH DẤU HOT
-                    IsHot = hotServiceIds.Contains(x.MaDv),
-
-                    // BƠM DỮ LIỆU SALE RA CHUẨN NHƯ HÀM FILTER
+                    HinhAnh = x.Hinhanhs.FirstOrDefault()?.DuongDan,IsHot = hotServiceIds.Contains(x.MaDv),
                     FlashSale = flash == null ? null : new
                     {
                         flash.PhanTramGiam,
@@ -97,8 +84,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                     }
                 };
             }).ToList();
-
-            // ================= COMBOS =================
             var combosRaw = await _context.Combos
                 .Where(x => x.TrangThai == 1)
                 .Include(x => x.ChitietFlashsales)
@@ -132,8 +117,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                     }
                 };
             }).ToList();
-
-            // ================= RESULT =================
             var result = new
             {
                 categories,
@@ -155,8 +138,6 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             return Ok(result);
         }
-
-        // ================= FILTER (FIXED SAFE VERSION) =================
         [HttpGet("filter")]
         public async Task<IActionResult> Filter(
             string? search,
@@ -177,15 +158,12 @@ namespace MinhTamHair.KhanchHang.Controllers
                 .Where(x => x.TrangThai == 1)
                 .AsQueryable();
 
-            // SEARCH
             if (!string.IsNullOrEmpty(search))
                 query = query.Where(x => x.TenDv.Contains(search));
 
-            // CATEGORY
             if (!string.IsNullOrEmpty(category) && category != "all")
                 query = query.Where(x => x.MaDm == category);
 
-            // PRICE
             if (!string.IsNullOrEmpty(priceRange))
             {
                 if (priceRange == "low")
@@ -198,8 +176,6 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             var totalItems = await query.CountAsync();
 
-            // ================= HOT SERVICES =================
-            // Top 3 dịch vụ được đặt nhiều nhất TRONG TỪNG DANH MỤC (mỗi danh mục có 3 hot riêng)
             var hotServiceIds = (await _context.ChitietLichdats
                 .Where(x => x.MaDv != null)
                 .Join(
@@ -215,8 +191,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                 .SelectMany(g => g.OrderByDescending(x => x.SoLuong).Take(3))
                 .Select(x => x.MaDv)
                 .ToHashSet();
-
-            // ================= LOAD SAFE (NO PROJECTION IN SQL) =================
             var list = await query
                 .Include(x => x.Hinhanhs)
                 .Include(x => x.ChitietFlashsales)
@@ -245,8 +219,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                     x.MoTa,
 
                     HinhAnh = x.Hinhanhs.FirstOrDefault()?.DuongDan,
-
-                    // ĐÁNH DẤU HOT
                     IsHot = hotServiceIds.Contains(x.MaDv),
 
                     FlashSale = flash == null ? null : new

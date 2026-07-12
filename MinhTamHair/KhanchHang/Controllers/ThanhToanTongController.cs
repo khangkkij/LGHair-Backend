@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using MinhTamHair.KhanchHang.Models;
 using MinhTamHair.Models;
@@ -18,13 +19,27 @@ namespace MinhTamHair.KhanchHang.Controllers
         private readonly IConfiguration _configuration;
         private readonly IQrEmailService _qrEmailService;
         private readonly IServiceScopeFactory _scopeFactory;
+        private readonly IMemoryCache _cache;
 
-        public ThanhToanTongController(MinhTamHairContext context, IConfiguration configuration, IQrEmailService qrEmailService, IServiceScopeFactory scopeFactory)
+        public ThanhToanTongController(MinhTamHairContext context, IConfiguration configuration, IQrEmailService qrEmailService, IServiceScopeFactory scopeFactory, IMemoryCache cache)
         {
             _context = context;
             _configuration = configuration;
             _qrEmailService = qrEmailService;
             _scopeFactory = scopeFactory;
+            _cache = cache;
+        }
+
+        // Khóa cache tạm lưu thông tin người mua (MST/tên công ty/địa chỉ xuất HĐ...) cho đơn thanh toán
+        private static string PendingInvoiceCacheKey(string maHd) => $"pending_invoice_{maHd}";
+
+        private class PendingInvoiceInfo
+        {
+            public byte LoaiKhach { get; set; }
+            public string? TenNguoiMua { get; set; }
+            public string? Mst { get; set; }
+            public string? DiaChiXuatHd { get; set; }
+            public string? EmailNhanHd { get; set; }
         }
 
         // TẢI DANH SÁCH DỊCH VỤ 
@@ -33,19 +48,39 @@ namespace MinhTamHair.KhanchHang.Controllers
         {
             try
             {
-                var services = await _context.Dichvus
+                var now = VnTimeHelper.Now();
+                var servicesRaw = await _context.Dichvus
                     .Where(s => s.TrangThai == 1)
-                    .Select(s => new
+                    .Include(x => x.ChitietFlashsales)
+                        .ThenInclude(fs => fs.MaFlNavigation)
+                    .Include(x => x.Hinhanhs)
+                    .ToListAsync();
+
+                var services = servicesRaw.Select(s =>
+                {
+                    var flash = s.ChitietFlashsales
+                        .FirstOrDefault(fs =>
+                            fs.MaFlNavigation.TrangThai == 1 &&
+                            fs.MaFlNavigation.NgayBatDau <= now &&
+                            fs.MaFlNavigation.NgayKetThuc >= now);
+
+                    decimal finalPrice = (decimal)s.Gia;
+                    if (flash != null && flash.PhanTramGiam.HasValue)
+                    {
+                        finalPrice = (decimal)s.Gia - ((decimal)s.Gia * (decimal)flash.PhanTramGiam.Value / 100m);
+                    }
+
+                    return new
                     {
                         id = s.MaDv,
                         name = s.TenDv,
-                        price = s.Gia,
-                        originalPrice = s.Gia,
+                        price = finalPrice,       // Giá đã giảm (nếu có flash sale)
+                        originalPrice = s.Gia,    // Giá gốc
                         duration = s.ThoiGianLam ?? 30,
                         hinhAnh = s.Hinhanhs.Select(h => h.DuongDan).FirstOrDefault(),
                         icon = s.Hinhanhs.Select(h => h.DuongDan).FirstOrDefault()
-                    })
-                    .ToListAsync();
+                    };
+                }).ToList();
                 var combos = await _context.Combos.Where(c => c.TrangThai == 1)
                     .Select(c => new {
                         id = c.MaCb,
@@ -418,23 +453,56 @@ namespace MinhTamHair.KhanchHang.Controllers
                         }
                         await _context.SaveChangesAsync();
                     }
+                    decimal serviceSubTotal = req.Services?.Sum(s => s.Price) ?? 0;
+                    decimal productSubTotal = req.Products?.Sum(p => p.Gia * p.SoLuong) ?? 0;
 
-                    // BƯỚC 5 (Chuyển lên trước để xác định trạng thái thanh toán online)
-                    string phuongThuc = "COD";
-                    if (req.PaidAmount > 0)
+                    // req.GrandTotal - (serviceSubTotal + productSubTotal + ShippingFee) = tổng giảm giá thực tế đã áp dụng
+                    decimal totalBeforeDiscount = serviceSubTotal + productSubTotal + req.ShippingFee;
+                    decimal tongGiamGia = Math.Max(0, totalBeforeDiscount - req.GrandTotal);
+
+                    decimal serviceDiscount = Math.Min(tongGiamGia, serviceSubTotal);
+                    decimal serviceAfterVoucher = Math.Max(0, serviceSubTotal - serviceDiscount);
+
+                    decimal remainingDiscount = Math.Max(0, tongGiamGia - serviceSubTotal);
+                    decimal productAfterVoucher = Math.Max(0, productSubTotal - remainingDiscount);
+
+                    bool coDichVu = req.Services != null && req.Services.Any();
+                    bool coSanPham = req.Products != null && req.Products.Any();
+
+                    // Số tiền dịch vụ cần trả ngay: nếu đặt cọc (PaymentMode == "10") thì chỉ 10%, ngược lại trả đủ.
+                    decimal servicePayment = 0;
+                    if (coDichVu)
                     {
-                        phuongThuc = (req.CheckoutType == "CHI_MUA_SAN_PHAM") ? req.ProductPaymentMethod : req.ServicePaymentMethod;
+                        servicePayment = (req.PaymentMode == "10") ? serviceAfterVoucher * 0.1m : serviceAfterVoucher;
                     }
 
-                    // Xác định đơn hàng có phải thanh toán online qua cổng VNPay/MoMo hay không
-                    bool isOnlinePayment = req.PaidAmount > 0 &&
-                        (phuongThuc.ToLower() == "vnpay" || phuongThuc.ToLower() == "momo");
+                    // Số tiền sản phẩm cần trả ngay: 0 nếu COD hoặc nhận tại tiệm, ngược lại trả đủ + phí ship.
+                    bool spNhanTaiTiem = string.Equals(req.ReceiveType, "store", StringComparison.OrdinalIgnoreCase);
+                    bool spLaCod = string.Equals(req.ProductPaymentMethod, "cod", StringComparison.OrdinalIgnoreCase);
+                    decimal productPayment = 0;
+                    if (coSanPham && !spLaCod && !spNhanTaiTiem)
+                    {
+                        productPayment = productAfterVoucher + req.ShippingFee;
+                    }
+
+                    // Phương thức thanh toán riêng cho từng phần
+                    string phuongThucDv = coDichVu ? (req.ServicePaymentMethod ?? "COD") : "COD";
+                    string phuongThucSp = coSanPham ? (req.ProductPaymentMethod ?? "COD") : "COD";
+
+                    bool dvLaOnline = coDichVu && servicePayment > 0 &&
+                        (phuongThucDv.ToLower() == "vnpay" || phuongThucDv.ToLower() == "momo");
+                    bool spLaOnline = coSanPham && productPayment > 0 &&
+                        (phuongThucSp.ToLower() == "vnpay" || phuongThucSp.ToLower() == "momo");
+
+                    // Đơn hàng coi là thanh toán online nếu có ít nhất 1 phần (DV hoặc SP) cần quét VNPay/MoMo.
+                    bool isOnlinePayment = dvLaOnline || spLaOnline;
+                    string phuongThuc = dvLaOnline ? phuongThucDv : (spLaOnline ? phuongThucSp : (coDichVu ? phuongThucDv : phuongThucSp));
 
                     // BƯỚC 3: TẠO HÓA ĐƠN
                     string? maCodeChinh = req.VoucherIds != null && req.VoucherIds.Any(v => !string.IsNullOrWhiteSpace(v))
                     ? req.VoucherIds.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))
                     : null;
-                    decimal totalOriginal = (req.Services?.Sum(s => s.Price) ?? 0) + (req.Products?.Sum(p => p.Gia * p.SoLuong) ?? 0);
+                    decimal totalOriginal = serviceSubTotal + productSubTotal;
                     var hoaDon = new HoaDon
                     {
                         MaHd = maHd,
@@ -523,32 +591,75 @@ namespace MinhTamHair.KhanchHang.Controllers
                     await transaction.CommitAsync();
 
                     // PHẦN XUẤT HÓA ĐƠN ĐIỆN TỬ
-                    // Luật yêu cầu MỌI giao dịch bán hàng đều phải xuất hóa đơn, không phụ thuộc khách có yêu cầu hay không.
-                    // req.InvoiceInfo chỉ dùng để xác định đây là hóa đơn cá nhân hay doanh nghiệp (có MST) và thông tin xuất hóa đơn riêng (nếu khác thông tin giao hàng).
                     {
                         bool laDoanhNghiep = req.InvoiceInfo?.LaDoanhNghiep ?? false;
-                        var maHddt = "HD" + VnTimeHelper.Now().ToString("yyMMddHHmmss");
-                        _context.HoaDonDienTus.Add(new HoaDonDienTu
-                        {
-                            MaHddt = maHddt,
-                            MaHd = maHd,
-                            LoaiKhach = laDoanhNghiep ? (byte)1 : (byte)0,
-                            TenNguoiMua = laDoanhNghiep ? req.InvoiceInfo?.TenCongTy : (req.CustomerName ?? "Khach hang"),
-                            Mst = laDoanhNghiep ? req.InvoiceInfo?.Mst : null,
-                            DiaChiXuatHd = req.InvoiceInfo?.DiaChiXuatHD ?? req.DeliveryInfo?.DiaChi,
-                            EmailNhanHd = req.InvoiceInfo?.EmailNhanHD ?? req.Email,
-                            TrangThai = 0
-                        });
-                        await _context.SaveChangesAsync();
+                        string tenNguoiMua = laDoanhNghiep ? req.InvoiceInfo?.TenCongTy : (req.CustomerName ?? "Khach hang");
+                        string mst = laDoanhNghiep ? req.InvoiceInfo?.Mst : null;
+                        string diaChiXuat = req.InvoiceInfo?.DiaChiXuatHD ?? req.DeliveryInfo?.DiaChi;
+                        string emailNhan = req.InvoiceInfo?.EmailNhanHD ?? req.Email;
+                        byte loaiKhach = laDoanhNghiep ? (byte)1 : (byte)0;
+                        var thoiDiemTao = VnTimeHelper.Now();
 
-                        _ = Task.Run(async () =>
+                        if (isOnlinePayment)
                         {
-                            using var scope = _scopeFactory.CreateScope();
-                            var eInvoiceService = scope.ServiceProvider.GetRequiredService<IEInvoiceService>();
-                            await eInvoiceService.PhatHanhHoaDonAsync(maHddt);
-                        }); // fire-and-forget với scope riêng, không dùng _context của request đã kết thúc
+                            _cache.Set(PendingInvoiceCacheKey(maHd), new PendingInvoiceInfo
+                            {
+                                LoaiKhach = loaiKhach,
+                                TenNguoiMua = tenNguoiMua,
+                                Mst = mst,
+                                DiaChiXuatHd = diaChiXuat,
+                                EmailNhanHd = emailNhan
+                            }, TimeSpan.FromMinutes(60));
+                        }
+                        else if (coDichVu)
+                        {
+                            var maHddtGop = "HD" + thoiDiemTao.ToString("yyMMddHHmmss");
+                            _context.HoaDonDienTus.Add(new HoaDonDienTu
+                            {
+                                MaHddt = maHddtGop,
+                                MaHd = maHd,
+                                LoaiKhach = loaiKhach,
+                                TenNguoiMua = tenNguoiMua,
+                                Mst = mst,
+                                DiaChiXuatHd = diaChiXuat,
+                                EmailNhanHd = emailNhan,
+                                // LUÔN hoãn (TrangThai = 3). CheckOutController.ConfirmPayment sẽ phát hành
+                                // hóa đơn gộp này (chứa cả dòng dịch vụ lẫn dòng sản phẩm cuối cùng sau khi
+                                // checkout) khi nhân viên xác nhận thu tiền/hoàn tất checkout.
+                                TrangThai = 3
+                            });
+                            await _context.SaveChangesAsync();
+                        }
+                        else if (coSanPham)
+                        {
+                            var maHddtSp = "HD" + thoiDiemTao.ToString("yyMMddHHmmss") + "S";
+                            _context.HoaDonDienTus.Add(new HoaDonDienTu
+                            {
+                                MaHddt = maHddtSp,
+                                MaHd = maHd,
+                                LoaiKhach = loaiKhach,
+                                TenNguoiMua = tenNguoiMua,
+                                Mst = mst,
+                                DiaChiXuatHd = diaChiXuat,
+                                EmailNhanHd = emailNhan,
+                                TrangThai = 0
+                            });
+                            await _context.SaveChangesAsync();
 
+                            if (!spLaCod)
+                            {
+                                _ = Task.Run(async () =>
+                                {
+                                    using var scope = _scopeFactory.CreateScope();
+                                    var eInvoiceService = scope.ServiceProvider.GetRequiredService<IEInvoiceService>();
+                                    await eInvoiceService.PhatHanhHoaDonAsync(maHddtSp);
+                                });
+                            }
+                            // Nếu spLaCod == true: HOÃN, chờ nhân viên xác nhận đơn ĐÃ HOÀN THÀNH (HoaDon.TrangThai == 3)
+                            // tại HoaDonController.UpdateStatus mới phát hành.
+                        }
                     }
+
 
 
                     // BƯỚC 6: TẠO LINK VNPAY HOẶC MOMO
@@ -662,12 +773,83 @@ namespace MinhTamHair.KhanchHang.Controllers
                 // 1. CẬP NHẬT TRẠNG THÁI NẾU THANH TOÁN ONLINE THÀNH CÔNG (VNPay hoặc MoMo)
                 bool isPaymentSuccess = (vnp_ResponseCode == "00") || (resultCode == "0");
 
-                if (isPaymentSuccess && hoaDon.TrangThai == 0)
+                // Chỉ khi TrangThai đang là 0 (chưa xác nhận) mới xử lý, để tránh phát hành hóa đơn nhiều lần
+                // nếu người dùng load lại trang get-receipt sau khi đã thanh toán thành công.
+                bool vuaXacNhanThanhCong = isPaymentSuccess && hoaDon.TrangThai == 0;
+
+                if (vuaXacNhanThanhCong)
                 {
                     hoaDon.TrangThai = 1;
                     var thanhToan = hoaDon.Thanhtoans.FirstOrDefault();
                     if (thanhToan != null) thanhToan.TrangThai = 1;
                     await _context.SaveChangesAsync();
+                    bool daCoHddt = await _context.HoaDonDienTus.AnyAsync(h => h.MaHd == maHd);
+                    if (!daCoHddt)
+                    {
+                        bool coDichVuDb = !string.IsNullOrEmpty(hoaDon.MaLd);
+                        bool coSanPhamDb = await _context.ChitietHoadonSps.AnyAsync(c => c.MaHd == maHd);
+                        var pending = _cache.Get<PendingInvoiceInfo>(PendingInvoiceCacheKey(maHd));
+                        if (pending != null)
+                        {
+                            _cache.Remove(PendingInvoiceCacheKey(maHd));
+                        }
+                        else
+                        {
+                            var khDuPhong = await _context.Khachhangs.FindAsync(hoaDon.MaKh);
+                            var deliveryDuPhong = hoaDon.ThongtinGiaohangs.FirstOrDefault();
+                            pending = new PendingInvoiceInfo
+                            {
+                                LoaiKhach = 0,
+                                TenNguoiMua = khDuPhong?.HoTen ?? deliveryDuPhong?.TenNguoiNhan ?? "Khach hang",
+                                Mst = null,
+                                DiaChiXuatHd = deliveryDuPhong?.DiaChiNhan,
+                                EmailNhanHd = khDuPhong?.Email ?? deliveryDuPhong?.Email
+                            };
+                        }
+
+                        var thoiDiemTao = VnTimeHelper.Now();
+
+                        if (coDichVuDb)
+                        {
+                            var maHddtGop = "HD" + thoiDiemTao.ToString("yyMMddHHmmss");
+                            _context.HoaDonDienTus.Add(new HoaDonDienTu
+                            {
+                                MaHddt = maHddtGop,
+                                MaHd = maHd,
+                                LoaiKhach = pending.LoaiKhach,
+                                TenNguoiMua = pending.TenNguoiMua,
+                                Mst = pending.Mst,
+                                DiaChiXuatHd = pending.DiaChiXuatHd,
+                                EmailNhanHd = pending.EmailNhanHd,
+                                TrangThai = 3
+                            });
+                            await _context.SaveChangesAsync();
+                            // KHÔNG phát hành ở đây - chờ CheckOutController.ConfirmPayment khi checkout xong.
+                        }
+                        else if (coSanPhamDb)
+                        {
+                            var maHddtSp = "HD" + thoiDiemTao.ToString("yyMMddHHmmss") + "S";
+                            _context.HoaDonDienTus.Add(new HoaDonDienTu
+                            {
+                                MaHddt = maHddtSp,
+                                MaHd = maHd,
+                                LoaiKhach = pending.LoaiKhach,
+                                TenNguoiMua = pending.TenNguoiMua,
+                                Mst = pending.Mst,
+                                DiaChiXuatHd = pending.DiaChiXuatHd,
+                                EmailNhanHd = pending.EmailNhanHd,
+                                TrangThai = 0
+                            });
+                            await _context.SaveChangesAsync();
+
+                            _ = Task.Run(async () =>
+                            {
+                                using var scope = _scopeFactory.CreateScope();
+                                var eInvoiceService = scope.ServiceProvider.GetRequiredService<IEInvoiceService>();
+                                await eInvoiceService.PhatHanhHoaDonAsync(maHddtSp);
+                            });
+                        }
+                    }
                 }
 
                 // 2. NẾU HÓA ĐƠN ĐÃ THANH TOÁN (TrangThai == 1) VÀ LỊCH ĐẶT CHƯA XÁC NHẬN (TrangThai == 0)

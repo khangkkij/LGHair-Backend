@@ -7,6 +7,9 @@
         public string Ten { get; set; } = null!;
         public string? HinhAnh { get; set; }
         public decimal Gia { get; set; }
+        // Giá gốc trước khi áp Flash Sale — dùng để Frontend hiển thị gạch ngang.
+        // Nếu không có khuyến mãi thì GiaGoc = Gia.
+        public decimal GiaGoc { get; set; }
         public int SoLuong { get; set; }
     }
 
@@ -26,7 +29,7 @@
     public class ThemDichVuRequest
     {
         public string MaDv { get; set; } = null!;
-        public int SoLuong { get; set; } = 1; 
+        public int SoLuong { get; set; } = 1;
     }
 
     // BỔ SUNG: Request cho Combo

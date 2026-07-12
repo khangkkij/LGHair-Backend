@@ -31,8 +31,6 @@ namespace MinhTamHair.Services
             _cache = cache;
             _emailService = emailService;
         }
-
-        // ================== BƯỚC 1: LẤY / CACHE TOKEN ==================
         private async Task<string> GetAccessTokenAsync()
         {
             if (_cache.TryGetValue(TokenCacheKey, out string? cached) && !string.IsNullOrEmpty(cached))
@@ -50,15 +48,11 @@ namespace MinhTamHair.Services
 
             if (!response.IsSuccessStatusCode || body?.Data?.AccessToken == null)
                 throw new Exception("Không lấy được access token từ SePay eInvoice: " + (body?.Message ?? response.StatusCode.ToString()));
-
-            // Cache gần hết hạn (trừ hao 5 phút) để tránh dùng token vừa hết hạn
             var expiry = TimeSpan.FromSeconds(Math.Max(60, body.Data.ExpiresIn - 300));
             _cache.Set(TokenCacheKey, body.Data.AccessToken, expiry);
 
             return body.Data.AccessToken;
         }
-
-        // ================== BƯỚC 2: TẠO + BƯỚC 3: KIỂM TRA KẾT QUẢ ==================
         public async Task<EInvoiceResult> PhatHanhHoaDonAsync(string maHddt)
         {
             var hoaDonDT = await _context.HoaDonDienTus.FirstOrDefaultAsync(h => h.MaHddt == maHddt);
@@ -71,9 +65,10 @@ namespace MinhTamHair.Services
             var hoaDon = await _context.HoaDons.FindAsync(hoaDonDT.MaHd);
             var items = new List<EInvoiceItemDto>();
             int lineNo = 1;
-
-            // ===== Gộp dòng DỊCH VỤ (nếu đơn hàng có gắn lịch đặt MaLd) =====
-            if (hoaDon != null && !string.IsNullOrEmpty(hoaDon.MaLd))
+            bool laHddtDichVu = hoaDonDT.MaHddt != null && hoaDonDT.MaHddt.EndsWith("D");
+            bool laHddtSanPham = hoaDonDT.MaHddt != null && hoaDonDT.MaHddt.EndsWith("S");
+            bool gomCaHaiLoai = !laHddtDichVu && !laHddtSanPham;
+            if (hoaDon != null && !string.IsNullOrEmpty(hoaDon.MaLd) && (laHddtDichVu || gomCaHaiLoai))
             {
                 var chiTietDv = await _context.ChitietLichdats.Where(c => c.MaLd == hoaDon.MaLd).ToListAsync();
                 foreach (var ct in chiTietDv)
@@ -104,8 +99,9 @@ namespace MinhTamHair.Services
                 }
             }
 
-            // ===== Gộp dòng SẢN PHẨM =====
-            var chiTiet = await _context.ChitietHoadonSps.Where(c => c.MaHd == hoaDonDT.MaHd).ToListAsync();
+            var chiTiet = (laHddtSanPham || gomCaHaiLoai)
+                ? await _context.ChitietHoadonSps.Where(c => c.MaHd == hoaDonDT.MaHd).ToListAsync()
+                : new List<ChitietHoadonSp>();
             foreach (var ct in chiTiet)
             {
                 var bt = await _context.BienTheSanphams.FindAsync(ct.MaBienThe);
@@ -133,15 +129,14 @@ namespace MinhTamHair.Services
                 return new EInvoiceResult { Success = false, ErrorMessage = hoaDonDT.GhiChuLoi };
             }
 
-            // ===== PHÂN BỔ GIẢM GIÁ VOUCHER (NẾU CÓ) VÀO TỪNG DÒNG HÀNG =====
-            // HoaDon.ThanhTien là số tiền khách THỰC TRẢ (đã trừ voucher, cộng thêm phí ship nếu có).
-            // Nếu không phân bổ, hóa đơn sẽ ghi sai cao hơn số tiền khách thực trả.
             decimal phiShip = 0m;
             var thongTinGH = await _context.ThongtinGiaohangs.FirstOrDefaultAsync(t => t.MaHd == hoaDonDT.MaHd);
-            if (thongTinGH != null) phiShip = thongTinGH.PhiShip ?? 0m;
+            if (thongTinGH != null && (laHddtSanPham || gomCaHaiLoai)) phiShip = thongTinGH.PhiShip ?? 0m;
 
             decimal tongTruocGiam = items.Sum(i => i.Quantity * i.UnitPrice);
-            decimal tongThucTraHangHoa = (hoaDon?.ThanhTien ?? tongTruocGiam) - phiShip;
+            decimal tongThucTraHangHoa = gomCaHaiLoai
+                ? (hoaDon?.ThanhTien ?? tongTruocGiam) - phiShip 
+                : tongTruocGiam;                                    
             decimal tongGiamGia = tongTruocGiam - tongThucTraHangHoa;
 
             if (tongGiamGia > 0 && tongTruocGiam > 0)

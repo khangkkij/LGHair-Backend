@@ -1,7 +1,9 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using MinhTamHair.Models;
+using MinhTamHair.Services;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -17,7 +19,12 @@ namespace MinhTamHair.Admin.Controllers
     public class HoaDonController : ControllerBase
     {
         private readonly MinhTamHairContext _context;
-        public HoaDonController(MinhTamHairContext context) => _context = context;
+        private readonly IServiceScopeFactory _scopeFactory;
+        public HoaDonController(MinhTamHairContext context, IServiceScopeFactory scopeFactory)
+        {
+            _context = context;
+            _scopeFactory = scopeFactory;
+        }
 
         public class UpdateStatusRequest
         {
@@ -96,14 +103,68 @@ namespace MinhTamHair.Admin.Controllers
 
                 if (hd == null) return NotFound(new { success = false, message = "Không tìm thấy hóa đơn" });
 
+                // HoaDon.TrangThai: 1 = Chờ xử lý, 2 = Đang giao, 3 = Đã hoàn thành.
+                bool vuaHoanThanh = request.TrangThai == 3;
+
                 hd.TrangThai = request.TrangThai;
 
-                if (hd.MaLdNavigation != null)
+                if (hd.MaLdNavigation != null && hd.MaLdNavigation.TrangThai != 4)
                 {
                     hd.MaLdNavigation.TrangThai = request.TrangThai;
                 }
 
                 await _context.SaveChangesAsync();
+
+                if (vuaHoanThanh)
+                {
+                    var hddtNhap = await _context.HoaDonDienTus
+                        .Where(x => x.MaHd == maHd && x.TrangThai == 0)
+                        .OrderByDescending(x => x.MaHddt)
+                        .FirstOrDefaultAsync();
+
+                    if (hddtNhap != null)
+                    {
+                        var maHddt = hddtNhap.MaHddt;
+                        _ = Task.Run(async () =>
+                        {
+                            using var scope = _scopeFactory.CreateScope();
+                            var eInvoiceService = scope.ServiceProvider.GetRequiredService<IEInvoiceService>();
+                            await eInvoiceService.PhatHanhHoaDonAsync(maHddt);
+                        });
+                    }
+                    var thanhToan = await _context.Thanhtoans.FirstOrDefaultAsync(t => t.MaHd == maHd);
+                    if (thanhToan != null && thanhToan.TrangThai != 1)
+                    {
+                        thanhToan.TrangThai = 1;
+                        await _context.SaveChangesAsync();
+                    }
+                }
+
+                if (request.TrangThai >= 2)
+                {
+                    bool daXacNhanCheckout = hd.MaLdNavigation != null && hd.MaLdNavigation.TrangThai == 4;
+                    if (daXacNhanCheckout)
+                    {
+                        var hddtGopChoXuat = await _context.HoaDonDienTus
+                            .Where(x => x.MaHd == maHd && x.TrangThai == 3)
+                            .OrderByDescending(x => x.MaHddt)
+                            .FirstOrDefaultAsync();
+
+                        if (hddtGopChoXuat != null)
+                        {
+                            var maHddtGop = hddtGopChoXuat.MaHddt;
+                            hddtGopChoXuat.TrangThai = 0; // Sẵn sàng xuất
+                            await _context.SaveChangesAsync();
+                            _ = Task.Run(async () =>
+                            {
+                                using var scope = _scopeFactory.CreateScope();
+                                var eInvoiceService = scope.ServiceProvider.GetRequiredService<IEInvoiceService>();
+                                await eInvoiceService.PhatHanhHoaDonAsync(maHddtGop);
+                            });
+                        }
+                    }
+                }
+
                 return Ok(new { success = true });
             }
             catch (Exception ex)
@@ -180,7 +241,6 @@ namespace MinhTamHair.Admin.Controllers
                     TrangThai = hd.TrangThai ?? 1,
                     ChiTietDichVu = chiTietList
                 };
-
                 return Ok(new { success = true, data = result });
             }
             catch (Exception ex)
