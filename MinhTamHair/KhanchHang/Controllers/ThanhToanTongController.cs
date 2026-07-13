@@ -192,6 +192,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 if (v.SoLuong.HasValue && (v.SoLuongDaDung ?? 0) >= v.SoLuong.Value) continue;
 
                 var uses = usageMap.GetValueOrDefault(v.MaCode, 0);
+                if (uses >= 1) continue;
                 var err = VoucherCartLogic.ValidateAndCalculate(v, uses, subTotal, cartIds, now, now, maRank, rankCap, out var tienGiam, out _);
 
                 decimal displayDiscount = tienGiam;
@@ -355,7 +356,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             var cartIds = string.IsNullOrWhiteSpace(itemIds) ? new List<string>() : itemIds.Split(',').ToList();
 
-            var (err, totalGiam, sau) = await VoucherCartLogic.ValidateStackedAsync(_context, parts, maKH, subTotal, cartIds, VnTimeHelper.Now(), VnTimeHelper.Now(), maRank, rankCap);
+            var (err, totalGiam, sau) = await VoucherCartLogic.ValidateStackedAsync(_context, parts, maKH, subTotal, cartIds, VnTimeHelper.Now(), VnTimeHelper.Now(), maRank, rankCap, maxVouchersAllowed: 2);
 
             if (err != null) return BadRequest(new { message = err });
             return Ok(new { totalDiscount = totalGiam, finalAmount = sau, codes = parts });
@@ -455,9 +456,23 @@ namespace MinhTamHair.KhanchHang.Controllers
                     }
                     decimal serviceSubTotal = req.Services?.Sum(s => s.Price) ?? 0;
                     decimal productSubTotal = req.Products?.Sum(p => p.Gia * p.SoLuong) ?? 0;
+                    decimal totalBeforeDiscount = serviceSubTotal + productSubTotal + req.ShippingFee;
+
+                    if (req.VoucherIds != null && req.VoucherIds.Any() && safeKhachHang != null)
+                    {
+                        var allCartIds = new List<string>();
+                        if (req.Services != null) allCartIds.AddRange(req.Services.Select(s => s.Id));
+                        if (req.Products != null) allCartIds.AddRange(req.Products.Select(p => p.Id));
+                        var (vErr, _, _) = await VoucherCartLogic.ValidateStackedAsync(
+                            _context, req.VoucherIds, safeKhachHang, serviceSubTotal + productSubTotal, allCartIds, VnTimeHelper.Now(), VnTimeHelper.Now(), null, null, maxVouchersAllowed: 2);
+                        if (vErr != null)
+                        {
+                            await transaction.RollbackAsync();
+                            return BadRequest(new { success = false, message = vErr });
+                        }
+                    }
 
                     // req.GrandTotal - (serviceSubTotal + productSubTotal + ShippingFee) = tổng giảm giá thực tế đã áp dụng
-                    decimal totalBeforeDiscount = serviceSubTotal + productSubTotal + req.ShippingFee;
                     decimal tongGiamGia = Math.Max(0, totalBeforeDiscount - req.GrandTotal);
 
                     decimal serviceDiscount = Math.Min(tongGiamGia, serviceSubTotal);
@@ -583,7 +598,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     {
                         foreach (var code in req.VoucherIds)
                         {
-                            await VoucherCartLogic.TryIncrementUsageAsync(_context, code);
+                            await VoucherCartLogic.TryIncrementUsageAsync(_context, code, safeKhachHang);
                         }
                     }
 

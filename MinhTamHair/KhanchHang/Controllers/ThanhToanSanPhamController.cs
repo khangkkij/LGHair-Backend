@@ -152,6 +152,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 if (v.SoLuong.HasValue && (v.SoLuongDaDung ?? 0) >= v.SoLuong.Value) continue;
 
                 var uses = usageMap.GetValueOrDefault(v.MaCode, 0);
+                if (uses >= 1) continue;
                 var err = VoucherCartLogic.ValidateAndCalculate(v, uses, subTotal, cartIds, now, now, maRank, rankCap, out var tienGiam, out _);
 
                 decimal displayDiscount = tienGiam;
@@ -183,7 +184,7 @@ namespace MinhTamHair.KhanchHang.Controllers
         [HttpGet("preview-voucher-stack")]
         public async Task<IActionResult> PreviewVoucherStack(string maKH, [FromQuery] string? codes, [FromQuery] decimal subTotal, [FromQuery] string? productIds)
         {
-            var parts = string.IsNullOrWhiteSpace(codes) ? new List<string>() : codes.Split(',').Select(VoucherCartLogic.NormalizeMaCode).Take(2).ToList();
+            var parts = string.IsNullOrWhiteSpace(codes) ? new List<string>() : codes.Split(',').Select(VoucherCartLogic.NormalizeMaCode).Take(1).ToList();
             if (parts.Count == 0) return Ok(new { totalDiscount = 0m, finalAmount = subTotal });
 
             var kh = await _context.Khachhangs.Include(k => k.MaCodes).FirstOrDefaultAsync(k => k.MaKh == maKH);
@@ -198,7 +199,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             }
 
             var cartIds = string.IsNullOrWhiteSpace(productIds) ? new List<string>() : productIds.Split(',').ToList();
-            var (err, totalGiam, sau) = await VoucherCartLogic.ValidateStackedAsync(_context, parts, maKH, subTotal, cartIds, DateTime.Now, DateTime.Now, maRank, rankCap);
+            var (err, totalGiam, sau) = await VoucherCartLogic.ValidateStackedAsync(_context, parts, maKH, subTotal, cartIds, DateTime.Now, DateTime.Now, maRank, rankCap, maxVouchersAllowed: 1);
 
             if (err != null) return BadRequest(new { message = err });
             return Ok(new { totalDiscount = totalGiam, finalAmount = sau, codes = parts });
@@ -239,7 +240,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     {
                         var cartIds = req.Products.Select(p => p.MaBienThe).ToList();
                         var (vErr, _, sau) = await VoucherCartLogic.ValidateStackedAsync(
-                            _context, req.VoucherIds, safeKhachHang, subTotal, cartIds, vnNow, vnNow, null, null);
+                            _context, req.VoucherIds.Take(1).ToList(), safeKhachHang, subTotal, cartIds, vnNow, vnNow, null, null, maxVouchersAllowed: 1);
 
                         if (vErr == null) tongSauGiam = sau;
                     }
@@ -322,9 +323,9 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                     if (req.VoucherIds != null)
                     {
-                        foreach (var code in req.VoucherIds)
+                        foreach (var code in req.VoucherIds.Take(1))
                         {
-                            await VoucherCartLogic.TryIncrementUsageAsync(_context, code);
+                            await VoucherCartLogic.TryIncrementUsageAsync(_context, code, safeKhachHang);
                         }
                     }
 
