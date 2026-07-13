@@ -32,6 +32,7 @@ namespace MinhTamHair.NhanVien.Controllers
 			var today = DateOnly.FromDateTime(DateTime.Now);
 			var yesterday = today.AddDays(-1); // Tạo thêm biến Ngày Hôm Qua
 			var sevenDaysAgo = today.AddDays(-7);
+			var sevenDaysAhead = today.AddDays(7);
 
 			// 1. KIỂM TRA XEM HÔM NAY ĐÃ CÓ CA CHƯA
 			var todayShift = await _context.Lichlamviecs
@@ -60,18 +61,58 @@ namespace MinhTamHair.NhanVien.Controllers
 				await _context.SaveChangesAsync();
 			}
 
-			// 4. LẤY DANH SÁCH (Bao gồm cả ca vừa tạo)
-			var shifts = await _context.Lichlamviecs
-				.Where(l => l.MaNv == maNv && l.NgayLamViec >= sevenDaysAgo && l.NgayLamViec <= today)
+			var rawShifts = await _context.Lichlamviecs
+				.Where(l => l.MaNv == maNv && l.NgayLamViec >= sevenDaysAgo && l.NgayLamViec <= sevenDaysAhead)
 				.OrderByDescending(l => l.NgayLamViec)
-				.Select(l => new {
-					MaLich = l.MaLich,
-					NgayLamViec = l.NgayLamViec.Value.ToString("yyyy-MM-dd"),
-					CaLam = l.CaLam,
-					TrangThai = l.TrangThai,
-					GhiChu = l.GhiChu
-				})
 				.ToListAsync();
+
+			bool isModified = false;
+			var currentTime = DateTime.Now.TimeOfDay;
+
+			foreach (var l in rawShifts)
+			{
+				if (l.TrangThai == 1 && l.CaLam != "Chưa xếp" && l.CaLam != "Nghỉ lễ")
+				{
+					bool isAbsent = false;
+					if (l.NgayLamViec < today)
+					{
+						isAbsent = true; // Đã qua ngày hôm sau
+					}
+					else if (l.NgayLamViec == today)
+					{
+						TimeSpan shiftEndTime;
+						if (l.CaLam.Contains("Ca sáng")) shiftEndTime = new TimeSpan(17, 0, 0);
+						else if (l.CaLam.Contains("Ca chiều")) shiftEndTime = new TimeSpan(18, 0, 0);
+						else if (l.CaLam.Contains("Ca tối")) shiftEndTime = new TimeSpan(23, 0, 0);
+						else shiftEndTime = new TimeSpan(23, 59, 59);
+
+						if (currentTime >= shiftEndTime)
+						{
+							isAbsent = true;
+						}
+					}
+
+					if (isAbsent)
+					{
+						l.TrangThai = 5; // Vắng mặt
+						l.GhiChu = string.IsNullOrEmpty(l.GhiChu) ? "Hệ thống tự đánh vắng do quá giờ" : l.GhiChu;
+						isModified = true;
+					}
+				}
+			}
+
+			if (isModified)
+			{
+				await _context.SaveChangesAsync();
+			}
+
+			var shifts = rawShifts.Select(l => new {
+				MaLich = l.MaLich,
+				NgayLamViec = l.NgayLamViec.Value.ToString("yyyy-MM-dd"),
+				CaLam = l.CaLam,
+				TrangThai = l.TrangThai,
+				GhiChu = l.GhiChu
+			}).ToList();
 
 			return Ok(new { success = true, data = shifts });
 		}
