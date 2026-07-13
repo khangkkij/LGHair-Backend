@@ -27,7 +27,7 @@ namespace MinhTamHair.Admin.Controllers
         {
             var nhanViens = await _context.Nhanviens
                 .Include(nv => nv.MaLoaiNvNavigation)
-                .Where(nv => nv.TrangThai == 1 && nv.MaLoaiNvNavigation!.DuocDatLich == true)
+                .Where(nv => nv.TrangThai == 1)
                 .Select(nv => new
                 {
                     nv.MaNv,
@@ -71,7 +71,49 @@ namespace MinhTamHair.Admin.Controllers
                 query = query.Where(l => l.TrangThai == trangThai.Value);
             }
 
-            var lichs = await query
+            var rawLichs = await query.ToListAsync();
+
+            bool isModified = false;
+            var currentTime = DateTime.Now.TimeOfDay;
+
+            foreach (var l in rawLichs)
+            {
+                if (l.TrangThai == 1 && l.CaLam != "Chưa xếp" && l.CaLam != "Nghỉ lễ" && l.NgayLamViec != null)
+                {
+                    bool isAbsent = false;
+                    if (l.NgayLamViec.Value < today)
+                    {
+                        isAbsent = true; // Đã qua ngày hôm sau
+                    }
+                    else if (l.NgayLamViec.Value == today)
+                    {
+                        TimeSpan shiftEndTime;
+                        if (l.CaLam.Contains("Ca sáng")) shiftEndTime = new TimeSpan(17, 0, 0);
+                        else if (l.CaLam.Contains("Ca chiều")) shiftEndTime = new TimeSpan(18, 0, 0);
+                        else if (l.CaLam.Contains("Ca tối")) shiftEndTime = new TimeSpan(23, 0, 0);
+                        else shiftEndTime = new TimeSpan(23, 59, 59);
+
+                        if (currentTime >= shiftEndTime)
+                        {
+                            isAbsent = true;
+                        }
+                    }
+
+                    if (isAbsent)
+                    {
+                        l.TrangThai = 5; // Vắng mặt
+                        l.GhiChu = string.IsNullOrEmpty(l.GhiChu) ? "Hệ thống tự đánh vắng do quá giờ" : l.GhiChu;
+                        isModified = true;
+                    }
+                }
+            }
+
+            if (isModified)
+            {
+                await _context.SaveChangesAsync();
+            }
+
+            var lichs = rawLichs
                 .Select(l => new LichLamViecResponse
                 {
                     MaLich = l.MaLich,
@@ -83,7 +125,7 @@ namespace MinhTamHair.Admin.Controllers
                     TrangThai = l.TrangThai,
                     GhiChu = l.GhiChu
                 })
-                .ToListAsync();
+                .ToList();
 
             return Ok(new { success = true, data = lichs });
         }
@@ -333,7 +375,7 @@ namespace MinhTamHair.Admin.Controllers
 
             // 2. Lấy danh sách thợ hợp lệ
             var eligibleStaff = await _context.Nhanviens
-                .Where(nv => nv.TrangThai == 1 && nv.MaLoaiNvNavigation!.DuocDatLich == true)
+                .Where(nv => nv.TrangThai == 1)
                 .ToListAsync();
 
             // 3. Kiểm tra xem ngày targetDate đã có lịch chưa
@@ -359,6 +401,9 @@ namespace MinhTamHair.Admin.Controllers
                 foreach (var nv in staffToInit)
                 {
                     var inheritedCaLam = yesterdayShifts.GetValueOrDefault(nv.MaNv) ?? "Chưa xếp";
+                    if (targetDate.DayOfWeek == DayOfWeek.Sunday) {
+                        inheritedCaLam = "Chưa xếp";
+                    }
                     _context.Lichlamviecs.Add(new Lichlamviec
                     {
                         MaNv = nv.MaNv,
@@ -409,7 +454,7 @@ namespace MinhTamHair.Admin.Controllers
 				// 2. Lấy danh sách thợ hợp lệ (Được phép đặt lịch)
 				var danhSachTho = await _context.Nhanviens
 					.Include(nv => nv.MaLoaiNvNavigation)
-					.Where(nv => nv.TrangThai == 1 && nv.MaLoaiNvNavigation!.DuocDatLich == true)
+					.Where(nv => nv.TrangThai == 1)
 					.ToListAsync();
 
 				// 3. Lấy ca làm gần nhất của từng thợ để làm "Mẫu"
@@ -465,12 +510,15 @@ namespace MinhTamHair.Admin.Controllers
 						if (!caDaCo.Contains(nv.MaNv))
 						{
 							var caMacDinh = mauCaLam.GetValueOrDefault(nv.MaNv, "Ca sáng (7h-17h)");
+							if (date.DayOfWeek == DayOfWeek.Sunday) {
+								caMacDinh = "Chưa xếp";
+							}
 							_context.Lichlamviecs.Add(new Lichlamviec
 							{
 								MaNv = nv.MaNv,
 								NgayLamViec = date,
 								CaLam = caMacDinh,
-								TrangThai = 1 // 1: Chờ điểm danh
+								TrangThai = caMacDinh == "Chưa xếp" ? 0 : 1
 							});
 							soCaMoi++;
 						}
@@ -505,7 +553,7 @@ namespace MinhTamHair.Admin.Controllers
 				// 1. Lấy danh sách thợ hợp lệ
 				var danhSachTho = await _context.Nhanviens
 					.Include(nv => nv.MaLoaiNvNavigation)
-					.Where(nv => nv.TrangThai == 1 && nv.MaLoaiNvNavigation!.DuocDatLich == true)
+					.Where(nv => nv.TrangThai == 1)
 					.ToListAsync();
 
 				int countUpdated = 0;
@@ -527,6 +575,7 @@ namespace MinhTamHair.Admin.Controllers
 							if (shift.CaLam != "Nghỉ lễ")
 							{
 								shift.CaLam = "Nghỉ lễ";
+								shift.TrangThai = 7; // Trạng thái 7: Nghỉ lễ
 								shift.GhiChu = request.LyDo;
 								countUpdated++;
 							}
@@ -538,7 +587,7 @@ namespace MinhTamHair.Admin.Controllers
 								MaNv = nv.MaNv,
 								NgayLamViec = date,
 								CaLam = "Nghỉ lễ",
-								TrangThai = 1,
+								TrangThai = 7, // Trạng thái 7: Nghỉ lễ
 								GhiChu = request.LyDo
 							});
 							countCreated++;
