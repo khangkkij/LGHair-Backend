@@ -156,6 +156,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 if (v.SoLuong.HasValue && (v.SoLuongDaDung ?? 0) >= v.SoLuong.Value) continue;
 
                 var uses = usageMap.GetValueOrDefault(v.MaCode, 0);
+                if (uses >= 1) continue;
                 var err = VoucherCartLogic.ValidateAndCalculate(v, uses, subTotal, cartIds, ngayDichVu, now, maRank, rankCap, out var tienGiam, out _);
 
                 decimal displayDiscount = tienGiam;
@@ -203,7 +204,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 : codes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                     .Select(VoucherCartLogic.NormalizeMaCode)
                     .Where(s => s.Length > 0)
-                    .Take(2)
+                    .Take(1)
                     .ToList();
 
             if (parts.Count == 0)
@@ -246,7 +247,8 @@ namespace MinhTamHair.KhanchHang.Controllers
                 ngayDichVu,
                 now,
                 maRank,
-                rankCap);
+                rankCap,
+                maxVouchersAllowed: 1);
 
             if (err != null)
                 return BadRequest(new { message = err });
@@ -385,7 +387,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     var codesList = new List<string>();
                     if (model.MaCodes != null && model.MaCodes.Count > 0)
                     {
-                        foreach (var c in model.MaCodes.Take(2))
+                        foreach (var c in model.MaCodes.Take(1))
                         {
                             if (!string.IsNullOrWhiteSpace(c))
                                 codesList.Add(VoucherCartLogic.NormalizeMaCode(c));
@@ -439,7 +441,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         var cartIds = model.Services.Select(s => s.Id).ToList();
                         var (vErr, _, sau) = await VoucherCartLogic.ValidateStackedAsync(
                             _context, codesList, currentMaKh, subtotal, cartIds,
-                            model.NgayHen, VnTimeHelper.Now(), maRank, rankCap);
+                            model.NgayHen, VnTimeHelper.Now(), maRank, rankCap, maxVouchersAllowed: 1);
 
                         if (vErr != null)
                         {
@@ -552,7 +554,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     // 8. TRỪ LƯỢT DÙNG VOUCHER
                     foreach (var code in codesList)
                     {
-                        var (incOk, incErr) = await VoucherCartLogic.TryIncrementUsageAsync(_context, code);
+                        var (incOk, incErr) = await VoucherCartLogic.TryIncrementUsageAsync(_context, code, currentMaKh);
                         if (!incOk)
                         {
                             await transaction.RollbackAsync();

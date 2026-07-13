@@ -233,6 +233,40 @@ public class AdminKhachHangController : ControllerBase
             new { maKh = entity.MaKh, message = "Đã tạo khách hàng.", matKhau });
     }
 
+    [HttpDelete("{maKh}")]
+    public async Task<IActionResult> Delete(string maKh, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var entity = await _context.Khachhangs
+                .Include(x => x.HoaDons)
+                .Include(x => x.Lichdats)
+                .Include(x => x.Giohangs)
+                .Include(x => x.Thongbaos)
+                .FirstOrDefaultAsync(x => x.MaKh == maKh, cancellationToken);
+
+            if (entity == null)
+                return NotFound(new { message = "Không tìm thấy khách hàng cần xóa." });
+
+            if ((entity.HoaDons != null && entity.HoaDons.Any()) || (entity.Lichdats != null && entity.Lichdats.Any()))
+            {
+                return BadRequest(new { message = $"Không thể xóa khách hàng '{entity.HoTen}' vì đã có lịch sử đặt lịch hoặc hóa đơn giao dịch. Bạn nên chuyển trạng thái sang Khóa để lưu trữ lịch sử." });
+            }
+
+            if (entity.Giohangs != null && entity.Giohangs.Any()) _context.Giohangs.RemoveRange(entity.Giohangs);
+            if (entity.Thongbaos != null && entity.Thongbaos.Any()) _context.Thongbaos.RemoveRange(entity.Thongbaos);
+
+            _context.Khachhangs.Remove(entity);
+            await _context.SaveChangesAsync(cancellationToken);
+
+            return Ok(new { message = "Xóa khách hàng thành công!" });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Lỗi server: " + ex.Message });
+        }
+    }
+
     private async Task<string> GetRankByPointsAsync(int? points, CancellationToken cancellationToken)
     {
         int p = points ?? 0;

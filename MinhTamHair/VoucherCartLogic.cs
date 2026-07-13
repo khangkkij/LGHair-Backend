@@ -50,12 +50,14 @@ public static class VoucherCartLogic
         out decimal tienDuocGiam,
         out decimal tongPhaiTra)
     {
-        _ = soLanKhachDaDung;
         _ = ngayGioDichVu;
         _ = maRankKhach;
 
         tienDuocGiam = 0m;
         tongPhaiTra = tongTienDon;
+
+        if (soLanKhachDaDung >= 1)
+            return "Voucher này đã được bạn sử dụng 1 lần, mỗi khách hàng chỉ được dùng 1 lần.";
 
         if (v.TrangThai != 1)
             return "Voucher không còn hiệu lực hoặc đã đóng.";
@@ -114,7 +116,7 @@ public static class VoucherCartLogic
         if (!string.IsNullOrWhiteSpace(maKh))
         {
             userUses = await ctx.HoaDons.AsNoTracking()
-                .CountAsync(h => h.MaKh == maKh && h.MaCode == v.MaCode, ct);
+                .CountAsync(h => h.MaKh == maKh && h.MaCode != null && (h.MaCode == v.MaCode || h.MaCode.Contains(v.MaCode)), ct);
         }
 
         var err = ValidateAndCalculate(v, userUses, tongTienDon, maDichVuTrongGio, ngayGioDichVu, now, maRankKhach, rankCapPercent,
@@ -122,7 +124,7 @@ public static class VoucherCartLogic
         return (err, giam, sau);
     }
 
-    /// <summary>Áp dụng tối đa 1 mã voucher trên đơn.</summary>
+    /// <summary>Áp dụng số lượng mã voucher tùy chỉnh theo đơn hàng.</summary>
     public static async Task<(string? Error, decimal TotalGiam, decimal TongSauGiam)> ValidateStackedAsync(
         MinhTamHairContext ctx,
         IReadOnlyList<string> codesNormalized,
@@ -133,12 +135,13 @@ public static class VoucherCartLogic
         DateTime now,
         string? maRankKhach,
         int? rankCapPercent,
+        int maxVouchersAllowed = 1,
         CancellationToken ct = default)
     {
         if (codesNormalized == null || codesNormalized.Count == 0)
             return (null, 0m, subtotal);
-        if (codesNormalized.Count > 1)
-            return ("Chỉ áp dụng một mã voucher trên mỗi đơn.", 0m, subtotal);
+        if (codesNormalized.Count > maxVouchersAllowed)
+            return ($"Chỉ áp dụng tối đa {maxVouchersAllowed} mã voucher trên đơn này.", 0m, subtotal);
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var c in codesNormalized)
@@ -170,6 +173,7 @@ public static class VoucherCartLogic
     public static async Task<(bool Ok, string? Error)> TryIncrementUsageAsync(
         MinhTamHairContext ctx,
         string maCode,
+        string? maKh = null,
         CancellationToken cancellationToken = default)
     {
         var n = await ctx.Database.ExecuteSqlInterpolatedAsync(
@@ -182,6 +186,20 @@ public static class VoucherCartLogic
 
         if (n == 0)
             return (false, "Mã đã hết số lượng hoặc không còn hiệu lực — không thể ghi nhận lượt dùng.");
+
+        if (!string.IsNullOrWhiteSpace(maKh))
+        {
+            try
+            {
+                await ctx.Database.ExecuteSqlInterpolatedAsync(
+                    $@"DELETE FROM KHACHHANG_VOUCHER WHERE maKH = {maKh} AND maCode = {maCode}",
+                    cancellationToken);
+            }
+            catch
+            {
+                // Bỏ qua lỗi nếu bảng chưa có hoặc tham chiếu khác
+            }
+        }
 
         return (true, null);
     }
