@@ -212,23 +212,36 @@ namespace MinhTamHair.Admin.Controllers
                     hoaDon.TongTien = tongTienMoi;
                     ld.TongTienDuKien = tongTienMoi;
 
+                    decimal thanhTienMoi;
                     if (!string.IsNullOrEmpty(hoaDon.MaCode))
                     {
                         var vc = await _context.Vouchers.FirstOrDefaultAsync(v => v.MaCode == hoaDon.MaCode);
                         if (vc != null)
                         {
                             if (vc.SoTienGiam.HasValue && vc.SoTienGiam > 0)
-                                hoaDon.ThanhTien = tongTienMoi - vc.SoTienGiam.Value;
+                                thanhTienMoi = tongTienMoi - vc.SoTienGiam.Value;
                             else if (vc.PhanTramGiam.HasValue && vc.PhanTramGiam > 0)
-                                hoaDon.ThanhTien = tongTienMoi - (tongTienMoi * vc.PhanTramGiam.Value / 100m);
+                                thanhTienMoi = tongTienMoi - (tongTienMoi * vc.PhanTramGiam.Value / 100m);
+                            else
+                                thanhTienMoi = tongTienMoi;
 
-                            if (hoaDon.ThanhTien < 0) hoaDon.ThanhTien = 0;
+                            if (thanhTienMoi < 0) thanhTienMoi = 0;
+                        }
+                        else
+                        {
+                            thanhTienMoi = tongTienMoi;
                         }
                     }
                     else
                     {
-                        hoaDon.ThanhTien = tongTienMoi;
+                        thanhTienMoi = tongTienMoi;
                     }
+
+                    decimal phiShipHienTai = await _context.ThongtinGiaohangs
+                        .Where(t => t.MaHd == hoaDon.MaHd)
+                        .Select(t => t.PhiShip ?? 0m)
+                        .FirstOrDefaultAsync();
+                    hoaDon.ThanhTien = thanhTienMoi + phiShipHienTai;
 
                     await _context.SaveChangesAsync();
                     await transaction.CommitAsync();
@@ -276,30 +289,8 @@ namespace MinhTamHair.Admin.Controllers
                 }
             }
             ld.TrangThai = 4;
-            if (hoaDon.TrangThai < 1) hoaDon.TrangThai = 1;
+            hoaDon.TrangThai = 2;
             await _context.SaveChangesAsync();
-
-            bool daDanhDauThanhToan = hoaDon.TrangThai >= 2;
-            if (daDanhDauThanhToan)
-            {
-                var hoaDonChoXuat = await _context.HoaDonDienTus
-                    .Where(h => h.MaHd == hoaDon.MaHd && h.TrangThai == 3)
-                    .OrderByDescending(h => h.MaHddt)
-                    .FirstOrDefaultAsync();
-
-                if (hoaDonChoXuat != null)
-                {
-                    hoaDonChoXuat.TrangThai = 0; // Sẵn sàng xuất
-                    await _context.SaveChangesAsync();
-                    var maHddt = hoaDonChoXuat.MaHddt;
-                    _ = Task.Run(async () =>
-                    {
-                        using var scope = _scopeFactory.CreateScope();
-                        var eInvoiceService = scope.ServiceProvider.GetRequiredService<IEInvoiceService>();
-                        await eInvoiceService.PhatHanhHoaDonAsync(maHddt);
-                    });
-                }
-            }
 
             return Ok(new { message = "Thanh toán thành công, đơn hàng đã hoàn tất!" });
         }
