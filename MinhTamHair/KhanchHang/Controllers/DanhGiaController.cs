@@ -1,10 +1,10 @@
 ﻿using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Http; 
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.KhanchHang.Models;
 using MinhTamHair.Models;
-using System.IO;                
+using System.IO;
 using System.Security.Claims;
 
 namespace MinhTamHair.KhanchHang.Controllers
@@ -523,26 +523,30 @@ namespace MinhTamHair.KhanchHang.Controllers
                 .Where(hd => hd.ChitietHoadonSps.Any()) // Chỉ lấy các hóa đơn có chứa sản phẩm
                 .Select(hd => new
                 {
-                    MaHd = hd.MaHd, 
-                    NgayTao = hd.NgayTao ?? DateTime.Now, 
+                    MaHd = hd.MaHd,
+                    NgayTao = hd.NgayTao ?? DateTime.Now,
 
                     // 2. Lấy danh sách sản phẩm từ bảng chi tiết hóa đơn sản phẩm
                     Products = hd.ChitietHoadonSps.Select(ct => new {
-                        MaBienThe = ct.MaBienThe, 
-                        TenSp = ct.MaBienTheNavigation.TenBienThe, 
+                        MaBienThe = ct.MaBienThe,
+                        TenSp = ct.MaBienTheNavigation.MaSpNavigation != null
+                            ? (ct.MaBienTheNavigation.MaSpNavigation.TenSp + " - " + ct.MaBienTheNavigation.TenBienThe)
+                            : ct.MaBienTheNavigation.TenBienThe,
+                        HinhAnh = ct.MaBienTheNavigation.HinhAnhDaiDien ??
+                                  (ct.MaBienTheNavigation.MaSpNavigation != null ? ct.MaBienTheNavigation.MaSpNavigation.HinhAnhDaiDien : null),
 
                         // Kiểm tra chéo với bảng DanhgiaSanpham xem đã đánh giá chưa
                         IsAlreadyRated = _context.DanhgiaSanphams.Any(dg =>
                             dg.MaHd == hd.MaHd &&
-                            dg.MaSanPham == ct.MaBienThe) //[cite: 1, 3]
+                            dg.MaSanPham == ct.MaBienTheNavigation.MaSanPham)
                     }).ToList()
                 })
                 .ToList(); // Tải dữ liệu vào RAM
 
             // 3. LỌC HÓA ĐƠN: Chỉ trả về những hóa đơn CÒN sản phẩm chưa được đánh giá
             var finalResult = pendingOrders
-                .Where(hd => hd.Products.Any(p => !p.IsAlreadyRated)) 
-                .OrderByDescending(hd => hd.NgayTao) 
+                .Where(hd => hd.Products.Any(p => !p.IsAlreadyRated))
+                .OrderByDescending(hd => hd.NgayTao)
                 .ToList(); //
 
             return Ok(finalResult); //
@@ -550,67 +554,79 @@ namespace MinhTamHair.KhanchHang.Controllers
 
         // 2. API lưu đánh giá sản phẩm
         [HttpPost("submit-product-reviews")]
-        public async Task<IActionResult> SubmitProductReviews([FromForm] string maHd, [FromForm] List<ProductRatingDTO> reviews) //[cite: 3, 4]
+        public async Task<IActionResult> SubmitProductReviews([FromForm] string maHd, [FromForm] List<ProductRatingDTO> reviews)
         {
-            // 1. Kiểm tra dữ liệu đầu vào[cite: 3]
-            if (string.IsNullOrEmpty(maHd) || reviews == null || !reviews.Any()) //[cite: 3]
+            // 1. Kiểm tra dữ liệu đầu vào
+            if (string.IsNullOrEmpty(maHd) || reviews == null || !reviews.Any())
             {
-                return BadRequest("Dữ liệu không hợp lệ hoặc chưa chọn số sao."); //[cite: 3]
+                return BadRequest("Dữ liệu không hợp lệ hoặc chưa chọn số sao.");
             }
 
             try
             {
-                foreach (var item in reviews) //[cite: 3]
+                foreach (var item in reviews)
                 {
-                    string? imagePath = null; //[cite: 3]
+                    // === ĐOẠN CODE MỚI THÊM VÀO ĐỂ FIX LỖI KHÓA NGOẠI ===
+                    // Tìm biến thể trong DB để lấy ra Mã Sản Phẩm gốc
+                    var bienThe = await _context.BienTheSanphams
+                        .FirstOrDefaultAsync(bt => bt.MaBienThe == item.MaBienThe);
 
-                    // 2. Xử lý lưu file ảnh nếu khách hàng có đính kèm[cite: 3]
-                    if (item.HinhAnhFile != null && item.HinhAnhFile.Length > 0) //[cite: 3, 4]
+                    // Nếu không tìm thấy biến thể thì bỏ qua hoặc báo lỗi
+                    if (bienThe == null)
                     {
-                        // Tạo tên file ngẫu nhiên để tránh trùng lặp[cite: 3]
-                        var fileName = Guid.NewGuid().ToString() + Path.GetExtension(item.HinhAnhFile.FileName); //[cite: 3]
-                        var uploadsFolder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "images", "reviews"); //[cite: 3]
+                        return BadRequest($"Không tìm thấy sản phẩm với mã biến thể: {item.MaBienThe}");
+                    }
+                    // ====================================================
 
-                        if (!Directory.Exists(uploadsFolder)) //[cite: 3]
+                    string? imagePath = null;
+
+                    // 2. Xử lý lưu file ảnh nếu khách hàng có đính kèm
+                    if (item.HinhAnhFile != null && item.HinhAnhFile.Length > 0)
+                    {
+                        var fileName = Guid.NewGuid().ToString() + Path.GetExtension(item.HinhAnhFile.FileName);
+                        var uploadsFolder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "images", "reviews");
+
+                        if (!Directory.Exists(uploadsFolder))
                         {
-                            Directory.CreateDirectory(uploadsFolder); //[cite: 3]
+                            Directory.CreateDirectory(uploadsFolder);
                         }
 
-                        var filePath = Path.Combine(uploadsFolder, fileName); //[cite: 3]
+                        var filePath = Path.Combine(uploadsFolder, fileName);
 
-                        using (var stream = new FileStream(filePath, FileMode.Create)) //[cite: 3]
+                        using (var stream = new FileStream(filePath, FileMode.Create))
                         {
-                            await item.HinhAnhFile.CopyToAsync(stream); //[cite: 3]
+                            await item.HinhAnhFile.CopyToAsync(stream);
                         }
 
-                        imagePath = "/images/reviews/" + fileName; //[cite: 3]
+                        imagePath = "/images/reviews/" + fileName;
                     }
 
-                    // 3. TẠO MỚI bản ghi Đánh Giá Sản Phẩm[cite: 1, 3]
-                    var newReview = new DanhgiaSanpham //[cite: 1, 3]
+                    // 3. TẠO MỚI bản ghi Đánh Giá Sản Phẩm
+                    var newReview = new DanhgiaSanpham
                     {
-                        MaHd = maHd, //[cite: 1, 3]
-                        MaSanPham = item.MaBienThe, // Lưu mã biến thể sản phẩm[cite: 1, 3]
-                        MaKh = User.FindFirstValue("MaKh"), // Lấy mã KH từ token đăng nhập[cite: 3]
-                        SoSao = item.SoSao, //[cite: 1, 4]
-                        NoiDung = item.NoiDung, //[cite: 1, 4]
-                        HinhAnh = imagePath, // Lưu đường dẫn ảnh vừa upload[cite: 1, 3]
-                        NgayDanhGia = DateTime.Now, //[cite: 1, 3]
-                        TrangThai = 1 //[cite: 1, 3]
+                        MaHd = maHd,
+                        // THAY ĐỔI QUAN TRỌNG NHẤT Ở ĐÂY: Dùng bienThe.MaSanPham thay vì item.MaBienThe
+                        MaSanPham = bienThe.MaSanPham,
+                        MaKh = User.FindFirstValue("MaKh"),
+                        SoSao = item.SoSao,
+                        NoiDung = item.NoiDung,
+                        HinhAnh = imagePath,
+                        NgayDanhGia = DateTime.Now,
+                        TrangThai = 1
                     };
 
-                    _context.DanhgiaSanphams.Add(newReview); //[cite: 3]
+                    _context.DanhgiaSanphams.Add(newReview);
                 }
 
-                // 4. Lưu tất cả thay đổi vào Database[cite: 3]
-                await _context.SaveChangesAsync(); //[cite: 3]
+                // 4. Lưu tất cả thay đổi vào Database
+                await _context.SaveChangesAsync();
 
-                return Ok(new { message = "Đánh giá sản phẩm thành công!" }); //[cite: 3]
+                return Ok(new { message = "Đánh giá sản phẩm thành công!" });
             }
-            catch (Exception ex) //[cite: 3]
+            catch (Exception ex)
             {
-                Console.WriteLine("LỖI KHI LƯU ĐÁNH GIÁ: " + ex.Message); //[cite: 3]
-                return StatusCode(500, new { message = "Lỗi hệ thống khi lưu đánh giá." }); //[cite: 3]
+                Console.WriteLine("LỖI KHI LƯU ĐÁNH GIÁ: " + ex.Message);
+                return StatusCode(500, new { message = "Lỗi hệ thống khi lưu đánh giá." });
             }
         }
         [HttpGet("product-rated-history/{maKH}")]
@@ -618,35 +634,52 @@ namespace MinhTamHair.KhanchHang.Controllers
         {
             try
             {
-                var rawRatings = await _context.DanhgiaSanphams //[cite: 1, 3]
-                    .Include(dg => dg.MaHdNavigation) //[cite: 1, 3]
-                    .Include(dg => dg.MaSpNavigation) //[cite: 1]
-                    .Where(dg => dg.MaKh == maKH || dg.MaHdNavigation.MaKh == maKH) // Đảm bảo lấy đúng khách hàng[cite: 1, 3]
-                    .ToListAsync(); //[cite: 3]
+                var rawRatings = await _context.DanhgiaSanphams
+                    .Include(dg => dg.MaHdNavigation)
+                        .ThenInclude(hd => hd.ChitietHoadonSps)
+                            .ThenInclude(ct => ct.MaBienTheNavigation)
+                    .Include(dg => dg.MaSpNavigation)
+                    .Where(dg => dg.MaKh == maKH || dg.MaHdNavigation.MaKh == maKH)
+                    .ToListAsync();
 
                 var result = rawRatings
-                    .GroupBy(dg => dg.MaHd) // Gom nhóm theo hóa đơn[cite: 3]
+                    .GroupBy(dg => dg.MaHd)
                     .Select(group => new {
-                        id = group.Key, //[cite: 3]
-                        date = group.First().NgayDanhGia?.ToString("yyyy-MM-dd") ?? "", //[cite: 3]
-                        products = group.Select(s => new {
-                            id = s.MaSanPham, //[cite: 1, 3]
-                            name = s.MaSpNavigation?.TenSp ?? "Sản phẩm", // Lấy tên sản phẩm[cite: 1, 2, 3]
-                            rating = s.SoSao, //[cite: 1, 3]
-                            comment = s.NoiDung, //[cite: 1, 3]
-                            image = s.HinhAnh, //[cite: 1, 3]
-                            reply = s.PhanHoi, // Lấy phản hồi của Admin (nếu có)[cite: 1, 3]
-                            Ngay = s.NgayDanhGia?.ToString("dd/MM/yyyy HH:mm") ?? "" //[cite: 1, 3]
+                        id = group.Key,
+                        date = group.First().NgayDanhGia?.ToString("yyyy-MM-dd") ?? "",
+                        products = group.Select(s => {
+                            var chiTiet = s.MaHdNavigation?.ChitietHoadonSps
+                                           .FirstOrDefault(ct => ct.MaBienTheNavigation?.MaSanPham == s.MaSanPham);
+
+                            string tenGop = s.MaSpNavigation?.TenSp ?? "Sản phẩm";
+                            if (chiTiet != null && chiTiet.MaBienTheNavigation != null)
+                            {
+                                tenGop = tenGop + " - " + chiTiet.MaBienTheNavigation.TenBienThe;
+                            }
+
+                            string? anhSp = chiTiet?.MaBienTheNavigation?.HinhAnhDaiDien ?? s.MaSpNavigation?.HinhAnhDaiDien;
+
+                            return new
+                            {
+                                id = s.MaSanPham,
+                                name = tenGop,
+                                hinhAnh = anhSp,
+                                rating = s.SoSao,
+                                comment = s.NoiDung,
+                                image = s.HinhAnh,
+                                reply = s.PhanHoi,
+                                Ngay = s.NgayDanhGia?.ToString("dd/MM/yyyy HH:mm") ?? ""
+                            };
                         }).ToList()
                     })
-                    .OrderByDescending(x => x.id) //[cite: 3]
-                    .ToList(); //[cite: 3]
+                    .OrderByDescending(x => x.id)
+                    .ToList();
 
-                return Ok(result); //[cite: 3]
+                return Ok(result);
             }
-            catch (Exception ex) //[cite: 3]
+            catch (Exception ex)
             {
-                return StatusCode(500, ex.Message); //[cite: 3]
+                return StatusCode(500, ex.Message);
             }
         }
         [HttpDelete("delete-product-rating/{maHd}/{maBienThe}")]
@@ -717,5 +750,41 @@ namespace MinhTamHair.KhanchHang.Controllers
                 return StatusCode(500, ex.Message);
             }
         }
+        // API lấy tất cả bình luận của 1 Sản Phẩm cụ thể (hiển thị ngoài trang chi tiết SP)
+        [HttpGet("product-reviews/{maSp}")]
+        public async Task<IActionResult> GetProductReviews(string maSp)
+        {
+            try
+            {
+                var reviews = await _context.DanhgiaSanphams
+                    // Tùy vào cách thiết kế DB, nếu bảng DanhgiaSanphams có khóa ngoại trực tiếp tới KhachHang thì dùng Include(dg => dg.MaKhNavigation). 
+                    // Nếu không, bạn Include qua HoaDon tương tự như Dịch vụ. Ở đây mình làm theo cách an toàn qua bảng HoaDon.
+                    .Include(dg => dg.MaHdNavigation)
+                        .ThenInclude(hd => hd.MaKhNavigation)
+                    .Where(dg => dg.MaSanPham == maSp)
+                    .Select(dg => new
+                    {
+                        id = dg.MaHd + "_" + dg.MaSanPham,
+                        customerName = (dg.MaHdNavigation != null && dg.MaHdNavigation.MaKhNavigation != null)
+                                        ? dg.MaHdNavigation.MaKhNavigation.HoTen : "Khách hàng",
+                        customerAvatar = (dg.MaHdNavigation != null && dg.MaHdNavigation.MaKhNavigation != null)
+                                        ? dg.MaHdNavigation.MaKhNavigation.HinhAnh : null,
+                        rating = dg.SoSao ?? 0,
+                        comment = dg.NoiDung ?? "Không có nội dung đánh giá",
+                        image = dg.HinhAnh,
+                        reply = dg.PhanHoi,
+                        date = dg.NgayDanhGia ?? DateTime.Now
+                    })
+                    .OrderByDescending(r => r.date)
+                    .ToListAsync();
+
+                return Ok(reviews);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, "Lỗi lấy đánh giá sản phẩm: " + ex.Message);
+            }
+        }
+
     }
 }

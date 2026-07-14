@@ -123,6 +123,33 @@ namespace MinhTamHair.Controllers
             return Ok(new { success = true, message = "Cập nhật thông tin thành công!" });
         }
 
+        [HttpPut("change-password")]
+        public async Task<IActionResult> ChangePassword([FromBody] System.Text.Json.JsonElement request)
+        {
+            var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            var user = await _context.Khachhangs.FirstOrDefaultAsync(k => k.MaKh == userId);
+
+            if (user == null) return NotFound(new { success = false, message = "Không tìm thấy người dùng." });
+
+            if (!request.TryGetProperty("oldPassword", out var op) || !request.TryGetProperty("newPassword", out var np))
+                return BadRequest(new { success = false, message = "Thiếu thông tin mật khẩu." });
+
+            string oldPassword = op.GetString()!;
+            string newPassword = np.GetString()!;
+
+            // Kiểm tra mật khẩu cũ
+            if (user.MatKhau?.Trim() != oldPassword.Trim())
+            {
+                return BadRequest(new { success = false, message = "Mật khẩu cũ không chính xác." });
+            }
+
+            // Cập nhật mật khẩu mới
+            user.MatKhau = newPassword.Trim();
+            await _context.SaveChangesAsync();
+
+            return Ok(new { success = true, message = "Đổi mật khẩu thành công!" });
+        }
+
         // --- 3. UPLOAD ẢNH ĐẠI DIỆN VẬT LÝ ---
         [HttpPost("upload-avatar")]
         public async Task<IActionResult> UploadAvatar(IFormFile file)
