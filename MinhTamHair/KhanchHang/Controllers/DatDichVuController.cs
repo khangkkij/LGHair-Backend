@@ -511,7 +511,9 @@ namespace MinhTamHair.KhanchHang.Controllers
                         TongTien = subtotal,
                         ThanhTien = tongSauGiam,
                         TienDaTra = daThanhToan,
-                        TrangThai = 0,
+                        // Tiền đã thu tại lúc tạo (daThanhToan) >= tổng phải trả (tongSauGiam) -> đã thanh toán đủ (2),
+                        // ngược lại chỉ mới đặt cọc (1). Trước đây hardcode = 0 khiến hiển thị "Đã Hủy" dù đã thu tiền.
+                        TrangThai = daThanhToan >= tongSauGiam ? 2 : 1,
                         MaCode = maCodeNorm
                     };
                     _context.HoaDons.Add(hoaDon);

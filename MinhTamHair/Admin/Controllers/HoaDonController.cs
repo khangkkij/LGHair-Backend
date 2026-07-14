@@ -60,8 +60,12 @@ namespace MinhTamHair.Admin.Controllers
 
                 var allInvoices = await query.OrderByDescending(h => h.NgayTao).ToListAsync();
 
+                // Tiêu chí phân loại ĐÚNG: dựa vào đơn có gắn lịch hẹn (MaLd) hay không -
+                // KHÔNG dựa vào có sản phẩm mua kèm hay không. Một đơn dịch vụ salon vẫn có thể
+                // có sản phẩm mua thêm lúc check-in/check-out nhưng bản chất vẫn là "Dịch vụ Salon".
+                // "Sản phẩm lẻ" chỉ dành cho đơn KHÔNG gắn lịch hẹn nào (mua hàng online thuần túy).
                 var danhSachSanPham = allInvoices
-                    .Where(h => h.MaHd != null && (h.MaHd.StartsWith("SP") || h.MaHd.StartsWith("HDSP") || h.ChitietHoadonSps.Any()))
+                    .Where(h => h.MaHd != null && string.IsNullOrEmpty(h.MaLd))
                     .Select(h => new {
                         maHd = h.MaHd,
                         tenKhachHang = h.MaKhNavigation != null ? h.MaKhNavigation.HoTen : "Khách vãng lai",
@@ -73,7 +77,7 @@ namespace MinhTamHair.Admin.Controllers
                     }).ToList();
 
                 var danhSachDichVu = allInvoices
-                    .Where(h => h.MaHd != null && !h.MaHd.StartsWith("SP") && !h.MaHd.StartsWith("HDSP") && !h.ChitietHoadonSps.Any())
+                    .Where(h => h.MaHd != null && !string.IsNullOrEmpty(h.MaLd))
                     .Select(h => new {
                         maHd = h.MaHd,
                         tenKhachHang = h.MaKhNavigation != null ? h.MaKhNavigation.HoTen : "Khách vãng lai",

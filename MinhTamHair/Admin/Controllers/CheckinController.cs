@@ -19,7 +19,7 @@ namespace MinhTamHair.Admin.Controllers
             _context = context;
         }
 
-        // 1. Lấy danh sách khách hàng chờ check-in theo ngày
+
         [HttpGet("get-appointments")]
         public async Task<IActionResult> GetAppointments(DateTime? date)
         {
@@ -252,16 +252,44 @@ namespace MinhTamHair.Admin.Controllers
                     var hoaDon = await _context.HoaDons.FirstOrDefaultAsync(hd => hd.MaLd.Trim() == cleanHdId);
                     if (hoaDon != null)
                     {
-                        // Lấy tiền sản phẩm cũ từ CSDL để cộng dồn vào tổng mới
                         decimal tongSanPhamDaDat = await _context.ChitietHoadonSps
                             .Where(ct => ct.MaHd == hoaDon.MaHd)
                             .SumAsync(ct => ct.ThanhTien ?? 0);
-
-                        // Tổng tiền mới = Tổng dịch vụ mới + Tổng sản phẩm cũ
                         decimal tongTienMoi = tongDichVuMoi + tongSanPhamDaDat;
 
                         hoaDon.TongTien = tongTienMoi;
                         ld.TongTienDuKien = tongTienMoi; // Cập nhật đồng bộ lịch đặt
+
+                        decimal thanhTienMoi;
+                        if (!string.IsNullOrEmpty(hoaDon.MaCode))
+                        {
+                            var vc = await _context.Vouchers.FirstOrDefaultAsync(v => v.MaCode == hoaDon.MaCode);
+                            if (vc != null)
+                            {
+                                if (vc.SoTienGiam.HasValue && vc.SoTienGiam > 0)
+                                    thanhTienMoi = tongTienMoi - vc.SoTienGiam.Value;
+                                else if (vc.PhanTramGiam.HasValue && vc.PhanTramGiam > 0)
+                                    thanhTienMoi = tongTienMoi - (tongTienMoi * vc.PhanTramGiam.Value / 100m);
+                                else
+                                    thanhTienMoi = tongTienMoi;
+
+                                if (thanhTienMoi < 0) thanhTienMoi = 0;
+                            }
+                            else
+                            {
+                                thanhTienMoi = tongTienMoi;
+                            }
+                        }
+                        else
+                        {
+                            thanhTienMoi = tongTienMoi;
+                        }
+
+                        decimal phiShipHienTai = await _context.ThongtinGiaohangs
+                            .Where(t => t.MaHd == hoaDon.MaHd)
+                            .Select(t => t.PhiShip ?? 0m)
+                            .FirstOrDefaultAsync();
+                        hoaDon.ThanhTien = thanhTienMoi + phiShipHienTai;
                     }
 
                     await _context.SaveChangesAsync();

@@ -527,8 +527,11 @@ namespace MinhTamHair.KhanchHang.Controllers
                         TongTien = totalOriginal,
                         ThanhTien = req.GrandTotal,
                         TienDaTra = req.PaidAmount,
-                        // Nếu là thanh toán online thì khởi tạo là 0 (Chưa thanh toán), ngược lại (COD/Free) thì là 1
-                        TrangThai = isOnlinePayment ? 0 : 1,
+                        // Đang chờ thanh toán online (VNPay/Momo) -> chưa xác nhận, tạm coi là 0
+                        // (GetReceipt sẽ cập nhật lại đúng khi callback thanh toán thành công).
+                        // Không phải online (COD/tiền mặt/đã thu đủ) -> so PaidAmount với GrandTotal
+                        // để phân biệt "Đã cọc 10%" (1) với "Đã thanh toán" đủ (2), thay vì luôn hardcode = 1.
+                        TrangThai = isOnlinePayment ? 0 : (req.PaidAmount >= req.GrandTotal ? 2 : 1),
                         MaCode = maCodeChinh
                     };
                     _context.HoaDons.Add(hoaDon);
@@ -794,7 +797,9 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                 if (vuaXacNhanThanhCong)
                 {
-                    hoaDon.TrangThai = 1;
+                    // So TienDaTra với ThanhTien để phân biệt "Đã cọc 10%" (1) với "Đã thanh toán" đủ (2) -
+                    // trước đây hardcode = 1 khiến đơn thanh toán online đủ 100% vẫn hiện nhầm "Đã cọc 10%".
+                    hoaDon.TrangThai = (hoaDon.TienDaTra ?? 0) >= (hoaDon.ThanhTien ?? 0) ? 2 : 1;
                     var thanhToan = hoaDon.Thanhtoans.FirstOrDefault();
                     if (thanhToan != null) thanhToan.TrangThai = 1;
                     await _context.SaveChangesAsync();
@@ -867,10 +872,11 @@ namespace MinhTamHair.KhanchHang.Controllers
                     }
                 }
 
-                // 2. NẾU HÓA ĐƠN ĐÃ THANH TOÁN (TrangThai == 1) VÀ LỊCH ĐẶT CHƯA XÁC NHẬN (TrangThai == 0)
-                // THÌ TIẾN HÀNH XÁC NHẬN LỊCH VÀ KÍCH HOẠT GỬI EMAIL QR (Chỉ chạy đúng 1 lần đầu tiên)
+                // 2. NẾU HÓA ĐƠN ĐÃ THANH TOÁN (TrangThai == 1 "Đã cọc 10%" hoặc == 2 "Đã thanh toán")
+                // VÀ LỊCH ĐẶT CHƯA XÁC NHẬN (TrangThai == 0) THÌ TIẾN HÀNH XÁC NHẬN LỊCH VÀ KÍCH HOẠT
+                // GỬI EMAIL QR (Chỉ chạy đúng 1 lần đầu tiên)
                 bool shouldSendEmail = false;
-                if (hoaDon.TrangThai == 1 && !string.IsNullOrEmpty(hoaDon.MaLd))
+                if ((hoaDon.TrangThai == 1 || hoaDon.TrangThai == 2) && !string.IsNullOrEmpty(hoaDon.MaLd))
                 {
                     var lichDat = await _context.Lichdats.FirstOrDefaultAsync(l => l.MaLd == hoaDon.MaLd);
                     if (lichDat != null && lichDat.TrangThai == 0)
@@ -975,7 +981,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     tongTien = hoaDon.TongTien,
                     thanhTien = hoaDon.ThanhTien,
                     tienDaTra = hoaDon.TienDaTra,
-                    trangThai = hoaDon.TrangThai == 1 ? "Đã thanh toán" : "Chưa thanh toán",
+                    trangThai = (hoaDon.TrangThai == 1 || hoaDon.TrangThai == 2) ? "Đã thanh toán" : "Chưa thanh toán",
                     booking = bookingInfo,
                     products = productsList,
                     delivery = delivery != null ? new { nguoiNhan = delivery.TenNguoiNhan, sdt = delivery.SdtNhan, diaChi = delivery.DiaChiNhan, phiShip = delivery.PhiShip } : null
