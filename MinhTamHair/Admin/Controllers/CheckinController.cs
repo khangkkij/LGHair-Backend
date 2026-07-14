@@ -208,31 +208,48 @@ namespace MinhTamHair.Admin.Controllers
                 using var transaction = await _context.Database.BeginTransactionAsync();
                 try
                 {
-                    var ld = await _context.Lichdats.FirstOrDefaultAsync(x => x.MaLd == request.MaLd);
+                    // 1. So khớp cắt bỏ khoảng trắng (Trim) để tìm đúng Lịch đặt
+                    var cleanLdId = request.MaLd?.Trim();
+                    var ld = await _context.Lichdats.FirstOrDefaultAsync(x => x.MaLd.Trim() == cleanLdId);
                     if (ld == null) return NotFound("Không tìm thấy lịch đặt");
 
                     ld.TrangThai = 3;
 
-                    var oldDetails = await _context.ChitietLichdats.Where(ct => ct.MaLd == request.MaLd).ToListAsync();
+                    // 2. Lấy chi tiết dịch vụ cũ theo mã MaLd chuẩn của database để tránh lệch khoảng trắng
+                    var oldDetails = await _context.ChitietLichdats.Where(ct => ct.MaLd == ld.MaLd).ToListAsync();
                     _context.ChitietLichdats.RemoveRange(oldDetails);
 
-                    foreach (var item in request.UpdatedServices)
+                    if (request.UpdatedServices != null)
                     {
-                        var newDetail = new ChitietLichdat
+                        foreach (var item in request.UpdatedServices)
                         {
-                            MaLd = request.MaLd,
-                            MaNv = request.MaStylist,
-                            GiaLucDat = item.Gia
-                        };
-                        if (item.Id.StartsWith("DV")) newDetail.MaDv = item.Id;
-                        else newDetail.MaCb = item.Id;
-                        _context.ChitietLichdats.Add(newDetail);
+                            // 3. Kiểm tra an toàn: Bỏ qua nếu mã dịch vụ bị null hoặc mang chuỗi lỗi "undefined"/"null"
+                            if (string.IsNullOrWhiteSpace(item.Id) || item.Id.ToLower() == "undefined" || item.Id.ToLower() == "null")
+                            {
+                                continue;
+                            }
+
+                            var newDetail = new ChitietLichdat
+                            {
+                                MaLd = ld.MaLd, // Dùng MaLd của db đã load để khớp foreign key 100% (gồm cả khoảng trắng đệm)
+                                MaNv = request.MaStylist,
+                                GiaLucDat = item.Gia
+                            };
+
+                            if (item.Id.StartsWith("DV"))
+                                newDetail.MaDv = item.Id;
+                            else
+                                newDetail.MaCb = item.Id;
+
+                            _context.ChitietLichdats.Add(newDetail);
+                        }
                     }
 
                     // TÍNH TOÁN LẠI TỔNG TIỀN MỚI
-                    decimal tongDichVuMoi = request.UpdatedServices.Sum(s => s.Gia);
+                    decimal tongDichVuMoi = request.UpdatedServices?.Sum(s => s.Gia) ?? 0;
 
-                    var hoaDon = await _context.HoaDons.FirstOrDefaultAsync(hd => hd.MaLd == request.MaLd);
+                    var cleanHdId = ld.MaLd.Trim();
+                    var hoaDon = await _context.HoaDons.FirstOrDefaultAsync(hd => hd.MaLd.Trim() == cleanHdId);
                     if (hoaDon != null)
                     {
                         // Lấy tiền sản phẩm cũ từ CSDL để cộng dồn vào tổng mới
@@ -255,7 +272,8 @@ namespace MinhTamHair.Admin.Controllers
                 catch (Exception ex)
                 {
                     await transaction.RollbackAsync();
-                    return BadRequest("Lỗi xử lý: " + ex.Message);
+                    // In ra InnerException nếu có lỗi ràng buộc dữ liệu sâu hơn trong SQL Server
+                    return BadRequest("Lỗi xử lý: " + (ex.InnerException?.Message ?? ex.Message));
                 }
             });
         }
@@ -369,7 +387,7 @@ namespace MinhTamHair.Admin.Controllers
     {
         public string MaLd { get; set; }
         public string MaStylist { get; set; }
-        public string PaymentMethod { get; set; }
+        public string? PaymentMethod { get; set; }
         public List<ServiceItemDTO> UpdatedServices { get; set; }
     }
 
