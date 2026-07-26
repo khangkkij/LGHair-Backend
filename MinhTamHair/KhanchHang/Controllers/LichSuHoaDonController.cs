@@ -20,7 +20,7 @@ namespace MinhTamHair.KhanchHang.Controllers
         {
             // Kiểm tra nếu maKh trống
             if (string.IsNullOrEmpty(maKh)) return BadRequest("Mã khách hàng không hợp lệ");
-
+            await AutoCancelOverdueBookings(maKh);
             var history = await _context.Lichdats
                 .Where(ld => ld.MaKh == maKh)
                 .OrderByDescending(ld => ld.NgayHen)
@@ -219,5 +219,89 @@ namespace MinhTamHair.KhanchHang.Controllers
                 return BadRequest(new { message = "Lỗi hệ thống khi thực hiện hủy đơn: " + ex.Message });
             }
         }
+        [HttpPut("reschedule-booking")]
+        public async Task<IActionResult> RescheduleBooking([FromBody] RescheduleRequest req)
+        {
+            try
+            {
+                // 1. Tìm lịch đặt trong cơ sở dữ liệu
+                var booking = await _context.Lichdats.FindAsync(req.MaLd);
+                if (booking == null)
+                {
+                    return NotFound(new { message = "Không tìm thấy lịch đặt." });
+                }
+
+                // 2. Kiểm tra trạng thái: Chỉ cho phép đổi nếu đang chờ xử lý (1 = Cọc, 2 = Đã trả full)
+                if (booking.TrangThai != 1 && booking.TrangThai != 2)
+                {
+                    return BadRequest(new { message = "Lịch đặt này đã hoàn thành hoặc bị hủy, không thể thay đổi." });
+                }
+
+                // 3. (Tùy chọn) Kiểm tra thời gian hẹn mới không được nhỏ hơn thời gian hiện tại
+                // Lưu ý: Nếu bạn có VnTimeHelper, hãy thay DateTime.Now bằng VnTimeHelper.Now()
+                var newDateTime = req.NgayHenMoi.ToDateTime(req.GioBatDauMoi);
+                if (newDateTime <= DateTime.Now)
+                {
+                    return BadRequest(new { message = "Thời gian hẹn mới phải lớn hơn thời gian hiện tại." });
+                }
+
+                // 4. Tính toán lại Giờ Kết Thúc
+                // Bản chất là lấy thời lượng cũ (GioKetThuc - GioBatDau) cộng vào GioBatDau mới
+                if (booking.GioBatDau.HasValue && booking.GioKetThuc.HasValue)
+                {
+                    TimeSpan duration = booking.GioKetThuc.Value - booking.GioBatDau.Value;
+                    booking.GioKetThuc = req.GioBatDauMoi.Add(duration);
+                }
+
+                // 5. Cập nhật ngày và giờ mới
+                booking.NgayHen = req.NgayHenMoi;
+                booking.GioBatDau = req.GioBatDauMoi;
+
+                await _context.SaveChangesAsync();
+
+                return Ok(new { message = "Thay đổi lịch hẹn thành công!" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Lỗi hệ thống khi dời lịch: " + ex.Message });
+            }
+        }
+        private async Task AutoCancelOverdueBookings(string maKh)
+        {
+            // Lấy ngày hiện tại (nếu project của bạn dùng VnTimeHelper thì thay DateTime.Now bằng VnTimeHelper.Now())
+            var currentDate = DateOnly.FromDateTime(DateTime.Now);
+
+            // Tìm các lịch hẹn của khách hàng này có trạng thái đang chờ (1 hoặc 2) nhưng ngày hẹn bé hơn ngày hiện tại
+            var overdueBookings = await _context.Lichdats
+                .Where(ld => ld.MaKh == maKh
+                          && (ld.TrangThai == 1 || ld.TrangThai == 2)
+                          && ld.NgayHen < currentDate)
+                .ToListAsync();
+
+            if (overdueBookings.Any())
+            {
+                foreach (var booking in overdueBookings)
+                {
+                    // 1. Hủy lịch đặt
+                    booking.TrangThai = 0;
+
+                    // 2. Đồng bộ hủy luôn hóa đơn dịch vụ đi kèm
+                    var hoaDon = await _context.HoaDons.FirstOrDefaultAsync(h => h.MaLd == booking.MaLd);
+                    if (hoaDon != null)
+                    {
+                        hoaDon.TrangThai = 0;
+                    }
+                }
+
+                // Lưu các thay đổi vào CSDL
+                await _context.SaveChangesAsync();
+            }
+        }
+    }
+    public class RescheduleRequest
+    {
+        public string MaLd { get; set; }
+        public DateOnly NgayHenMoi { get; set; }
+        public TimeOnly GioBatDauMoi { get; set; }
     }
 }

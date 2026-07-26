@@ -648,7 +648,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 {
                     favoriteStylistIds = await _context.Set<YeuThichNhanVien>()
                         .Where(y => y.MaKH == request.MaKh)
-                        .Select(y => y.MaNV.Trim()) // Trim luôn ở đây cho chắc chắn
+                        .Select(y => y.MaNV.Trim())
                         .ToListAsync();
                 }
 
@@ -659,12 +659,9 @@ namespace MinhTamHair.KhanchHang.Controllers
                     .Where(l => l.NgayLamViec == ngayHen && l.TrangThai != 0 && l.TrangThai != 5 && l.MaNvNavigation.TrangThai == 1)
                     .ToListAsync();
 
-                // 2. LẤY CHI TIẾT CÁC LỊCH ĐANG BẬN (Lấy cả giờ để báo cho khách)
+                // 2. LẤY CHI TIẾT TẤT CẢ LỊCH CỦA NGÀY HÔM ĐÓ
                 var cacLichBan = await _context.ChitietLichdats
-                    .Where(ct => ct.MaLdNavigation.NgayHen == ngayHen
-                                 && ct.MaLdNavigation.TrangThai != 0
-                                 && ct.MaLdNavigation.GioBatDau < end
-                                 && ct.MaLdNavigation.GioKetThuc > start)
+                    .Where(ct => ct.MaLdNavigation.NgayHen == ngayHen && ct.MaLdNavigation.TrangThai != 0)
                     .Select(ct => new {
                         MaNv = ct.MaNv,
                         GioBatDau = ct.MaLdNavigation.GioBatDau,
@@ -679,56 +676,95 @@ namespace MinhTamHair.KhanchHang.Controllers
                 {
                     var nv = lich.MaNvNavigation;
                     bool isAvailable = true;
-                    string reason = "";
+                    var lichTrinhChiTiet = new List<string>();
 
                     bool dungCaLam = false;
                     string ca = lich.CaLam ?? "";
                     string gioLamThucTe = ca;
+                    TimeOnly shiftStart = new TimeOnly(7, 0); // THÊM MỚI: Biến lưu giờ bắt đầu ca
+                    TimeOnly shiftEnd = new TimeOnly(20, 0);  // Biến lưu giờ kết thúc ca
 
-                    // Kiểm tra khớp ca
-                    if ((ca == "Ca sáng (7h-17h)" || ca == "Ca ngày" || ca == "Ca sáng") && start >= new TimeOnly(7, 0) && end <= new TimeOnly(17, 0)) dungCaLam = true;
-                    else if ((ca == "Ca tối (13h-20h)" || ca == "Ca tối") && start >= new TimeOnly(13, 0) && end <= new TimeOnly(20, 0)) dungCaLam = true;
-                    else if ((ca == "Cả ngày" || ca == "Full time") && start >= new TimeOnly(7, 0) && end <= new TimeOnly(20, 0)) dungCaLam = true;
-                    else if (ca == "Ca sáng (Part-time)" && start >= new TimeOnly(7, 0) && end <= new TimeOnly(11, 0)) dungCaLam = true;
-                    else if (ca == "Ca chiều (Part-time)" && start >= new TimeOnly(13, 0) && end <= new TimeOnly(17, 0)) dungCaLam = true;
-                    else if (ca == "Ca tối (Part-time)" && start >= new TimeOnly(16, 0) && end <= new TimeOnly(20, 0)) dungCaLam = true;
+                    // Ánh xạ tên ca thành thời gian cụ thể
+                    if (ca == "Ca sáng (7h-17h)" || ca == "Ca ngày" || ca == "Ca sáng") { gioLamThucTe = "07:00 - 17:00"; shiftStart = new TimeOnly(7, 0); shiftEnd = new TimeOnly(17, 0); }
+                    else if (ca == "Ca tối (13h-20h)" || ca == "Ca tối") { gioLamThucTe = "13:00 - 20:00"; shiftStart = new TimeOnly(13, 0); shiftEnd = new TimeOnly(20, 0); }
+                    else if (ca == "Cả ngày" || ca == "Full time") { gioLamThucTe = "07:00 - 20:00"; shiftStart = new TimeOnly(7, 0); shiftEnd = new TimeOnly(20, 0); }
+                    else if (ca == "Ca sáng (Part-time)") { gioLamThucTe = "07:00 - 11:00"; shiftStart = new TimeOnly(7, 0); shiftEnd = new TimeOnly(11, 0); }
+                    else if (ca == "Ca chiều (Part-time)") { gioLamThucTe = "13:00 - 17:00"; shiftStart = new TimeOnly(13, 0); shiftEnd = new TimeOnly(17, 0); }
+                    else if (ca == "Ca tối (Part-time)") { gioLamThucTe = "16:00 - 20:00"; shiftStart = new TimeOnly(16, 0); shiftEnd = new TimeOnly(20, 0); }
 
-                    // Đổi tên ca thành Giờ cụ thể để hiển thị cho khách dễ hiểu
-                    if (ca == "Ca sáng (7h-17h)" || ca == "Ca ngày" || ca == "Ca sáng") gioLamThucTe = "07:00 - 17:00";
-                    else if (ca == "Ca tối (13h-20h)" || ca == "Ca tối") gioLamThucTe = "13:00 - 20:00";
-                    else if (ca == "Cả ngày" || ca == "Full time") gioLamThucTe = "07:00 - 20:00";
-                    else if (ca == "Ca sáng (Part-time)") gioLamThucTe = "07:00 - 11:00";
-                    else if (ca == "Ca chiều (Part-time)") gioLamThucTe = "13:00 - 17:00";
-                    else if (ca == "Ca tối (Part-time)") gioLamThucTe = "16:00 - 20:00";
+                    // Kiểm tra xem khách chọn giờ CÓ NẰM TRONG CA LÀM không
+                    if ((gioLamThucTe == "07:00 - 17:00") && start >= new TimeOnly(7, 0) && end <= new TimeOnly(17, 0)) dungCaLam = true;
+                    else if ((gioLamThucTe == "13:00 - 20:00") && start >= new TimeOnly(13, 0) && end <= new TimeOnly(20, 0)) dungCaLam = true;
+                    else if ((gioLamThucTe == "07:00 - 20:00") && start >= new TimeOnly(7, 0) && end <= new TimeOnly(20, 0)) dungCaLam = true;
+                    else if ((gioLamThucTe == "07:00 - 11:00") && start >= new TimeOnly(7, 0) && end <= new TimeOnly(11, 0)) dungCaLam = true;
+                    else if ((gioLamThucTe == "13:00 - 17:00") && start >= new TimeOnly(13, 0) && end <= new TimeOnly(17, 0)) dungCaLam = true;
+                    else if ((gioLamThucTe == "16:00 - 20:00") && start >= new TimeOnly(16, 0) && end <= new TimeOnly(20, 0)) dungCaLam = true;
 
-                    // Lấy lịch khách khác đang chặn thợ này (nếu có)
-                    var lichKhet = cacLichBan.Where(b => b.MaNv == nv.MaNv).OrderByDescending(b => b.GioKetThuc).FirstOrDefault();
+                    // Lấy tất cả lịch khách của thợ này trong ngày, sắp xếp theo giờ BẮT ĐẦU
+                    var cacLichCuaTho = cacLichBan
+                        .Where(b => b.MaNv == nv.MaNv)
+                        .OrderBy(b => b.GioBatDau)
+                        .ToList();
 
                     if (!dungCaLam)
                     {
                         isAvailable = false;
-                        reason = $"Trái ca (Làm {gioLamThucTe})"; // Khách chọn 7h, thợ làm ca tối -> Báo "Trái ca (Làm 13:00 - 20:00)"
+                        lichTrinhChiTiet.Add($"Trái ca (Làm {gioLamThucTe})");
                     }
-                    else if (lichKhet != null)
+                    else
                     {
-                        isAvailable = false;
-                        reason = $"Bận khách ({lichKhet.GioBatDau?.ToString(@"hh\:mm")} - {lichKhet.GioKetThuc?.ToString(@"hh\:mm")})"; // Báo rõ thợ bận từ mấy giờ đến mấy giờ
+                        // THUẬT TOÁN TÍNH KHOẢNG TRỐNG MỚI
+                        TimeOnly currentTime = shiftStart; // Bắt đầu đếm từ lúc mở ca
+
+                        foreach (var b in cacLichCuaTho)
+                        {
+                            if (b.GioBatDau.HasValue && b.GioKetThuc.HasValue)
+                            {
+                                // 1. Nếu có khoảng hở giữa giờ hiện tại và giờ khách bắt đầu -> Thêm lịch trống
+                                if (currentTime < b.GioBatDau.Value)
+                                {
+                                    lichTrinhChiTiet.Add($"Lịch trống: {currentTime.ToString(@"hh\:mm")} - {b.GioBatDau.Value.ToString(@"hh\:mm")}");
+                                }
+
+                                // 2. Thêm lịch đã có khách hẹn
+                                lichTrinhChiTiet.Add($"Có hẹn: {b.GioBatDau.Value.ToString(@"hh\:mm")} - {b.GioKetThuc.Value.ToString(@"hh\:mm")}");
+
+                                // 3. Dời mốc đếm thời gian lên lúc làm xong cho khách này
+                                if (currentTime < b.GioKetThuc.Value)
+                                {
+                                    currentTime = b.GioKetThuc.Value;
+                                }
+                            }
+                        }
+
+                        // 4. Nếu xử lý xong hết khách mà vẫn chưa tới giờ tan ca -> Còn 1 khoảng trống cuối cùng
+                        if (currentTime < shiftEnd)
+                        {
+                            lichTrinhChiTiet.Add($"Lịch trống: {currentTime.ToString(@"hh\:mm")} - {shiftEnd.ToString(@"hh\:mm")}");
+                        }
+
+                        // KIỂM TRA TRÙNG LỊCH: Khung giờ khách đang thao tác chọn có bị kẹt không?
+                        bool isConflict = cacLichCuaTho.Any(b => b.GioBatDau < end && b.GioKetThuc > start);
+                        if (isConflict)
+                        {
+                            isAvailable = false;
+                        }
                     }
 
                     var ratingVal = _context.DanhgiaDichvus.Where(dg => _context.HoaDons.Any(hd => dg.MaHd == hd.MaHd && _context.ChitietLichdats.Any(ct => ct.MaLd == hd.MaLd && ct.MaNv == nv.MaNv))).Average(dg => (double?)dg.SoSao);
-
                     bool isFav = favoriteStylistIds.Contains(nv.MaNv.Trim());
+
                     result.Add(new
                     {
-                        id = nv.MaNv.Trim(), // Trim luôn ID trả về
+                        id = nv.MaNv.Trim(),
                         name = nv.HoTenNv,
                         role = nv.MaLoaiNvNavigation?.TenLoai ?? "Stylist",
                         img = nv.HinhAnh ?? "/images/no-image.png",
                         rating = ratingVal != null ? Math.Round(ratingVal.Value, 1) : 5.0,
                         isAvailable = isAvailable,
-                        unAvailableReason = reason,
+                        lichTrinh = lichTrinhChiTiet,
                         caLam = lich.CaLam,
-                        isFavorite = isFav // TRẢ VỀ CỜ NÀY CHO VUE
+                        isFavorite = isFav
                     });
                 }
 
