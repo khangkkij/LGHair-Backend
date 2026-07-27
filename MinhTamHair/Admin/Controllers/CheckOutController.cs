@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -336,7 +336,8 @@ namespace MinhTamHair.Admin.Controllers
             ld.TrangThai = 4;
             foreach (var h in hoaDons)
             {
-                h.TrangThai = 2;
+                // Khi thanh toán xong tại quầy, hóa đơn cả dịch vụ và sản phẩm đều đã hoàn thành/nhận ngay
+                h.TrangThai = 3;
             }
             await _context.SaveChangesAsync();
 

@@ -667,6 +667,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         GioBatDau = ct.MaLdNavigation.GioBatDau,
                         GioKetThuc = ct.MaLdNavigation.GioKetThuc
                     })
+                    .Distinct()
                     .ToListAsync();
 
                 var result = new List<object>();
