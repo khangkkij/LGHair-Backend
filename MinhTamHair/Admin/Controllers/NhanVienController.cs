@@ -27,6 +27,7 @@ namespace MinhTamHair.Controllers
         public int? TrangThai { get; set; }
         public string? TenDangNhap { get; set; }
         public string? MatKhau { get; set; }
+        public string? MatKhauCu { get; set; }
         public IFormFile? HinhAnhFile { get; set; }
     }
 
@@ -146,6 +147,8 @@ namespace MinhTamHair.Controllers
         [HttpPost]
         public async Task<IActionResult> AddNhanVien([FromForm] NhanVienDto dto)
         {
+            if (dto.HinhAnhFile != null && dto.HinhAnhFile.Length > 2 * 1024 * 1024)
+                return BadRequest("Dung lượng ảnh đại diện không được vượt quá 2MB.");
             try
             {
                 if (await _context.Nhanviens.AnyAsync(x => x.MaNv == dto.MaNv))
@@ -187,6 +190,19 @@ namespace MinhTamHair.Controllers
         [HttpPut("{id}")]
         public async Task<IActionResult> UpdateNhanVien(string id, [FromForm] NhanVienDto dto)
         {
+            if (dto.HinhAnhFile != null && dto.HinhAnhFile.Length > 2 * 1024 * 1024)
+                return BadRequest("Dung lượng ảnh đại diện không được vượt quá 2MB.");
+            // Validate token identity matching the requested id
+            var currentMaNv = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            if (string.IsNullOrEmpty(currentMaNv) || !currentMaNv.Equals(id, StringComparison.OrdinalIgnoreCase))
+            {
+                var isUserAdmin = User.IsInRole("Admin") || User.IsInRole("R01");
+                if (!isUserAdmin)
+                {
+                    return StatusCode(403, "Bạn không có quyền sửa hồ sơ của nhân viên này.");
+                }
+            }
+
             try
             {
                 var nv = await _context.Nhanviens.FindAsync(id);
@@ -214,7 +230,32 @@ namespace MinhTamHair.Controllers
                 nv.TrangThai = dto.TrangThai ?? 1;
                 nv.TenDangNhap = dto.TenDangNhap;
 
-                if (!string.IsNullOrEmpty(dto.MatKhau)) nv.MatKhau = BCrypt.Net.BCrypt.HashPassword(dto.MatKhau);
+                if (!string.IsNullOrEmpty(dto.MatKhau))
+                {
+                    if (!string.IsNullOrEmpty(nv.MatKhau))
+                    {
+                        if (string.IsNullOrEmpty(dto.MatKhauCu))
+                        {
+                            return BadRequest("Bắt buộc nhập mật khẩu cũ để xác thực thay đổi.");
+                        }
+
+                        bool isOldPasswordCorrect = false;
+                        if (nv.MatKhau.StartsWith("$2a$") || nv.MatKhau.StartsWith("$2b$") || nv.MatKhau.StartsWith("$2y$"))
+                        {
+                            isOldPasswordCorrect = BCrypt.Net.BCrypt.Verify(dto.MatKhauCu, nv.MatKhau);
+                        }
+                        else
+                        {
+                            isOldPasswordCorrect = (nv.MatKhau.Trim() == dto.MatKhauCu.Trim());
+                        }
+
+                        if (!isOldPasswordCorrect)
+                        {
+                            return BadRequest("Mật khẩu cũ không chính xác.");
+                        }
+                    }
+                    nv.MatKhau = BCrypt.Net.BCrypt.HashPassword(dto.MatKhau);
+                }
                 if (dto.HinhAnhFile != null) nv.HinhAnh = await SaveImageAsync(dto.HinhAnhFile);
 
                 await _context.SaveChangesAsync();
