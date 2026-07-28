@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -49,9 +49,9 @@ namespace MinhTamHair.Admin.Controllers
                     email = ld.MaKhNavigation.Email,
                     ngayHen = $"{ld.NgayHen:yyyy-MM-dd}T{(ld.GioBatDau.HasValue ? ld.GioBatDau.Value.ToString("HH:mm") : "00:00")}",
 
-                    tongTien = _context.HoaDons.Where(hd => hd.MaLd == ld.MaLd).Select(hd => hd.TongTien ?? 0).FirstOrDefault(),
-                    daThanhToan = _context.HoaDons.Where(hd => hd.MaLd == ld.MaLd).Select(hd => hd.TienDaTra ?? 0).FirstOrDefault(),
-                    tienGiam = _context.HoaDons.Where(hd => hd.MaLd == ld.MaLd).Select(hd => (hd.TongTien ?? 0) - (hd.ThanhTien ?? 0)).FirstOrDefault()
+                    tongTien = _context.HoaDons.Where(hd => hd.MaLd == ld.MaLd).Sum(hd => hd.TongTien ?? 0),
+                    daThanhToan = _context.HoaDons.Where(hd => hd.MaLd == ld.MaLd).Sum(hd => hd.TienDaTra ?? 0),
+                    tienGiam = _context.HoaDons.Where(hd => hd.MaLd == ld.MaLd).Sum(hd => (hd.TongTien ?? 0) - (hd.ThanhTien ?? 0))
                 })
                 .ToListAsync();
 
@@ -70,7 +70,9 @@ namespace MinhTamHair.Admin.Controllers
 
             if (ld == null) return NotFound("Không tìm thấy đơn hàng đang phục vụ.");
 
-            var hoaDon = await _context.HoaDons.AsNoTracking().FirstOrDefaultAsync(h => h.MaLd == cleanId);
+            var hoaDons = await _context.HoaDons.AsNoTracking().Where(h => h.MaLd == cleanId).ToListAsync();
+            var mainHoaDon = hoaDons.FirstOrDefault(h => !h.MaHd.StartsWith("SP")) ?? hoaDons.FirstOrDefault();
+            var maHds = hoaDons.Select(h => h.MaHd).ToList();
 
             var result = new
             {
@@ -79,10 +81,10 @@ namespace MinhTamHair.Admin.Controllers
                 sdt = ld.MaKhNavigation.Sdt,
                 email = ld.MaKhNavigation.Email,
 
-                tongTien = hoaDon?.TongTien ?? 0,
-                daThanhToan = hoaDon?.TienDaTra ?? 0,
-                voucher = hoaDon?.MaCode,
-                tienGiam = (hoaDon?.TongTien ?? 0) - (hoaDon?.ThanhTien ?? 0),
+                tongTien = hoaDons.Sum(h => h.TongTien ?? 0),
+                daThanhToan = hoaDons.Sum(h => h.TienDaTra ?? 0),
+                voucher = mainHoaDon?.MaCode,
+                tienGiam = hoaDons.Sum(h => (h.TongTien ?? 0) - (h.ThanhTien ?? 0)),
 
                 maNv = _context.ChitietLichdats.Where(ct => ct.MaLd == ld.MaLd).Select(ct => ct.MaNv).FirstOrDefault(),
 
@@ -96,7 +98,7 @@ namespace MinhTamHair.Admin.Controllers
                     }).ToList(),
 
                 sanPhams = _context.ChitietHoadonSps
-                    .Where(ct => ct.MaHd == hoaDon.MaHd)
+                    .Where(ct => maHds.Contains(ct.MaHd))
                     .Join(_context.BienTheSanphams, ct => ct.MaBienThe, bt => bt.MaBienThe, (ct, bt) => new { ct, bt })
                     .Join(_context.SanPhams, temp => temp.bt.MaSanPham, sp => sp.MaSp, (temp, sp) => new {
                         id = temp.ct.MaBienThe,
@@ -121,7 +123,10 @@ namespace MinhTamHair.Admin.Controllers
                 try
                 {
                     var ld = await _context.Lichdats.FirstOrDefaultAsync(x => x.MaLd == request.MaLd);
-                    var hoaDon = await _context.HoaDons.FirstOrDefaultAsync(h => h.MaLd == request.MaLd);
+                    var hoaDons = await _context.HoaDons.Where(h => h.MaLd == request.MaLd).ToListAsync();
+                    var hoaDon = hoaDons.FirstOrDefault(h => !h.MaHd.StartsWith("SP")) ?? hoaDons.FirstOrDefault();
+                    var hoaDonSp = hoaDons.FirstOrDefault(h => h.MaHd.StartsWith("SP"));
+
                     if (ld == null || hoaDon == null) return NotFound("Lỗi dữ liệu đơn hàng.");
 
                     // ============ A. XỬ LÝ DỊCH VỤ ============
@@ -143,7 +148,8 @@ namespace MinhTamHair.Admin.Controllers
                     }
 
                     // ============ B. XỬ LÝ SẢN PHẨM & ĐỒNG BỘ TỒN KHO ============
-                    var oldProducts = await _context.ChitietHoadonSps.Where(ct => ct.MaHd == hoaDon.MaHd).ToListAsync();
+                    var maHds = hoaDons.Select(h => h.MaHd).ToList();
+                    var oldProducts = await _context.ChitietHoadonSps.Where(ct => maHds.Contains(ct.MaHd)).ToListAsync();
 
                     // 1. Hoàn trả tồn kho cho các sản phẩm cũ
                     foreach (var oldP in oldProducts)
@@ -170,10 +176,29 @@ namespace MinhTamHair.Admin.Controllers
                     _context.ChitietHoadonSps.RemoveRange(oldProducts);
                     await _context.SaveChangesAsync(); // Cập nhật kho tạm trước khi trừ món mới
 
-                    // 2. Trừ tồn kho cho danh sách sản phẩm mới
+                    // ============ B. XỬ LÝ SẢN PHẨM ============
                     decimal tongSanPham = 0;
                     if (request.Products != null && request.Products.Any())
                     {
+                        if (hoaDonSp == null)
+                        {
+                            // Tạo hóa đơn sản phẩm mới nếu chưa có
+                            string maHdSp = "SP" + DateTime.Now.ToString("ddHHmmss");
+                            hoaDonSp = new HoaDon
+                            {
+                                MaHd = maHdSp,
+                                MaLd = request.MaLd,
+                                MaKh = ld.MaKh,
+                                NgayTao = DateTime.Now,
+                                TongTien = 0,
+                                ThanhTien = 0,
+                                TienDaTra = 0,
+                                TrangThai = 3
+                            };
+                            _context.HoaDons.Add(hoaDonSp);
+                        }
+
+                        // 2. Thêm sản phẩm và trừ tồn kho
                         foreach (var p in request.Products)
                         {
                             var bt = await _context.BienTheSanphams.FindAsync(p.Id);
@@ -184,9 +209,10 @@ namespace MinhTamHair.Admin.Controllers
                             var tonTruoc = bt.SoLuongTon ?? 0;
                             bt.SoLuongTon -= p.SoLuong;
 
+                            // Lưu vào mã hóa đơn SẢN PHẨM (hoaDonSp.MaHd)
                             _context.ChitietHoadonSps.Add(new ChitietHoadonSp
                             {
-                                MaHd = hoaDon.MaHd,
+                                MaHd = hoaDonSp.MaHd,
                                 MaBienThe = p.Id,
                                 SoLuong = p.SoLuong,
                                 DonGiaLucBan = p.Gia,
@@ -200,17 +226,29 @@ namespace MinhTamHair.Admin.Controllers
                                 SoLuongThayDoi = -p.SoLuong,
                                 TonTruoc = tonTruoc,
                                 TonSau = bt.SoLuongTon.Value,
-                                MaChungTu = hoaDon.MaHd,
-                                GhiChu = "Cập nhật giỏ hàng Check-out",
+                                MaChungTu = hoaDonSp.MaHd,
+                                GhiChu = "Khách mua thêm tại quầy",
                                 ThoiGian = DateTime.Now
                             });
                         }
+
+                        // Chốt tiền cho hóa đơn sản phẩm
+                        hoaDonSp.TongTien = tongSanPham;
+                        hoaDonSp.ThanhTien = tongSanPham;
+                    }
+                    else if (hoaDonSp != null)
+                    {
+                        // Nếu không có sản phẩm nào nhưng đã từng có hóa đơn SP, reset tiền về 0
+                        hoaDonSp.TongTien = 0;
+                        hoaDonSp.ThanhTien = 0;
                     }
 
                     // ============ C. CHỐT TỔNG TIỀN VÀ TÍNH LẠI VOUCHER ============
-                    decimal tongTienMoi = tongDichVu + tongSanPham;
+                    decimal tongTienMoi = tongDichVu;
                     hoaDon.TongTien = tongTienMoi;
-                    ld.TongTienDuKien = tongTienMoi;
+
+                    // Tổng tiền dự kiến của lịch đặt thì vẫn có thể lưu tổng của cả 2 để dễ quản lý
+                    ld.TongTienDuKien = tongDichVu + tongSanPham;
 
                     decimal thanhTienMoi;
                     if (!string.IsNullOrEmpty(hoaDon.MaCode))
@@ -260,11 +298,16 @@ namespace MinhTamHair.Admin.Controllers
         public async Task<IActionResult> ConfirmPayment([FromBody] ConfirmCheckoutPaymentRequest req)
         {
             var ld = await _context.Lichdats.FirstOrDefaultAsync(x => x.MaLd == req.MaLd);
-            var hoaDon = await _context.HoaDons.FirstOrDefaultAsync(hd => hd.MaLd == req.MaLd);
+            var hoaDons = await _context.HoaDons.Where(hd => hd.MaLd == req.MaLd).ToListAsync();
 
-            if (ld == null || hoaDon == null) return NotFound("Không tìm thấy dữ liệu.");
+            if (ld == null || !hoaDons.Any()) return NotFound("Không tìm thấy dữ liệu.");
 
-            hoaDon.MaNv = req.MaStylist;
+            var mainHoaDon = hoaDons.FirstOrDefault(h => !h.MaHd.StartsWith("SP")) ?? hoaDons.First();
+
+            foreach (var h in hoaDons)
+            {
+                h.MaNv = req.MaStylist;
+            }
 
             if (req.AmountToPay > 0)
             {
@@ -272,24 +315,30 @@ namespace MinhTamHair.Admin.Controllers
                 {
                     _context.Thanhtoans.Add(new Thanhtoan
                     {
-                        MaHd = hoaDon.MaHd,
+                        MaHd = mainHoaDon.MaHd,
                         PhuongThuc = "Tiền mặt",
                         SoTien = req.AmountToPay,
                         TrangThai = 1
                     });
-                    hoaDon.TienDaTra = (hoaDon.TienDaTra ?? 0) + req.AmountToPay;
+
+                    // Phân bổ tiền đã trả vào mainHoaDon (hoặc chia đều nếu muốn, ở đây dồn vào main)
+                    mainHoaDon.TienDaTra = (mainHoaDon.TienDaTra ?? 0) + req.AmountToPay;
                 }
                 else // Online Payment (VNPay / MoMo)
                 {
                     await _context.SaveChangesAsync();
                     if (req.PaymentMethod.ToLower() == "vnpay")
-                        return Ok(new { payUrl = CreateVNPayLink(hoaDon.MaHd, (double)req.AmountToPay) });
+                        return Ok(new { payUrl = CreateVNPayLink(mainHoaDon.MaHd, (double)req.AmountToPay) });
 
-                    return Ok(new { payUrl = await CreateMoMoLink(hoaDon.MaHd, (long)req.AmountToPay) });
+                    return Ok(new { payUrl = await CreateMoMoLink(mainHoaDon.MaHd, (long)req.AmountToPay) });
                 }
             }
             ld.TrangThai = 4;
-            hoaDon.TrangThai = 2;
+            foreach (var h in hoaDons)
+            {
+                // Khi thanh toán xong tại quầy, hóa đơn cả dịch vụ và sản phẩm đều đã hoàn thành/nhận ngay
+                h.TrangThai = 3;
+            }
             await _context.SaveChangesAsync();
 
             return Ok(new { message = "Thanh toán thành công, đơn hàng đã hoàn tất!" });

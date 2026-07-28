@@ -62,8 +62,24 @@ namespace MinhTamHair.Controllers
             [FromForm] string gioiTinh,
             [FromForm] string tenDangNhap,
             [FromForm] string? matKhauMoi,
+            [FromForm] string? matKhauCu,
             IFormFile? hinhAnhFile)
         {
+            if (hinhAnhFile != null && hinhAnhFile.Length > 2 * 1024 * 1024)
+            {
+                return BadRequest(new { message = "Dung lượng ảnh đại diện không được vượt quá 2MB." });
+            }
+            // Validate token identity matching the requested maNv
+            var currentMaNv = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            if (string.IsNullOrEmpty(currentMaNv) || !currentMaNv.Equals(maNv, StringComparison.OrdinalIgnoreCase))
+            {
+                var isUserAdmin = User.IsInRole("Admin") || User.IsInRole("R01");
+                if (!isUserAdmin)
+                {
+                    return StatusCode(403, new { message = "Bạn không có quyền sửa hồ sơ của nhân viên này." });
+                }
+            }
+
             // --- BƯỚC 1: VALIDATE DỮ LIỆU CƠ BẢN THỦ CÔNG ---
             if (string.IsNullOrWhiteSpace(maNv)) return BadRequest(new { message = "Mã nhân viên bắt buộc." });
             if (string.IsNullOrWhiteSpace(hoTenNv)) return BadRequest(new { message = "Họ tên không được để trống." });
@@ -99,7 +115,29 @@ namespace MinhTamHair.Controllers
                 // Nếu người dùng có gõ mật khẩu mới thì tiến hành cập nhật đổi mật khẩu
                 if (!string.IsNullOrWhiteSpace(matKhauMoi))
                 {
-                    employee.MatKhau = matKhauMoi.Trim();
+                    if (!string.IsNullOrEmpty(employee.MatKhau))
+                    {
+                        if (string.IsNullOrEmpty(matKhauCu))
+                        {
+                            return BadRequest(new { message = "Bắt buộc nhập mật khẩu cũ để xác thực thay đổi." });
+                        }
+
+                        bool isOldPasswordCorrect = false;
+                        if (employee.MatKhau.StartsWith("$2a$") || employee.MatKhau.StartsWith("$2b$") || employee.MatKhau.StartsWith("$2y$"))
+                        {
+                            isOldPasswordCorrect = BCrypt.Net.BCrypt.Verify(matKhauCu, employee.MatKhau);
+                        }
+                        else
+                        {
+                            isOldPasswordCorrect = (employee.MatKhau.Trim() == matKhauCu.Trim());
+                        }
+
+                        if (!isOldPasswordCorrect)
+                        {
+                            return BadRequest(new { message = "Mật khẩu cũ không chính xác." });
+                        }
+                    }
+                    employee.MatKhau = BCrypt.Net.BCrypt.HashPassword(matKhauMoi.Trim());
                 }
 
                 // --- BƯỚC 4: XỬ LÝ LƯU FILE ẢNH VẬT LÝ ---
