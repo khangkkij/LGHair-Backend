@@ -50,6 +50,8 @@ public class SanPhamController : ControllerBase
     {
         var query = _context.SanPhams
             .Where(sp => sp.TrangThai == 1)
+            // Ẩn luôn sản phẩm thuộc danh mục đang tạm ẩn (TrangThai == 0)
+            .Where(sp => sp.MaDanhMucTheNavigation == null || sp.MaDanhMucTheNavigation.TrangThai == 1)
             .Include(sp => sp.MaDanhMucTheNavigation)
             .Include(sp => sp.Thuonghieu)
             .Include(sp => sp.BienTheSanphams)
@@ -168,6 +170,10 @@ public class SanPhamController : ControllerBase
                 .ThenInclude(bt => bt.HinhanhBTs)
             .Include(s => s.DanhgiaSanphams)
             .FirstOrDefaultAsync(s => s.MaSp == id && s.TrangThai == 1);
+
+        // Danh mục cha đang tạm ẩn thì coi như sản phẩm cũng không tồn tại với khách hàng
+        if (sp != null && sp.MaDanhMucTheNavigation != null && sp.MaDanhMucTheNavigation.TrangThai != 1)
+            sp = null;
 
         if (sp == null)
             return NotFound(new { message = "Không tìm thấy sản phẩm." });
