@@ -24,6 +24,7 @@ namespace MinhTamHair.SanPham.Controllers
             try
             {
                 var data = await _context.DanhMucSPs
+                    .Where(dm => dm.TrangThai == 1)
                     .Select(dm => new
                     {
                         maDM = dm.MaDMSP,
