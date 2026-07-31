@@ -195,6 +195,9 @@ namespace MinhTamHair.Admin.Controllers
             if (!DateOnly.TryParse(request.NgayLamViec, out DateOnly ngaySua))
                 return BadRequest(new { message = "Ngày không hợp lệ." });
 
+            if (ngaySua < DateOnly.FromDateTime(DateTime.Today))
+                return BadRequest(new { message = "Không thể thiết lập ca làm việc cho ngày trong quá khứ." });
+
             // 1. Xác định khung giờ của CA MỚI
             TimeOnly newStart, newEnd;
             switch (request.CaLam)
@@ -292,7 +295,10 @@ namespace MinhTamHair.Admin.Controllers
                 return BadRequest(new { message = "Chỉ được điểm danh ca làm của ngày hôm nay." });
 
             // 2. Xác định khung giờ ca làm
-            TimeOnly start, end;
+            TimeOnly start = new TimeOnly(0, 0);
+            TimeOnly end = new TimeOnly(23, 59);
+            bool isFlexibleShift = false;
+
             switch (lich.CaLam)
             {
                 case "Ca sáng (7h-17h)": start = new TimeOnly(7, 0); end = new TimeOnly(17, 0); break;
@@ -300,15 +306,20 @@ namespace MinhTamHair.Admin.Controllers
                 case "Ca sáng (Part-time)": start = new TimeOnly(7, 0); end = new TimeOnly(11, 0); break;
                 case "Ca chiều (Part-time)": start = new TimeOnly(13, 0); end = new TimeOnly(17, 0); break;
                 case "Ca tối (Part-time)": start = new TimeOnly(16, 0); end = new TimeOnly(20, 0); break;
-                default: return BadRequest(new { message = "Ca làm không hợp lệ." });
+                default:
+                    isFlexibleShift = true; // Ca linh động, Ca tăng cường, Ca tùy chỉnh
+                    break;
             }
 
-            // 3. Kiểm tra giờ hiện tại
-            if (currentTime < start)
-                return BadRequest(new { message = $"Chưa đến giờ làm. Ca {lich.CaLam} bắt đầu lúc {start}." });
+            if (!isFlexibleShift)
+            {
+                // 3. Kiểm tra giờ hiện tại với ca cố định
+                if (currentTime < start)
+                    return BadRequest(new { message = $"Chưa đến giờ làm. Ca {lich.CaLam} bắt đầu lúc {start}." });
 
-            if (currentTime > end)
-                return BadRequest(new { message = $"Đã quá giờ điểm danh của ca {lich.CaLam} ({end})." });
+                if (currentTime > end)
+                    return BadRequest(new { message = $"Đã quá giờ điểm danh của ca {lich.CaLam} ({end})." });
+            }
 
             // Hợp lệ -> Chuyển trạng thái
             lich.TrangThai = 2;
@@ -324,8 +335,20 @@ namespace MinhTamHair.Admin.Controllers
             var lich = await _context.Lichlamviecs.FindAsync(maLich);
             if (lich == null) return NotFound(new { message = "Không tìm thấy ca làm." });
 
-            // Trạng thái 2: Có mặt, 3: Rời ca, 5: Vắng mặt, 6: Muộn
-            // Khi chọn 3 trong 4 ngoại trừ Có mặt (2) thì phải nhập lý do
+            // 1. Kiểm tra mã trạng thái điểm danh hợp lệ (Chỉ cho phép 2: Có mặt, 3: Rời ca, 5: Vắng mặt, 6: Muộn)
+            var validStatuses = new[] { 2, 3, 5, 6 };
+            if (!validStatuses.Contains(request.TrangThai))
+            {
+                return BadRequest(new { message = "Trạng thái điểm danh không hợp lệ." });
+            }
+
+            // 2. Không cho phép đảo ngược ca đã điểm danh về 0 hoặc 1
+            if (lich.TrangThai == 2 && (request.TrangThai == 0 || request.TrangThai == 1))
+            {
+                return BadRequest(new { message = "Nhân viên đã điểm danh có mặt, không thể reset về trạng thái chưa điểm danh." });
+            }
+
+            // 3. Khi chọn trạng thái khác Có mặt (2) thì phải nhập lý do
             if (request.TrangThai != 2 && string.IsNullOrWhiteSpace(request.GhiChu))
             {
                 return BadRequest(new { message = "Vui lòng nhập lý do (Ghi chú)." });
@@ -541,6 +564,11 @@ namespace MinhTamHair.Admin.Controllers
 			    !DateOnly.TryParse(request.DenNgay, out DateOnly toDate))
 			{
 				return BadRequest(new { message = "Định dạng ngày không hợp lệ." });
+			}
+
+			if (fromDate < DateOnly.FromDateTime(DateTime.Today))
+			{
+				return BadRequest(new { message = "Không thể thiết lập ngày nghỉ lễ trong quá khứ." });
 			}
 
 			if (fromDate > toDate)
