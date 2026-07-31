@@ -125,7 +125,12 @@ namespace MinhTamHair.Controllers
                 return BadRequest(new { message = "Tên danh mục không được để trống." });
 
             entity.TenDanhMuc = dto.TenDanhMuc.Trim();
-            entity.TrangThai = dto.TrangThai;
+
+            if (dto.TrangThai != entity.TrangThai)
+            {
+                entity.TrangThai = dto.TrangThai;
+                await CascadeTrangThaiDichVuAsync(id, dto.TrangThai);
+            }
 
             await _context.SaveChangesAsync();
             return Ok(new { message = "Cập nhật danh mục thành công." });
@@ -166,9 +171,29 @@ namespace MinhTamHair.Controllers
             if (entity == null)
                 return NotFound(new { message = "Không tìm thấy danh mục." });
 
-            entity.TrangThai = dto.TrangThai;
+            if (dto.TrangThai != entity.TrangThai)
+            {
+                entity.TrangThai = dto.TrangThai;
+                await CascadeTrangThaiDichVuAsync(id, dto.TrangThai);
+            }
+
             await _context.SaveChangesAsync();
             return Ok(new { message = "Cập nhật trạng thái thành công." });
+        }
+
+        /// <summary>
+        /// Đồng bộ trạng thái toàn bộ dịch vụ theo trạng thái mới của danh mục:
+        /// Tạm ẩn (0) → mọi dịch vụ trong danh mục chuyển Ngừng phục vụ (0).
+        /// Đang hiện (1) → mọi dịch vụ trong danh mục chuyển Đang phục vụ (1).
+        /// </summary>
+        private async Task CascadeTrangThaiDichVuAsync(string maDM, int trangThaiMoi)
+        {
+            var dichVus = await _context.Dichvus
+                .Where(dv => dv.MaDm == maDM && dv.TrangThai != trangThaiMoi)
+                .ToListAsync();
+
+            foreach (var dv in dichVus)
+                dv.TrangThai = trangThaiMoi;
         }
 
     }

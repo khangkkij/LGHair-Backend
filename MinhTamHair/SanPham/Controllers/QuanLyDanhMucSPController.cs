@@ -158,8 +158,11 @@ public class QuanLyDanhMucSPController : ControllerBase
             dm.TenDanhMuc = tenNorm;
         }
 
-        if (req.TrangThai.HasValue)
+        if (req.TrangThai.HasValue && req.TrangThai.Value != dm.TrangThai)
+        {
             dm.TrangThai = req.TrangThai.Value;
+            await CascadeTrangThaiSanPhamAsync(id, req.TrangThai.Value);
+        }
 
         if (req.File != null)
         {
@@ -182,9 +185,29 @@ public class QuanLyDanhMucSPController : ControllerBase
         var dm = await _context.DanhMucSPs.FindAsync(id);
         if (dm == null) return NotFound(new { message = "Không tìm thấy danh mục." });
 
-        dm.TrangThai = req.TrangThai;
+        if (req.TrangThai != dm.TrangThai)
+        {
+            dm.TrangThai = req.TrangThai;
+            await CascadeTrangThaiSanPhamAsync(id, req.TrangThai);
+        }
+
         await _context.SaveChangesAsync();
         return NoContent();
+    }
+
+    /// <summary>
+    /// Đồng bộ trạng thái toàn bộ sản phẩm theo trạng thái mới của danh mục:
+    /// Tạm ẩn (0) → mọi sản phẩm trong danh mục chuyển Ngừng bán (0).
+    /// Đang hiện (1) → mọi sản phẩm trong danh mục chuyển Đang bán (1).
+    /// </summary>
+    private async Task CascadeTrangThaiSanPhamAsync(string maDMSP, int trangThaiMoi)
+    {
+        var sanPhams = await _context.SanPhams
+            .Where(sp => sp.MaDanhMuc == maDMSP && sp.TrangThai != trangThaiMoi)
+            .ToListAsync();
+
+        foreach (var sp in sanPhams)
+            sp.TrangThai = trangThaiMoi;
     }
 
     // ══ DELETE ════════════════════════════════════════════════════════

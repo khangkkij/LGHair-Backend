@@ -240,9 +240,6 @@ public class QuanLyKhoController : ControllerBase
         if (req.MaNv != null && req.MaNv.Trim().Length > 20)
             return BadRequest(new { message = "Mã nhân viên không hợp lệ." });
 
-        if (req.NgayNhap.HasValue && req.NgayNhap.Value.Date > DateTime.Now.Date)
-            return BadRequest(new { message = "Ngày nhập không được lớn hơn ngày hiện tại." });
-
         if (req.ChiTiet == null || !req.ChiTiet.Any())
             return BadRequest(new { message = "Phiếu nhập phải có ít nhất một dòng chi tiết." });
 
@@ -290,7 +287,7 @@ public class QuanLyKhoController : ControllerBase
             MaPn = req.MaPn,
             MaNcc = req.MaNcc,
             MaNv = req.MaNv,
-            NgayNhap = req.NgayNhap ?? DateTime.Now,
+            NgayNhap = DateTime.Now,
             TongTien = tongTien,
             GhiChu = req.GhiChu,
             TrangThai = 0,
