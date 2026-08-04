@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
 using System;
@@ -78,13 +78,14 @@ namespace MinhTamHair.Admin.Controllers
         [HttpPost("confirm-checkin")]
         public async Task<IActionResult> ConfirmCheckIn([FromBody] CheckInConfirmRequest request)
         {
-            var lichDat = await _context.Lichdats.FindAsync(request.MaLd);
+            var cleanLdId = request.MaLd?.Trim();
+            var lichDat = await _context.Lichdats.FirstOrDefaultAsync(x => x.MaLd.Trim() == cleanLdId);
             if (lichDat == null) return NotFound("Không tìm thấy lịch đặt");
 
             lichDat.TrangThai = 3;
 
             var chiTietLichDats = await _context.ChitietLichdats
-                .Where(ct => ct.MaLd == request.MaLd)
+                .Where(ct => ct.MaLd == lichDat.MaLd)
                 .ToListAsync();
 
             foreach (var item in chiTietLichDats)
@@ -154,47 +155,68 @@ namespace MinhTamHair.Admin.Controllers
         [HttpGet("all-services-combos")]
         public async Task<IActionResult> GetAllServicesAndCombos()
         {
-            var now = DateTime.Now;
+            try
+            {
+                var now = DateTime.Now;
 
-            var servicesRaw = await _context.Dichvus
-                .Where(s => s.TrangThai == 1)
-                .Include(x => x.ChitietFlashsales)
-                    .ThenInclude(fs => fs.MaFlNavigation)
-                .ToListAsync();
+                // 1. Lấy danh sách dịch vụ
+                var servicesRaw = await _context.Dichvus
+                    .Where(s => s.TrangThai == 1)
+                    .Include(x => x.ChitietFlashsales)
+                        .ThenInclude(fs => fs.MaFlNavigation)
+                    .ToListAsync();
 
-            var services = servicesRaw.Select(s => {
-                var flash = s.ChitietFlashsales
-                    .FirstOrDefault(fs =>
-                        fs.MaFlNavigation.TrangThai == 1 &&
-                        fs.MaFlNavigation.NgayBatDau <= now &&
-                        fs.MaFlNavigation.NgayKetThuc >= now);
+                var services = servicesRaw.Select(s => {
+                    // KIỂM TRA AN TOÀN: fs.MaFlNavigation != null
+                    var flash = s.ChitietFlashsales
+                        .FirstOrDefault(fs =>
+                            fs.MaFlNavigation != null &&
+                            fs.MaFlNavigation.TrangThai == 1 &&
+                            fs.MaFlNavigation.NgayBatDau <= now &&
+                            fs.MaFlNavigation.NgayKetThuc >= now);
 
-                decimal finalPrice = (decimal)s.Gia;
-                if (flash != null && flash.PhanTramGiam.HasValue)
-                    finalPrice = (decimal)s.Gia - ((decimal)s.Gia * (decimal)flash.PhanTramGiam.Value / 100m);
+                    // Dùng ?? 0 để tránh lỗi Nullable cast
+                    decimal originalPrice = (decimal)(s.Gia ?? 0);
+                    decimal finalPrice = originalPrice;
 
-                return new
-                {
-                    Id = s.MaDv,
-                    Name = s.TenDv,
-                    Price = finalPrice,
-                    OriginalPrice = s.Gia,
-                    Type = "DV"
-                };
-            }).ToList();
+                    if (flash != null && flash.PhanTramGiam.HasValue && flash.PhanTramGiam.Value > 0)
+                    {
+                        finalPrice = originalPrice - (originalPrice * (decimal)flash.PhanTramGiam.Value / 100m);
+                    }
 
-            var combos = await _context.Combos
-                .Where(c => c.TrangThai == 1)
-                .Select(c => new {
-                    Id = c.MaCb,
-                    Name = c.TenCombo,
-                    Price = c.Gia,
-                    OriginalPrice = c.Gia,
-                    Type = "CB"
-                }).ToListAsync();
+                    return new
+                    {
+                        Id = s.MaDv,
+                        Name = s.TenDv ?? "Dịch vụ chưa đặt tên",
+                        Price = finalPrice,
+                        OriginalPrice = originalPrice,
+                        Type = "DV",
+                        // Bỏ thuộc tính viết hoa PhanTramHoaHong, chỉ giữ lại phanTramHoaHong
+                        phanTramHoaHong = (s.PhanTramHoaHong ?? 0) > 0 ? s.PhanTramHoaHong.Value : 10m
+                    };
+                }).ToList();
 
-            var result = services.Cast<object>().Concat(combos.Cast<object>()).ToList();
-            return Ok(result);
+                // 2. Lấy danh sách Combo (xử lý an toàn null cho c.Gia)
+                var combos = await _context.Combos
+                    .Where(c => c.TrangThai == 1)
+                    .Select(c => new {
+                        Id = c.MaCb,
+                        Name = c.TenCombo ?? "Combo chưa đặt tên",
+                        Price = (decimal)(c.Gia ?? 0),
+                        OriginalPrice = (decimal)(c.Gia ?? 0),
+                        Type = "CB",
+                        // Bỏ thuộc tính viết hoa PhanTramHoaHong, chỉ giữ lại phanTramHoaHong
+                        phanTramHoaHong = 10m
+                    }).ToListAsync();
+
+                var result = services.Cast<object>().Concat(combos.Cast<object>()).ToList();
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                // Trả về lỗi rõ ràng để dễ debug nếu có vấn đề khác về DB
+                return StatusCode(500, $"Lỗi máy chủ: {ex.InnerException?.Message ?? ex.Message}");
+            }
         }
 
         // 5. Chốt dịch vụ order thêm tại Check-in

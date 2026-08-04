@@ -207,9 +207,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                     .Take(1)
                     .ToList();
 
-            if (parts.Count == 0)
-                return Ok(new { totalDiscount = 0m, finalAmount = subTotal, codes = Array.Empty<string>() });
-
             var kh = await _context.Khachhangs.AsNoTracking()
                 .Include(k => k.MaCodes)
                 .FirstOrDefaultAsync(k => k.MaKh == maKH);
@@ -238,11 +235,14 @@ namespace MinhTamHair.KhanchHang.Controllers
                 rankCap = rank?.PhanTramGiamGia;
             }
 
-            var (err, totalGiam, sau) = await VoucherCartLogic.ValidateStackedAsync(
+            decimal memberDiscount = subTotal * ((rankCap ?? 0) / 100m);
+            decimal afterMemberDiscount = subTotal - memberDiscount;
+
+            var (err, totalVoucherDiscount, sau) = await VoucherCartLogic.ValidateStackedAsync(
                 _context,
                 parts,
                 maKH,
-                subTotal,
+                afterMemberDiscount,
                 cartIds,
                 ngayDichVu,
                 now,
@@ -253,7 +253,9 @@ namespace MinhTamHair.KhanchHang.Controllers
             if (err != null)
                 return BadRequest(new { message = err });
 
-            return Ok(new { totalDiscount = totalGiam, finalAmount = sau, codes = parts });
+            decimal totalGiam = memberDiscount + totalVoucherDiscount;
+
+            return Ok(new { totalDiscount = totalGiam, finalAmount = sau, codes = parts, memberDiscount = memberDiscount, voucherAmount = totalVoucherDiscount, memberRankPercent = rankCap ?? 0 });
         }
 
         [HttpPost("create-payment")]

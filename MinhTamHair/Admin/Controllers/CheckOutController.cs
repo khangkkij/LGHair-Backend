@@ -66,11 +66,11 @@ namespace MinhTamHair.Admin.Controllers
             var ld = await _context.Lichdats
                 .AsNoTracking()
                 .Include(x => x.MaKhNavigation)
-                .FirstOrDefaultAsync(x => x.MaLd == cleanId && x.TrangThai == 3);
+                .FirstOrDefaultAsync(x => x.MaLd.Trim() == cleanId && x.TrangThai == 3);
 
             if (ld == null) return NotFound("Không tìm thấy đơn hàng đang phục vụ.");
 
-            var hoaDons = await _context.HoaDons.AsNoTracking().Where(h => h.MaLd == cleanId).ToListAsync();
+            var hoaDons = await _context.HoaDons.AsNoTracking().Where(h => h.MaLd == ld.MaLd).ToListAsync();
             var mainHoaDon = hoaDons.FirstOrDefault(h => !h.MaHd.StartsWith("SP")) ?? hoaDons.FirstOrDefault();
             var maHds = hoaDons.Select(h => h.MaHd).ToList();
 
@@ -95,6 +95,9 @@ namespace MinhTamHair.Admin.Controllers
                         id = ct.MaDv ?? ct.MaCb,
                         ten = ct.MaDvNavigation.TenDv ?? ct.MaCbNavigation.TenCombo,
                         gia = ct.GiaLucDat ?? 0,
+                        phanTramHoaHong = ct.MaDv != null && ct.MaDvNavigation != null
+                            ? ((ct.MaDvNavigation.PhanTramHoaHong ?? 0) > 0 ? ct.MaDvNavigation.PhanTramHoaHong.Value : 10m)
+                            : 10m
                     }).ToList(),
 
                 sanPhams = _context.ChitietHoadonSps
@@ -104,7 +107,8 @@ namespace MinhTamHair.Admin.Controllers
                         id = temp.ct.MaBienThe,
                         ten = sp.TenSp + " - " + temp.bt.TenBienThe,
                         soLuong = temp.ct.SoLuong,
-                        gia = temp.ct.DonGiaLucBan
+                        gia = temp.ct.DonGiaLucBan,
+                        phanTramHoaHong = (temp.bt.PhanTramHoaHong ?? 0) > 0 ? temp.bt.PhanTramHoaHong.Value : 10m
                     }).ToList()
             };
 
@@ -357,7 +361,8 @@ namespace MinhTamHair.Admin.Controllers
                                         tenSanPham = sp.TenSp + " - " + bt.TenBienThe,
                                         gia = bt.GiaBan ?? 0,
                                         soLuongTon = bt.SoLuongTon,
-                                        hinhAnh = string.IsNullOrEmpty(bt.HinhAnhDaiDien) ? sp.HinhAnhDaiDien : bt.HinhAnhDaiDien
+                                        hinhAnh = string.IsNullOrEmpty(bt.HinhAnhDaiDien) ? sp.HinhAnhDaiDien : bt.HinhAnhDaiDien,
+                                        phanTramHoaHong = (bt.PhanTramHoaHong ?? 0) > 0 ? bt.PhanTramHoaHong.Value : 10m
                                     }).ToListAsync();
                 return Ok(result);
             }

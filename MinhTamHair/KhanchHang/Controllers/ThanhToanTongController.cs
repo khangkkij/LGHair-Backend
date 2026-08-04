@@ -384,7 +384,6 @@ namespace MinhTamHair.KhanchHang.Controllers
         public async Task<IActionResult> PreviewVoucherStack(string maKH, [FromQuery] string? codes, [FromQuery] decimal subTotal, [FromQuery] string? itemIds)
         {
             var parts = string.IsNullOrWhiteSpace(codes) ? new List<string>() : codes.Split(',').Select(VoucherCartLogic.NormalizeMaCode).Take(2).ToList();
-            if (parts.Count == 0) return Ok(new { totalDiscount = 0m, finalAmount = subTotal });
 
             var kh = await _context.Khachhangs.Include(k => k.MaCodes).FirstOrDefaultAsync(k => k.MaKh == maKH);
             if (kh == null) return Ok(new { totalDiscount = 0m, finalAmount = subTotal });
@@ -399,10 +398,15 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             var cartIds = string.IsNullOrWhiteSpace(itemIds) ? new List<string>() : itemIds.Split(',').ToList();
 
-            var (err, totalGiam, sau) = await VoucherCartLogic.ValidateStackedAsync(_context, parts, maKH, subTotal, cartIds, VnTimeHelper.Now(), VnTimeHelper.Now(), maRank, rankCap, maxVouchersAllowed: 2);
+            decimal memberDiscount = subTotal * ((rankCap ?? 0) / 100m);
+            decimal afterMemberDiscount = subTotal - memberDiscount;
+
+            var (err, totalVoucherDiscount, sau) = await VoucherCartLogic.ValidateStackedAsync(_context, parts, maKH, afterMemberDiscount, cartIds, VnTimeHelper.Now(), VnTimeHelper.Now(), maRank, rankCap, maxVouchersAllowed: 2);
 
             if (err != null) return BadRequest(new { message = err });
-            return Ok(new { totalDiscount = totalGiam, finalAmount = sau, codes = parts });
+
+            decimal totalGiam = memberDiscount + totalVoucherDiscount;
+            return Ok(new { totalDiscount = totalGiam, finalAmount = sau, codes = parts, memberDiscount = memberDiscount, voucherAmount = totalVoucherDiscount, memberRankPercent = rankCap ?? 0 });
         }
 
         // LƯU TẤT CẢ VÀO CƠ SỞ DỮ LIỆU
