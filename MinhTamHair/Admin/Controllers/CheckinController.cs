@@ -42,7 +42,7 @@ namespace MinhTamHair.Admin.Controllers
                     daThanhToan = _context.HoaDons.Where(hd => hd.MaLd == ld.MaLd).Select(hd => hd.TienDaTra ?? 0).FirstOrDefault(),
 
                     voucher = _context.HoaDons.Where(hd => hd.MaLd == ld.MaLd).Select(hd => hd.MaCode).FirstOrDefault(),
-
+                    phanTramGiamVip = _context.HoaDons.Where(hd => hd.MaLd == ld.MaLd).Select(hd => hd.PhanTramGiamVip ?? 0).FirstOrDefault(),
                     tienGiam = _context.HoaDons.Where(hd => hd.MaLd == ld.MaLd).Select(hd => (hd.TongTien ?? 0) - (hd.ThanhTien ?? 0)).FirstOrDefault(),
 
                     maNv = _context.ChitietLichdats
@@ -121,6 +121,7 @@ namespace MinhTamHair.Admin.Controllers
                 daThanhToan = _context.HoaDons.Where(hd => hd.MaLd == ld.MaLd).Select(hd => hd.TienDaTra ?? 0).FirstOrDefault(),
 
                 voucher = _context.HoaDons.Where(hd => hd.MaLd == ld.MaLd).Select(hd => hd.MaCode).FirstOrDefault(),
+                phanTramGiamVip = _context.HoaDons.Where(hd => hd.MaLd == ld.MaLd).Select(hd => hd.PhanTramGiamVip ?? 0).FirstOrDefault(),
                 tienGiam = _context.HoaDons.Where(hd => hd.MaLd == ld.MaLd).Select(hd => (hd.TongTien ?? 0) - (hd.ThanhTien ?? 0)).FirstOrDefault(),
 
                 maNv = _context.ChitietLichdats
