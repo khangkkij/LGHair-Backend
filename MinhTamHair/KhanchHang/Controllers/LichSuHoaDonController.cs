@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using MinhTamHair.Models;
@@ -86,13 +86,13 @@ namespace MinhTamHair.KhanchHang.Controllers
                         .Where(ct => ct.MaLd == ld.MaLd)
                         .Sum(ct => ct.GiaLucDat) ?? 0m,
 
-                    voucherGiam = _context.HoaDons
-                        .Where(hd => hd.MaLd == ld.MaLd && !string.IsNullOrEmpty(hd.MaCode))
+                    hoaDonInfo = _context.HoaDons
+                        .Where(hd => hd.MaLd == ld.MaLd)
                         .Select(hd => new {
+                            phanTramGiamVip = hd.PhanTramGiamVip,
                             code = hd.MaCode,
-                            amount = ((hd.TongTien ?? 0m) - (hd.ThanhTien ?? 0m)) > 0
-                                    ? ((hd.TongTien ?? 0m) - (hd.ThanhTien ?? 0m))
-                                : 0m
+                            tongTien = hd.TongTien ?? 0m,
+                            thanhTien = hd.ThanhTien ?? 0m
                         }).FirstOrDefault(),
 
                     trangThai = ld.TrangThai
@@ -101,11 +101,39 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             if (detail == null) return NotFound();
 
-            // FIX LỖI CASTING: Ép kiểu sang decimal và xử lý null bằng ?? 0m
             decimal totalOriginal = detail.items.Sum(i => (decimal)i.originalPrice);
             decimal flashSaleDiscount = totalOriginal - detail.subTotal;
-            decimal voucherAmount = detail.voucherGiam?.amount ?? 0m;
-            decimal finalAmount = detail.subTotal - voucherAmount;
+
+            decimal memberDiscount = 0m;
+            decimal voucherAmount = 0m;
+            object? voucherGiam = null;
+
+            if (detail.hoaDonInfo != null)
+            {
+                decimal totalDiscount = detail.hoaDonInfo.tongTien - detail.hoaDonInfo.thanhTien;
+                if (totalDiscount > 0)
+                {
+                    if (detail.hoaDonInfo.phanTramGiamVip > 0 && detail.subTotal > 0)
+                    {
+                        memberDiscount = Math.Round(detail.subTotal * ((decimal)detail.hoaDonInfo.phanTramGiamVip.Value / 100m), 0);
+                    }
+                    else if (string.IsNullOrEmpty(detail.hoaDonInfo.code))
+                    {
+                        // Fallback for old bookings without PhanTramGiamVip and no voucher
+                        memberDiscount = totalDiscount;
+                    }
+                    
+                    voucherAmount = totalDiscount - memberDiscount;
+                    if (voucherAmount < 0) voucherAmount = 0m;
+                }
+
+                if (!string.IsNullOrEmpty(detail.hoaDonInfo.code) && voucherAmount > 0)
+                {
+                    voucherGiam = new { code = detail.hoaDonInfo.code, amount = voucherAmount };
+                }
+            }
+
+            decimal finalAmount = detail.subTotal - memberDiscount - voucherAmount;
 
             return Ok(new
             {
@@ -116,7 +144,8 @@ namespace MinhTamHair.KhanchHang.Controllers
                 detail.items,
                 totalOriginal,
                 flashSaleDiscount,
-                voucherGiam = detail.voucherGiam,
+                memberDiscount,
+                voucherGiam,
                 finalAmount,
                 detail.trangThai
             });

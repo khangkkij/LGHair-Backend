@@ -60,6 +60,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         originalPrice = s.Gia,    // Giá gốc
                         duration = s.ThoiGianLam ?? 30,
                         icon = "fas fa-cut",
+                        phanTramHoaHong = s.PhanTramHoaHong ?? 0,
                         hinhAnh = s.Hinhanhs.Select(h => h.DuongDan).FirstOrDefault()
                     };
                 }).ToList();
@@ -76,6 +77,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 // Dùng Combo_DichVus theo đúng class C# của bạn
                 duration = c.Combo_DichVus.Sum(ct => ct.DichVu.ThoiGianLam ?? 30),
                 icon = "fas fa-layer-group",
+                phanTramHoaHong = 0,
                 hinhAnh = c.HinhAnh
             }).ToList();
 
@@ -121,12 +123,23 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             string? maRank = kh?.MaRank;
             int? rankCap = null;
+            decimal tienGiamThanhVien = 0m;
+            int phanTramGiamRank = 0;
             if (!string.IsNullOrWhiteSpace(maRank))
             {
-                var rank = await _context.Hangthanhviens.AsNoTracking()
-                    .FirstOrDefaultAsync(r => r.MaRank == maRank && (r.TrangThai == null || r.TrangThai == 1));
-                rankCap = rank?.PhanTramGiamGia;
+                var rank = await _context.Hangthanhviens.AsNoTracking().FirstOrDefaultAsync(r => r.MaRank == maRank && (r.TrangThai == null || r.TrangThai == 1));
+                if (rank != null)
+                {
+                    rankCap = rank.PhanTramGiamGia;
+                    phanTramGiamRank = rank.PhanTramGiamGia ?? 0;
+                    if (phanTramGiamRank > 0 && subTotal > 0)
+                    {
+                        tienGiamThanhVien = Math.Round(subTotal * ((decimal)phanTramGiamRank / 100m), 0);
+                    }
+                }
             }
+            
+            decimal subTotalSauKhiGiamRank = subTotal - tienGiamThanhVien;
 
             var publicVouchers = await _context.Vouchers.AsNoTracking()
                 .Where(v => (v.TrangThai == null || v.TrangThai == 1)
@@ -153,23 +166,21 @@ namespace MinhTamHair.KhanchHang.Controllers
                 if (v.TrangThai != null && v.TrangThai != 1) continue;
                 if (v.NgayBatDau.HasValue && now < v.NgayBatDau.Value) continue;
                 if (v.NgayKetThuc.HasValue && now > v.NgayKetThuc.Value) continue;
-                if (v.SoLuong.HasValue && (v.SoLuongDaDung ?? 0) >= v.SoLuong.Value) continue;
-
                 var uses = usageMap.GetValueOrDefault(v.MaCode, 0);
                 if (uses >= 1) continue;
-                var err = VoucherCartLogic.ValidateAndCalculate(v, uses, subTotal, cartIds, ngayDichVu, now, maRank, rankCap, out var tienGiam, out _);
+                var err = VoucherCartLogic.ValidateAndCalculate(v, uses, subTotalSauKhiGiamRank, cartIds, now, now, maRank, rankCap, out var tienGiam, out _);
 
                 decimal displayDiscount = tienGiam;
                 if (displayDiscount == 0)
                 {
                     if (v.SoTienGiam.HasValue && v.SoTienGiam > 0)
                         displayDiscount = v.SoTienGiam.Value;
-                    else if (v.PhanTramGiam.HasValue && v.PhanTramGiam > 0 && subTotal > 0)
-                        displayDiscount = Math.Round(subTotal * v.PhanTramGiam.Value / 100m, 0);
+                    else if (v.PhanTramGiam.HasValue && v.PhanTramGiam > 0 && subTotalSauKhiGiamRank > 0)
+                        displayDiscount = Math.Round(subTotalSauKhiGiamRank * v.PhanTramGiam.Value / 100m, 0);
                 }
 
                 string desc = v.MoTa ?? "";
-                if (v.GiaTriToiThieu.HasValue && v.GiaTriToiThieu > 0 && subTotal < v.GiaTriToiThieu.Value)
+                if (v.GiaTriToiThieu.HasValue && v.GiaTriToiThieu > 0 && subTotalSauKhiGiamRank < v.GiaTriToiThieu.Value)
                 {
                     desc += $" (Đơn tối thiểu {v.GiaTriToiThieu.Value:N0}đ)";
                 }
@@ -207,53 +218,95 @@ namespace MinhTamHair.KhanchHang.Controllers
                     .Take(1)
                     .ToList();
 
-            if (parts.Count == 0)
-                return Ok(new { totalDiscount = 0m, finalAmount = subTotal, codes = Array.Empty<string>() });
-
             var kh = await _context.Khachhangs.AsNoTracking()
                 .Include(k => k.MaCodes)
                 .FirstOrDefaultAsync(k => k.MaKh == maKH);
+            
             if (kh == null)
-                return Ok(new { totalDiscount = 0m, finalAmount = subTotal, codes = parts });
+                return Ok(new { totalDiscount = 0m, memberDiscount = 0m, finalAmount = subTotal, codes = parts });
 
+            // 1. TÍNH TOÁN MEMBER DISCOUNT TRƯỚC
+            string? maRank = kh.MaRank;
+            int? rankCap = null;
+            decimal memberDiscount = 0m;
+            if (!string.IsNullOrWhiteSpace(maRank))
+            {
+                var rank = await _context.Hangthanhviens.AsNoTracking()
+                    .FirstOrDefaultAsync(r => r.MaRank == maRank && (r.TrangThai == null || r.TrangThai == 1));
+                if (rank != null)
+                {
+                    rankCap = rank.PhanTramGiamGia;
+                    if (rank.PhanTramGiamGia > 0 && subTotal > 0)
+                    {
+                        memberDiscount = Math.Round(subTotal * ((decimal)rank.PhanTramGiamGia.Value / 100m), 0);
+                    }
+                }
+            }
+
+            // 2. KIỂM TRA QUYỀN SỞ HỮU VOUCHER (Bao gồm voucher riêng của KH và voucher công khai)
+            var now = VnTimeHelper.Now();
             var owned = new HashSet<string>(kh.MaCodes.Select(x => x.MaCode), StringComparer.OrdinalIgnoreCase);
+            var publicVouchers = await _context.Vouchers.AsNoTracking()
+                .Where(v => (v.TrangThai == null || v.TrangThai == 1)
+                         && (!v.NgayBatDau.HasValue || v.NgayBatDau <= now)
+                         && (!v.NgayKetThuc.HasValue || v.NgayKetThuc >= now)
+                         && (!v.SoLuong.HasValue || (v.SoLuongDaDung ?? 0) < v.SoLuong))
+                .Select(v => v.MaCode)
+                .ToListAsync();
+            foreach (var pv in publicVouchers) owned.Add(pv);
+
             foreach (var c in parts)
             {
                 if (!owned.Contains(c))
-                    return BadRequest(new { message = $"Bạn không sở hữu mã: {c}" });
+                {
+                    return Ok(new { 
+                        totalDiscount = 0m, 
+                        memberDiscount = memberDiscount, 
+                        finalAmount = Math.Max(0m, subTotal - memberDiscount), 
+                        codes = parts, 
+                        errorMessage = $"Mã voucher không tồn tại hoặc đã hết hạn: {c}" 
+                    });
+                }
             }
 
-            var now = VnTimeHelper.Now();
             var ngayDichVu = ngayGioHen ?? now;
             var cartIds = string.IsNullOrWhiteSpace(serviceIds)
                 ? new List<string>()
                 : serviceIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
-            string? maRank = kh.MaRank;
-            int? rankCap = null;
-            if (!string.IsNullOrWhiteSpace(maRank))
+            // 3. TÍNH TOÁN VOUCHER DISCOUNT
+            decimal totalGiam = 0m;
+            if (parts.Count > 0)
             {
-                var rank = await _context.Hangthanhviens.AsNoTracking()
-                    .FirstOrDefaultAsync(r => r.MaRank == maRank && (r.TrangThai == null || r.TrangThai == 1));
-                rankCap = rank?.PhanTramGiamGia;
+                var (err, voucherTotalGiam, sau) = await VoucherCartLogic.ValidateStackedAsync(
+                    _context,
+                    parts,
+                    maKH,
+                    subTotal,
+                    cartIds,
+                    ngayDichVu,
+                    now,
+                    maRank,
+                    rankCap,
+                    maxVouchersAllowed: 1);
+
+                if (err != null)
+                {
+                    return Ok(new { 
+                        totalDiscount = 0m, 
+                        memberDiscount = memberDiscount, 
+                        finalAmount = Math.Max(0m, subTotal - memberDiscount), 
+                        codes = parts, 
+                        errorMessage = err 
+                    });
+                }
+
+                totalGiam = voucherTotalGiam;
             }
 
-            var (err, totalGiam, sau) = await VoucherCartLogic.ValidateStackedAsync(
-                _context,
-                parts,
-                maKH,
-                subTotal,
-                cartIds,
-                ngayDichVu,
-                now,
-                maRank,
-                rankCap,
-                maxVouchersAllowed: 1);
+            decimal finalAmount = Math.Max(0m, subTotal - memberDiscount - totalGiam);
 
-            if (err != null)
-                return BadRequest(new { message = err });
-
-            return Ok(new { totalDiscount = totalGiam, finalAmount = sau, codes = parts });
+            return Ok(new { totalDiscount = totalGiam, memberDiscount = memberDiscount, finalAmount = finalAmount, codes = parts });
         }
 
         [HttpPost("create-payment")]
@@ -383,7 +436,39 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                     decimal subtotal = model.Services.Sum(s => s.Price);
 
-                    // 2. XỬ LÝ VOUCHER
+                    // 2. XỬ LÝ GIẢM GIÁ THÀNH VIÊN & VOUCHER
+                    decimal tongSauGiam = subtotal;
+                    decimal tienGiamThanhVien = 0m;
+
+                    // 2.1. Lấy thông tin khách hàng và Hạng thành viên
+                    var khachHangDb = await _context.Khachhangs.AsNoTracking()
+                        .Include(k => k.MaCodes)
+                        .FirstOrDefaultAsync(k => k.MaKh == currentMaKh);
+
+                    string? maRank = khachHangDb?.MaRank;
+                    int? phanTramGiamRank = 0;
+                    int? rankCap = null;
+
+                    if (!string.IsNullOrWhiteSpace(maRank))
+                    {
+                        var rank = await _context.Hangthanhviens.AsNoTracking()
+                            .FirstOrDefaultAsync(r => r.MaRank == maRank && (r.TrangThai == null || r.TrangThai == 1));
+
+                        if (rank != null)
+                        {
+                            phanTramGiamRank = rank.PhanTramGiamGia ?? 0;
+                            rankCap = rank.PhanTramGiamGia; // Dùng làm cap cho voucher nếu logic yêu cầu
+                        }
+                    }
+
+                    // 2.2. Tính tiền giảm giá theo Hạng thành viên (Áp dụng trực tiếp trên Subtotal)
+                    if (phanTramGiamRank > 0 && subtotal > 0)
+                    {
+                        tienGiamThanhVien = Math.Round(subtotal * ((decimal)phanTramGiamRank.Value / 100m), 0);
+                        tongSauGiam -= tienGiamThanhVien;
+                    }
+
+                    // 2.3. Xử lý giảm giá từ Voucher (Áp dụng chồng lên hoặc theo logic của VoucherCartLogic)
                     var codesList = new List<string>();
                     if (model.MaCodes != null && model.MaCodes.Count > 0)
                     {
@@ -399,7 +484,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                     }
 
                     string? maCodeNorm = codesList.Count > 0 ? codesList[0] : null;
-                    decimal tongSauGiam = subtotal;
 
                     if (codesList.Count > 0)
                     {
@@ -409,37 +493,36 @@ namespace MinhTamHair.KhanchHang.Controllers
                             return BadRequest(new { message = "Không được dùng trùng một mã voucher." });
                         }
 
-                        var khForRank = await _context.Khachhangs.AsNoTracking()
-                            .Include(k => k.MaCodes)
-                            .FirstOrDefaultAsync(k => k.MaKh == currentMaKh);
-
-                        if (khForRank == null)
+                        if (khachHangDb == null)
                         {
                             await transaction.RollbackAsync();
                             return BadRequest(new { message = "Không tìm thấy khách hàng." });
                         }
 
-                        var ownedCodes = new HashSet<string>(khForRank.MaCodes.Select(x => x.MaCode), StringComparer.OrdinalIgnoreCase);
+                        var ownedCodes = new HashSet<string>(khachHangDb.MaCodes.Select(x => x.MaCode), StringComparer.OrdinalIgnoreCase);
+                        var nowForVoucher = VnTimeHelper.Now();
+                        var publicVouchers = await _context.Vouchers.AsNoTracking()
+                            .Where(v => (v.TrangThai == null || v.TrangThai == 1)
+                                     && (!v.NgayBatDau.HasValue || v.NgayBatDau <= nowForVoucher)
+                                     && (!v.NgayKetThuc.HasValue || v.NgayKetThuc >= nowForVoucher)
+                                     && (!v.SoLuong.HasValue || (v.SoLuongDaDung ?? 0) < v.SoLuong))
+                            .Select(v => v.MaCode)
+                            .ToListAsync();
+                        foreach (var pv in publicVouchers) ownedCodes.Add(pv);
+
                         foreach (var c in codesList)
                         {
                             if (!ownedCodes.Contains(c))
                             {
                                 await transaction.RollbackAsync();
-                                return BadRequest(new { message = $"Bạn không sở hữu mã voucher: {c}" });
+                                return BadRequest(new { message = $"Mã voucher không hợp lệ hoặc đã hết hạn: {c}" });
                             }
                         }
 
-                        string? maRank = khForRank.MaRank;
-                        int? rankCap = null;
-                        if (!string.IsNullOrWhiteSpace(maRank))
-                        {
-                            var rank = await _context.Hangthanhviens.AsNoTracking()
-                                .FirstOrDefaultAsync(r => r.MaRank == maRank && (r.TrangThai == null || r.TrangThai == 1));
-                            rankCap = rank?.PhanTramGiamGia;
-                        }
-
                         var cartIds = model.Services.Select(s => s.Id).ToList();
-                        var (vErr, _, sau) = await VoucherCartLogic.ValidateStackedAsync(
+
+                        // Tính toán giảm giá voucher dựa trên số tiền hoặc theo logic ValidateStackedAsync
+                        var (vErr, totalGiamVoucher, sauVoucher) = await VoucherCartLogic.ValidateStackedAsync(
                             _context, codesList, currentMaKh, subtotal, cartIds,
                             model.NgayHen, VnTimeHelper.Now(), maRank, rankCap, maxVouchersAllowed: 1);
 
@@ -448,8 +531,13 @@ namespace MinhTamHair.KhanchHang.Controllers
                             await transaction.RollbackAsync();
                             return BadRequest(new { message = vErr });
                         }
-                        tongSauGiam = sau;
+
+                        // Tổng tiền sau giảm = Subtotal - Tiền giảm thành viên - Tiền giảm voucher
+                        tongSauGiam = Math.Max(0m, subtotal - tienGiamThanhVien - totalGiamVoucher);
                     }
+
+                    // Đảm bảo tổng tiền không bị âm
+                    tongSauGiam = Math.Max(0m, tongSauGiam);
 
                     // 3. TÍNH TOÁN THANH TOÁN
                     decimal total = tongSauGiam;
@@ -511,6 +599,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         TongTien = subtotal,
                         ThanhTien = tongSauGiam,
                         TienDaTra = daThanhToan,
+                        PhanTramGiamVip = phanTramGiamRank,
                         // Tiền đã thu tại lúc tạo (daThanhToan) >= tổng phải trả (tongSauGiam) -> đã thanh toán đủ (2),
                         // ngược lại chỉ mới đặt cọc (1). Trước đây hardcode = 0 khiến hiển thị "Đã Hủy" dù đã thu tiền.
                         TrangThai = daThanhToan >= tongSauGiam ? 2 : 1,
