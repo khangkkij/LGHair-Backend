@@ -233,6 +233,9 @@ namespace MinhTamHair.KhanchHang.Controllers
                 });
             }
 
+            decimal memberDiscount = subTotal * ((rankCap ?? 0) / 100m);
+            decimal afterMemberDiscount = subTotal - memberDiscount;
+
             var cartIds = string.IsNullOrWhiteSpace(productIds) ? new List<string>() : productIds.Split(',').ToList();
             var (err, totalGiam, sau) = await VoucherCartLogic.ValidateStackedAsync(_context, parts, maKH, subTotalSauKhiGiamRank, cartIds, DateTime.Now, DateTime.Now, maRank, rankCap, maxVouchersAllowed: 1);
 
@@ -302,6 +305,23 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                     decimal subTotalSauKhiGiamRank = subTotal - tienGiamThanhVien;
                     tongSauGiam = subTotalSauKhiGiamRank;
+
+                    string? maRank = null;
+                    int? rankCap = null;
+                    if (safeKhachHang != null)
+                    {
+                        var khDb = await _context.Khachhangs.AsNoTracking().FirstOrDefaultAsync(k => k.MaKh == safeKhachHang);
+                        if (khDb != null && !string.IsNullOrWhiteSpace(khDb.MaRank))
+                        {
+                            maRank = khDb.MaRank;
+                            var rankObj = await _context.Hangthanhviens.AsNoTracking().FirstOrDefaultAsync(r => r.MaRank == maRank && (r.TrangThai == null || r.TrangThai == 1));
+                            rankCap = rankObj?.PhanTramGiamGia;
+                        }
+                    }
+
+                    decimal memberDiscount = subTotal * ((rankCap ?? 0) / 100m);
+                    decimal afterMemberDiscount = subTotal - memberDiscount;
+                    tongSauGiam = afterMemberDiscount;
 
                     if (req.VoucherIds != null && req.VoucherIds.Any() && safeKhachHang != null)
                     {

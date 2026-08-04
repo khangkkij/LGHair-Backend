@@ -66,11 +66,11 @@ namespace MinhTamHair.Admin.Controllers
             var ld = await _context.Lichdats
                 .AsNoTracking()
                 .Include(x => x.MaKhNavigation)
-                .FirstOrDefaultAsync(x => x.MaLd == cleanId && x.TrangThai == 3);
+                .FirstOrDefaultAsync(x => x.MaLd.Trim() == cleanId && x.TrangThai == 3);
 
             if (ld == null) return NotFound("Không tìm thấy đơn hàng đang phục vụ.");
 
-            var hoaDons = await _context.HoaDons.AsNoTracking().Where(h => h.MaLd == cleanId).ToListAsync();
+            var hoaDons = await _context.HoaDons.AsNoTracking().Where(h => h.MaLd == ld.MaLd).ToListAsync();
             var mainHoaDon = hoaDons.FirstOrDefault(h => !h.MaHd.StartsWith("SP")) ?? hoaDons.FirstOrDefault();
             var maHds = hoaDons.Select(h => h.MaHd).ToList();
 
