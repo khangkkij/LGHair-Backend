@@ -47,6 +47,35 @@ public class KhachHangListItemDto
     public string? Email { get; set; }
 }
 
+/// <summary>DTO trả về khách hàng có lịch đặt — dùng cho màn Gửi thông báo nhắc lịch.</summary>
+public class KhachHangDatLichDto
+{
+    public string MaLd { get; set; } = null!;
+
+    public string MaKh { get; set; } = null!;
+
+    public string? HoTen { get; set; }
+
+    public string? Sdt { get; set; }
+
+    public string? Email { get; set; }
+
+    /// <summary>Format: yyyy-MM-dd</summary>
+    public string? NgayHen { get; set; }
+
+    /// <summary>Format: HH:mm</summary>
+    public string? GioBatDau { get; set; }
+
+    /// <summary>Format: HH:mm</summary>
+    public string? GioKetThuc { get; set; }
+
+    /// <summary>0=Chờ, 1=Xác nhận, 2=Hoàn thành, 3=Hủy</summary>
+    public int? TrangThai { get; set; }
+
+    public decimal? TongTienDuKien { get; set; }
+}
+
+
 /// <summary>Trạng thái Zalo cho màn Gửi thông báo (Personal bridge / ZNS / HttpTest).</summary>
 public class ZaloGuiTrangThaiDto
 {
