@@ -141,18 +141,8 @@ namespace MinhTamHair.KhanchHang.Controllers
             
             decimal subTotalSauKhiGiamRank = subTotal - tienGiamThanhVien;
 
-            var publicVouchers = await _context.Vouchers.AsNoTracking()
-                .Where(v => (v.TrangThai == null || v.TrangThai == 1)
-                         && (!v.NgayBatDau.HasValue || v.NgayBatDau <= now)
-                         && (!v.NgayKetThuc.HasValue || v.NgayKetThuc >= now)
-                         && (!v.SoLuong.HasValue || (v.SoLuongDaDung ?? 0) < v.SoLuong))
-                .ToListAsync();
-
             var myCodes = kh != null ? kh.MaCodes : new List<Voucher>();
-            var allVouchers = myCodes.Concat(publicVouchers)
-                .GroupBy(v => v.MaCode, StringComparer.OrdinalIgnoreCase)
-                .Select(g => g.First())
-                .ToList();
+            var allVouchers = myCodes.ToList();
 
             var usageMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             foreach (var c in allVouchers.Select(v => v.MaCode))
@@ -243,17 +233,9 @@ namespace MinhTamHair.KhanchHang.Controllers
                 }
             }
 
-            // 2. KIỂM TRA QUYỀN SỞ HỮU VOUCHER (Bao gồm voucher riêng của KH và voucher công khai)
+            // 2. KIỂM TRA QUYỀN SỞ HỮU VOUCHER (Chỉ xét voucher riêng của KH)
             var now = VnTimeHelper.Now();
             var owned = new HashSet<string>(kh.MaCodes.Select(x => x.MaCode), StringComparer.OrdinalIgnoreCase);
-            var publicVouchers = await _context.Vouchers.AsNoTracking()
-                .Where(v => (v.TrangThai == null || v.TrangThai == 1)
-                         && (!v.NgayBatDau.HasValue || v.NgayBatDau <= now)
-                         && (!v.NgayKetThuc.HasValue || v.NgayKetThuc >= now)
-                         && (!v.SoLuong.HasValue || (v.SoLuongDaDung ?? 0) < v.SoLuong))
-                .Select(v => v.MaCode)
-                .ToListAsync();
-            foreach (var pv in publicVouchers) owned.Add(pv);
 
             foreach (var c in parts)
             {
@@ -499,16 +481,8 @@ namespace MinhTamHair.KhanchHang.Controllers
                             return BadRequest(new { message = "Không tìm thấy khách hàng." });
                         }
 
+                        // Chỉ cho phép dùng các mã khách đã thu thập
                         var ownedCodes = new HashSet<string>(khachHangDb.MaCodes.Select(x => x.MaCode), StringComparer.OrdinalIgnoreCase);
-                        var nowForVoucher = VnTimeHelper.Now();
-                        var publicVouchers = await _context.Vouchers.AsNoTracking()
-                            .Where(v => (v.TrangThai == null || v.TrangThai == 1)
-                                     && (!v.NgayBatDau.HasValue || v.NgayBatDau <= nowForVoucher)
-                                     && (!v.NgayKetThuc.HasValue || v.NgayKetThuc >= nowForVoucher)
-                                     && (!v.SoLuong.HasValue || (v.SoLuongDaDung ?? 0) < v.SoLuong))
-                            .Select(v => v.MaCode)
-                            .ToListAsync();
-                        foreach (var pv in publicVouchers) ownedCodes.Add(pv);
 
                         foreach (var c in codesList)
                         {
