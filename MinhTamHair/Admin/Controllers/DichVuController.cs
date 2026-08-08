@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Distributed;
@@ -158,7 +158,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             {
                 foreach (var imgUrl in dto.DeletedImages)
                 {
-                    var relativePath = imgUrl.Replace("https://localhost:7196", "");
+                    var relativePath = imgUrl.Replace("https://localhost:7196", "").Replace("https://latuthien2005-001-site1.dtempurl.com", "");
 
                     var img = dv.Hinhanhs.FirstOrDefault(x => x.DuongDan == relativePath);
 
