@@ -1,3 +1,6 @@
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -10,10 +13,8 @@ using MinhTamHair.Services.Chat;
 using MinhTamHair.Services.Gemini;
 using MinhTamHair.Services.LightX;
 using MinhTamHair.Services.UploadIMG;
-using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using StackExchange.Redis;
+using static System.Net.WebRequestMethods;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddJsonFile("appsettings.Zalo.local.json", optional: true, reloadOnChange: true);
@@ -60,8 +61,10 @@ builder.Services.AddCors(options =>
                   "http://localhost:5174",   // Admin app HTTP
                   "https://localhost:5173",  // Customer app HTTPS (basicSsl)
                   "https://localhost:5174",  // Admin app HTTPS (basicSsl)
-                  "https://localhost:5175",  // Dự phòng cổng khác
-                  "https://localhost:5176")
+                  "https://lghair-admin.netlify.app",
+                  "https://lghair.netlify.app",
+                  "https://lghair-customer.netlify.app")
+              .SetIsOriginAllowed(_ => true) // Cho phép động các origin từ Netlify / Localhost
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();
