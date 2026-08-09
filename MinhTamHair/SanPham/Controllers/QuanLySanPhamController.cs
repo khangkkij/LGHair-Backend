@@ -48,6 +48,7 @@ public class QuanLySanPhamController : ControllerBase
     public async Task<IActionResult> GetDanhMuc()
     {
         var list = await _context.DanhMucSPs
+            .Where(d => d.TrangThai == 1) // chỉ lấy danh mục đang hiện, loại banner (2) và danh mục tạm ẩn (0)
             .OrderBy(d => d.TenDanhMuc)
             .Select(d => new { d.MaDMSP, d.TenDanhMuc, d.TrangThai })
             .ToListAsync();
@@ -69,12 +70,17 @@ public class QuanLySanPhamController : ControllerBase
         [FromQuery] string? keyword,
         [FromQuery] string? maDanhMuc,
         [FromQuery] string? maTH,
-        [FromQuery] int? trangThai)
+        [FromQuery] int? trangThai,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 10)
     {
         await DongBoTrangThaiTheoSoLuongAsync();
-        var query = _context.SanPhams
-            .Include(s => s.BienTheSanphams)
-            .AsQueryable();
+
+        if (page < 1) page = 1;
+        if (pageSize < 1) pageSize = 10;
+        if (pageSize > 100) pageSize = 100; // chặn client xin quá nhiều 1 lần
+
+        var query = _context.SanPhams.AsNoTracking().AsQueryable();
 
         if (!string.IsNullOrWhiteSpace(keyword))
             query = query.Where(s => s.TenSp!.Contains(keyword) || s.MaSp.Contains(keyword));
@@ -88,8 +94,15 @@ public class QuanLySanPhamController : ControllerBase
         if (trangThai.HasValue)
             query = query.Where(s => s.TrangThai == trangThai.Value);
 
+        // Đếm tổng số bản ghi khớp filter (1 câu SELECT COUNT, không kéo dữ liệu về)
+        var total = await query.CountAsync();
+        var totalPages = (int)Math.Ceiling(total / (double)pageSize);
+
+        // Chỉ lấy đúng số dòng của trang hiện tại — DB tự Skip/Take, không tải hết rồi cắt ở app
         var list = await query
             .OrderBy(s => s.TenSp)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
             .Select(s => new
             {
                 s.MaSp,
@@ -102,7 +115,7 @@ public class QuanLySanPhamController : ControllerBase
             })
             .ToListAsync();
 
-        return Ok(list);
+        return Ok(new { data = list, total, totalPages, page, pageSize });
     }
 
     [HttpPost]

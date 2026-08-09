@@ -25,6 +25,7 @@ public class QuanLyDanhMucSPController : ControllerBase
     {
         var query = _context.DanhMucSPs
             .Include(d => d.SanPhams)
+            .Where(d => d.TrangThai != TRANG_THAI_BANNER) // loại bỏ các row banner khỏi danh sách danh mục
             .AsQueryable();
 
         if (!string.IsNullOrWhiteSpace(keyword))
@@ -56,7 +57,7 @@ public class QuanLyDanhMucSPController : ControllerBase
     {
         var d = await _context.DanhMucSPs
             .Include(x => x.SanPhams)
-            .FirstOrDefaultAsync(x => x.MaDMSP == id);
+            .FirstOrDefaultAsync(x => x.MaDMSP == id && x.TrangThai != TRANG_THAI_BANNER);
 
         if (d == null) return NotFound(new { message = "Không tìm thấy danh mục." });
 
@@ -141,7 +142,8 @@ public class QuanLyDanhMucSPController : ControllerBase
         }
 
         var dm = await _context.DanhMucSPs.FindAsync(id);
-        if (dm == null) return NotFound(new { message = "Không tìm thấy danh mục." });
+        if (dm == null || dm.TrangThai == TRANG_THAI_BANNER)
+            return NotFound(new { message = "Không tìm thấy danh mục." });
 
         if (!string.IsNullOrWhiteSpace(req.TenDanhMuc))
         {
@@ -150,6 +152,7 @@ public class QuanLyDanhMucSPController : ControllerBase
             // Kiểm tra tên trùng với danh mục khác
             var dup = await _context.DanhMucSPs.FirstOrDefaultAsync(d =>
                 d.MaDMSP != id &&
+                d.TrangThai != TRANG_THAI_BANNER &&
                 d.TenDanhMuc != null &&
                 d.TenDanhMuc.ToLower() == tenNorm.ToLower());
             if (dup != null)
@@ -183,7 +186,8 @@ public class QuanLyDanhMucSPController : ControllerBase
     public async Task<IActionResult> UpdateTrangThai(string id, [FromBody] TrangThaiRequest req)
     {
         var dm = await _context.DanhMucSPs.FindAsync(id);
-        if (dm == null) return NotFound(new { message = "Không tìm thấy danh mục." });
+        if (dm == null || dm.TrangThai == TRANG_THAI_BANNER)
+            return NotFound(new { message = "Không tìm thấy danh mục." });
 
         if (req.TrangThai != dm.TrangThai)
         {
@@ -216,7 +220,7 @@ public class QuanLyDanhMucSPController : ControllerBase
     {
         var dm = await _context.DanhMucSPs
             .Include(d => d.SanPhams)
-            .FirstOrDefaultAsync(d => d.MaDMSP == id);
+            .FirstOrDefaultAsync(d => d.MaDMSP == id && d.TrangThai != TRANG_THAI_BANNER);
 
         if (dm == null) return NotFound(new { message = "Không tìm thấy danh mục." });
 
@@ -228,6 +232,161 @@ public class QuanLyDanhMucSPController : ControllerBase
         _context.DanhMucSPs.Remove(dm);
         await _context.SaveChangesAsync();
         return NoContent();
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // BANNER DANH MỤC
+    // Banner được lưu chung bảng DanhMucSP, với:
+    //   - MaDMSP dạng "<MaDanhMucCha>-<STT>"  (vd: DMSP01-1, DMSP01-2)
+    //     Dùng dấu "-" thay vì "." vì ASP.NET Core route có thể hiểu nhầm
+    //     dấu "." cuối path segment là phần mở rộng file, gây lỗi 404/405.
+    //   - TrangThai = 2  (để phân biệt với danh mục thật: 0 = ẩn, 1 = hiện)
+    //   - TenDanhMuc dùng làm tiêu đề/mô tả banner (không bắt buộc)
+    //   - HinhAnh là ảnh banner
+    // ══════════════════════════════════════════════════════════════════
+
+    private const int TRANG_THAI_BANNER = 2;
+
+    // GET: api/QuanLyDanhMucSP/banner/danh-sach/{maDanhMucCha}
+    [HttpGet("banner/danh-sach/{maDanhMucCha}")]
+    public async Task<IActionResult> GetBanners(string maDanhMucCha)
+    {
+        if (string.IsNullOrWhiteSpace(maDanhMucCha))
+            return BadRequest(new { message = "Mã danh mục cha không hợp lệ." });
+
+        var prefix = maDanhMucCha.Trim().ToUpper() + "-";
+
+        var banners = await _context.DanhMucSPs
+            .Where(dm => dm.TrangThai == TRANG_THAI_BANNER
+                      && dm.MaDMSP.ToUpper().StartsWith(prefix))
+            .OrderBy(dm => dm.MaDMSP)
+            .Select(dm => new
+            {
+                maBanner = dm.MaDMSP,
+                maDanhMucCha = maDanhMucCha,
+                tieuDe = dm.TenDanhMuc,
+                hinhAnh = dm.HinhAnh
+            })
+            .ToListAsync();
+
+        return Ok(banners);
+    }
+
+    // POST: api/QuanLyDanhMucSP/banner
+    // Body: multipart/form-data — MaDanhMucCha (bắt buộc), TieuDe (tùy chọn), File (bắt buộc)
+    [HttpPost("banner")]
+    public async Task<IActionResult> AddBanner([FromForm] string maDanhMucCha, [FromForm] string? tieuDe, IFormFile file)
+    {
+        if (string.IsNullOrWhiteSpace(maDanhMucCha))
+            return BadRequest(new { message = "Vui lòng chọn danh mục cha." });
+
+        maDanhMucCha = maDanhMucCha.Trim().ToUpper();
+
+        var danhMucChaEntity = await _context.DanhMucSPs
+            .FirstOrDefaultAsync(d => d.MaDMSP == maDanhMucCha && d.TrangThai != TRANG_THAI_BANNER);
+        if (danhMucChaEntity == null)
+            return BadRequest(new { message = $"Không tìm thấy danh mục cha \"{maDanhMucCha}\"." });
+
+        if (file == null)
+            return BadRequest(new { message = "Vui lòng chọn ảnh banner." });
+
+        // Sinh số thứ tự tiếp theo cho banner của danh mục này (DMSP01-1, DMSP01-2, ...)
+        var prefix = maDanhMucCha + "-";
+        var existingBanners = await _context.DanhMucSPs
+            .Where(d => d.TrangThai == TRANG_THAI_BANNER && d.MaDMSP.StartsWith(prefix))
+            .Select(d => d.MaDMSP)
+            .ToListAsync();
+
+        int nextStt = 1;
+        if (existingBanners.Any())
+        {
+            nextStt = existingBanners
+                .Select(m =>
+                {
+                    var suffix = m.Substring(prefix.Length);
+                    return int.TryParse(suffix, out var n) ? n : 0;
+                })
+                .DefaultIfEmpty(0)
+                .Max() + 1;
+        }
+
+        var maBanner = $"{maDanhMucCha}-{nextStt}";
+
+        var result = await SaveImageAsync(file, "danhmuc-banner");
+        if (result.Error != null)
+            return BadRequest(new { message = result.Error });
+
+        var banner = new DanhMucSP
+        {
+            MaDMSP = maBanner,
+            TenDanhMuc = string.IsNullOrWhiteSpace(tieuDe) ? danhMucChaEntity.TenDanhMuc : tieuDe.Trim(),
+            HinhAnh = result.Path,
+            TrangThai = TRANG_THAI_BANNER,
+        };
+
+        _context.DanhMucSPs.Add(banner);
+        await _context.SaveChangesAsync();
+
+        return Ok(new
+        {
+            message = "Thêm banner thành công!",
+            maBanner = banner.MaDMSP,
+            hinhAnh = banner.HinhAnh,
+            tieuDe = banner.TenDanhMuc,
+        });
+    }
+
+    // PUT: api/QuanLyDanhMucSP/banner/{maBanner}
+    // Body: multipart/form-data — TieuDe (tùy chọn), File (tùy chọn)
+    [HttpPut("banner/{maBanner:regex(^[[A-Za-z0-9]]+-[[0-9]]+$)}")]
+    public async Task<IActionResult> UpdateBanner(string maBanner, [FromForm] string? tieuDe, IFormFile? file)
+    {
+        var banner = await _context.DanhMucSPs
+            .FirstOrDefaultAsync(d => d.MaDMSP == maBanner && d.TrangThai == TRANG_THAI_BANNER);
+
+        if (banner == null)
+            return NotFound(new { message = "Không tìm thấy banner." });
+
+        if (!string.IsNullOrWhiteSpace(tieuDe))
+            banner.TenDanhMuc = tieuDe.Trim();
+
+        if (file != null)
+        {
+            DeleteImageIfExists(banner.HinhAnh);
+
+            var result = await SaveImageAsync(file, "danhmuc-banner");
+            if (result.Error != null)
+                return BadRequest(new { message = result.Error });
+            banner.HinhAnh = result.Path;
+        }
+
+        await _context.SaveChangesAsync();
+
+        return Ok(new
+        {
+            message = "Cập nhật banner thành công!",
+            maBanner = banner.MaDMSP,
+            hinhAnh = banner.HinhAnh,
+            tieuDe = banner.TenDanhMuc,
+        });
+    }
+
+    // DELETE: api/QuanLyDanhMucSP/banner/{maBanner}
+    [HttpDelete("banner/{maBanner:regex(^[[A-Za-z0-9]]+-[[0-9]]+$)}")]
+    public async Task<IActionResult> DeleteBanner(string maBanner)
+    {
+        var banner = await _context.DanhMucSPs
+            .FirstOrDefaultAsync(d => d.MaDMSP == maBanner && d.TrangThai == TRANG_THAI_BANNER);
+
+        if (banner == null)
+            return NotFound(new { message = "Không tìm thấy banner." });
+
+        DeleteImageIfExists(banner.HinhAnh);
+
+        _context.DanhMucSPs.Remove(banner);
+        await _context.SaveChangesAsync();
+
+        return Ok(new { message = "Đã xóa banner!" });
     }
 
     // ══ IMAGE HELPERS ═════════════════════════════════════════════════
