@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Distributed;
 using MinhTamHair.Models;
@@ -12,16 +13,64 @@ namespace MinhTamHair.Controllers
     {
         private readonly MinhTamHairContext _context;
         private readonly IDistributedCache _cache;
+        private readonly IWebHostEnvironment _env;
 
-        public DanhMucController(MinhTamHairContext context, IDistributedCache cache)
+        // Thư mục lưu ảnh danh mục (bên trong wwwroot)
+        private const string UploadFolder = "uploads/danhmuc";
+        private static readonly string[] AllowedExt = { ".jpg", ".jpeg", ".png", ".webp", ".gif" };
+        private const long MaxFileSize = 5 * 1024 * 1024; // 5MB
+
+        public DanhMucController(MinhTamHairContext context, IDistributedCache cache, IWebHostEnvironment env)
         {
             _context = context;
             _cache = cache;
+            _env = env;
         }
 
-        // ──────────────────────────────────────────────────────────
-        // GET /api/DanhMuc?keyword=&trangThai=
-        // ──────────────────────────────────────────────────────────
+        private (bool ok, string? error) ValidateImage(IFormFile file)
+        {
+            var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
+            if (!AllowedExt.Contains(ext))
+                return (false, "Chỉ chấp nhận ảnh định dạng JPG, PNG, WEBP, GIF.");
+            if (file.Length > MaxFileSize)
+                return (false, "Dung lượng ảnh tối đa 5MB.");
+            return (true, null);
+        }
+
+        private string GetUploadFolderPath()
+        {
+            var webRoot = _env.WebRootPath ?? Path.Combine(_env.ContentRootPath, "wwwroot");
+            var folderPath = Path.Combine(webRoot, UploadFolder);
+            Directory.CreateDirectory(folderPath);
+            return folderPath;
+        }
+
+        private async Task<string> SaveImageAsync(IFormFile file)
+        {
+            var folderPath = GetUploadFolderPath();
+            var fileName = $"{Guid.NewGuid()}{Path.GetExtension(file.FileName)}";
+            var filePath = Path.Combine(folderPath, fileName);
+
+            using (var stream = new FileStream(filePath, FileMode.Create))
+                await file.CopyToAsync(stream);
+
+            return fileName;
+        }
+
+        private void DeleteImageFile(string? fileName)
+        {
+            if (string.IsNullOrEmpty(fileName)) return;
+            var filePath = Path.Combine(GetUploadFolderPath(), fileName);
+            if (System.IO.File.Exists(filePath))
+                System.IO.File.Delete(filePath);
+        }
+
+        private string? GetImageUrl(string? fileName)
+        {
+            if (string.IsNullOrEmpty(fileName)) return null;
+            return $"{Request.Scheme}://{Request.Host}/{UploadFolder}/{fileName}";
+        }
+
         [HttpGet]
         public async Task<IActionResult> GetAll(string? keyword, int? trangThai)
         {
@@ -45,7 +94,7 @@ namespace MinhTamHair.Controllers
             {
                 maDM = d.MaDm,
                 tenDanhMuc = d.TenDanhMuc,
-                hinhAnh = string.IsNullOrEmpty(d.HinhAnh) ? null : d.HinhAnh,
+                hinhAnh = GetImageUrl(d.HinhAnh),
                 ngayTao = d.NgayTao,
                 trangThai = d.TrangThai,
                 soDichVu = d.Dichvus?.Count ?? 0
@@ -53,9 +102,6 @@ namespace MinhTamHair.Controllers
             return Ok(result);
         }
 
-        // ──────────────────────────────────────────────────────────
-        // GET /api/DanhMuc/{id}
-        // ──────────────────────────────────────────────────────────
         [HttpGet("{id}")]
         public async Task<IActionResult> GetById(string id)
         {
@@ -69,7 +115,7 @@ namespace MinhTamHair.Controllers
             {
                 maDM = d.MaDm,
                 tenDanhMuc = d.TenDanhMuc,
-                hinhAnh = d.HinhAnh,
+                hinhAnh = GetImageUrl(d.HinhAnh),
                 ngayTao = d.NgayTao,
                 trangThai = d.TrangThai,
                 soDichVu = d.Dichvus?.Count ?? 0
@@ -77,9 +123,6 @@ namespace MinhTamHair.Controllers
             return Ok(result);
         }
 
-        // ──────────────────────────────────────────────────────────
-        // POST /api/DanhMuc  (multipart/form-data)
-        // ──────────────────────────────────────────────────────────
         [HttpPost]
         public async Task<IActionResult> Create([FromForm] DanhMucDTO dto)
         {
@@ -96,11 +139,20 @@ namespace MinhTamHair.Controllers
             if (await _context.DanhMucs.AnyAsync(x => x.TenDanhMuc.ToLower() == dto.TenDanhMuc.Trim().ToLower()))
                 return BadRequest(new { message = "Tên danh mục đã tồn tại." });
 
+            // ❌ Validate & lưu ảnh (nếu có upload)
+            string? fileName = null;
+            if (dto.HinhAnh != null && dto.HinhAnh.Length > 0)
+            {
+                var (ok, error) = ValidateImage(dto.HinhAnh);
+                if (!ok) return BadRequest(new { message = error });
+                fileName = await SaveImageAsync(dto.HinhAnh);
+            }
+
             var entity = new DanhMuc
             {
                 MaDm = dto.MaDM.Trim().ToUpper(),
                 TenDanhMuc = dto.TenDanhMuc.Trim(),
-                HinhAnh = null,
+                HinhAnh = fileName,
                 NgayTao = DateOnly.FromDateTime(DateTime.Today),
                 TrangThai = dto.TrangThai
             };
@@ -111,9 +163,6 @@ namespace MinhTamHair.Controllers
             return Ok(new { message = "Thêm danh mục thành công.", maDM = entity.MaDm });
         }
 
-        // ──────────────────────────────────────────────────────────
-        // PUT /api/DanhMuc/{id}  (multipart/form-data)
-        // ──────────────────────────────────────────────────────────
         [HttpPut("{id}")]
         public async Task<IActionResult> Update(string id, [FromForm] DanhMucDTO dto)
         {
@@ -124,21 +173,36 @@ namespace MinhTamHair.Controllers
             if (string.IsNullOrWhiteSpace(dto.TenDanhMuc))
                 return BadRequest(new { message = "Tên danh mục không được để trống." });
 
+            if (await _context.DanhMucs.AnyAsync(x => x.MaDm != id && x.TenDanhMuc.ToLower() == dto.TenDanhMuc.Trim().ToLower()))
+                return BadRequest(new { message = "Tên danh mục đã tồn tại." });
+
             entity.TenDanhMuc = dto.TenDanhMuc.Trim();
 
-            if (dto.TrangThai != entity.TrangThai)
+            if (dto.HinhAnh != null && dto.HinhAnh.Length > 0)
+            {
+                var (ok, error) = ValidateImage(dto.HinhAnh);
+                if (!ok) return BadRequest(new { message = error });
+
+                var oldImage = entity.HinhAnh;
+                entity.HinhAnh = await SaveImageAsync(dto.HinhAnh);
+                DeleteImageFile(oldImage);
+            }
+            else if (dto.XoaHinh)
+            {
+                DeleteImageFile(entity.HinhAnh);
+                entity.HinhAnh = null;
+            }
+
+            if (dto.TrangThai.HasValue && dto.TrangThai != entity.TrangThai)
             {
                 entity.TrangThai = dto.TrangThai;
-                await CascadeTrangThaiDichVuAsync(id, dto.TrangThai);
+                await CascadeTrangThaiDichVuAsync(id, dto.TrangThai.Value);
             }
 
             await _context.SaveChangesAsync();
             return Ok(new { message = "Cập nhật danh mục thành công." });
         }
 
-        // ──────────────────────────────────────────────────────────
-        // DELETE /api/DanhMuc/{id}
-        // ──────────────────────────────────────────────────────────
         [HttpDelete("{id}")]
         public async Task<IActionResult> Delete(string id)
         {
@@ -155,15 +219,15 @@ namespace MinhTamHair.Controllers
                     message = $"Không thể xóa! Danh mục đang chứa {entity.Dichvus.Count} dịch vụ."
                 });
 
+            // ❌ Xóa file ảnh vật lý trên đĩa (nếu có) trước khi xóa bản ghi
+            DeleteImageFile(entity.HinhAnh);
+
             _context.DanhMucs.Remove(entity);
             await _context.SaveChangesAsync();
 
             return Ok(new { message = "Xóa danh mục thành công." });
         }
 
-        // ──────────────────────────────────────────────────────────
-        // PATCH /api/DanhMuc/{id}/trangthai  — toggle nhanh
-        // ──────────────────────────────────────────────────────────
         [HttpPatch("{id}/trangthai")]
         public async Task<IActionResult> ToggleTrangThai(string id, [FromBody] ToggleDTO dto)
         {
@@ -181,11 +245,6 @@ namespace MinhTamHair.Controllers
             return Ok(new { message = "Cập nhật trạng thái thành công." });
         }
 
-        /// <summary>
-        /// Đồng bộ trạng thái toàn bộ dịch vụ theo trạng thái mới của danh mục:
-        /// Tạm ẩn (0) → mọi dịch vụ trong danh mục chuyển Ngừng phục vụ (0).
-        /// Đang hiện (1) → mọi dịch vụ trong danh mục chuyển Đang phục vụ (1).
-        /// </summary>
         private async Task CascadeTrangThaiDichVuAsync(string maDM, int trangThaiMoi)
         {
             var dichVus = await _context.Dichvus
