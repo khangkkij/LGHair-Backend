@@ -118,24 +118,26 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             string? maRank = kh?.MaRank;
             int? rankCap = null;
+            decimal tienGiamThanhVien = 0m;
+            int phanTramGiamRank = 0;
             if (!string.IsNullOrWhiteSpace(maRank))
             {
                 var rank = await _context.Hangthanhviens.AsNoTracking().FirstOrDefaultAsync(r => r.MaRank == maRank && (r.TrangThai == null || r.TrangThai == 1));
-                rankCap = rank?.PhanTramGiamGia;
+                if (rank != null)
+                {
+                    rankCap = rank.PhanTramGiamGia;
+                    phanTramGiamRank = rank.PhanTramGiamGia ?? 0;
+                    if (phanTramGiamRank > 0 && subTotal > 0)
+                    {
+                        tienGiamThanhVien = Math.Round(subTotal * ((decimal)phanTramGiamRank / 100m), 0);
+                    }
+                }
             }
-
-            var publicVouchers = await _context.Vouchers.AsNoTracking()
-                .Where(v => (v.TrangThai == null || v.TrangThai == 1)
-                         && (!v.NgayBatDau.HasValue || v.NgayBatDau <= now)
-                         && (!v.NgayKetThuc.HasValue || v.NgayKetThuc >= now)
-                         && (!v.SoLuong.HasValue || (v.SoLuongDaDung ?? 0) < v.SoLuong))
-                .ToListAsync();
+            
+            decimal subTotalSauKhiGiamRank = subTotal - tienGiamThanhVien;
 
             var myCodes = kh != null ? kh.MaCodes : new List<Voucher>();
-            var allVouchers = myCodes.Concat(publicVouchers)
-                .GroupBy(v => v.MaCode, StringComparer.OrdinalIgnoreCase)
-                .Select(g => g.First())
-                .ToList();
+            var allVouchers = myCodes.ToList();
 
             var usageMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             foreach (var c in allVouchers.Select(v => v.MaCode))
@@ -153,19 +155,19 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                 var uses = usageMap.GetValueOrDefault(v.MaCode, 0);
                 if (uses >= 1) continue;
-                var err = VoucherCartLogic.ValidateAndCalculate(v, uses, subTotal, cartIds, now, now, maRank, rankCap, out var tienGiam, out _);
+                var err = VoucherCartLogic.ValidateAndCalculate(v, uses, subTotalSauKhiGiamRank, cartIds, now, now, maRank, rankCap, out var tienGiam, out _);
 
                 decimal displayDiscount = tienGiam;
                 if (displayDiscount == 0)
                 {
                     if (v.SoTienGiam.HasValue && v.SoTienGiam > 0)
                         displayDiscount = v.SoTienGiam.Value;
-                    else if (v.PhanTramGiam.HasValue && v.PhanTramGiam > 0 && subTotal > 0)
-                        displayDiscount = Math.Round(subTotal * v.PhanTramGiam.Value / 100m, 0);
+                    else if (v.PhanTramGiam.HasValue && v.PhanTramGiam > 0 && subTotalSauKhiGiamRank > 0)
+                        displayDiscount = Math.Round(subTotalSauKhiGiamRank * v.PhanTramGiam.Value / 100m, 0);
                 }
 
                 string desc = v.MoTa ?? "";
-                if (v.GiaTriToiThieu.HasValue && v.GiaTriToiThieu > 0 && subTotal < v.GiaTriToiThieu.Value)
+                if (v.GiaTriToiThieu.HasValue && v.GiaTriToiThieu > 0 && subTotalSauKhiGiamRank < v.GiaTriToiThieu.Value)
                 {
                     desc += $" (Đơn tối thiểu {v.GiaTriToiThieu.Value:N0}đ)";
                 }
@@ -185,24 +187,58 @@ namespace MinhTamHair.KhanchHang.Controllers
         public async Task<IActionResult> PreviewVoucherStack(string maKH, [FromQuery] string? codes, [FromQuery] decimal subTotal, [FromQuery] string? productIds)
         {
             var parts = string.IsNullOrWhiteSpace(codes) ? new List<string>() : codes.Split(',').Select(VoucherCartLogic.NormalizeMaCode).Take(1).ToList();
-            if (parts.Count == 0) return Ok(new { totalDiscount = 0m, finalAmount = subTotal });
 
             var kh = await _context.Khachhangs.Include(k => k.MaCodes).FirstOrDefaultAsync(k => k.MaKh == maKH);
-            if (kh == null) return Ok(new { totalDiscount = 0m, finalAmount = subTotal });
-
-            string? maRank = kh.MaRank;
+            
+            string? maRank = kh?.MaRank;
             int? rankCap = null;
-            if (!string.IsNullOrWhiteSpace(maRank))
+            decimal tienGiamThanhVien = 0m;
+            int phanTramGiamRank = 0;
+
+            if (kh != null && !string.IsNullOrWhiteSpace(maRank))
             {
                 var rank = await _context.Hangthanhviens.AsNoTracking().FirstOrDefaultAsync(r => r.MaRank == maRank);
-                rankCap = rank?.PhanTramGiamGia;
+                if (rank != null)
+                {
+                    rankCap = rank.PhanTramGiamGia;
+                    phanTramGiamRank = rank.PhanTramGiamGia ?? 0;
+                    if (phanTramGiamRank > 0 && subTotal > 0)
+                    {
+                        tienGiamThanhVien = Math.Round(subTotal * ((decimal)phanTramGiamRank / 100m), 0);
+                    }
+                }
             }
 
+            decimal subTotalSauKhiGiamRank = subTotal - tienGiamThanhVien;
+
+            if (parts.Count == 0) 
+            {
+                return Ok(new { 
+                    totalDiscount = tienGiamThanhVien, 
+                    finalAmount = subTotalSauKhiGiamRank, 
+                    memberDiscount = tienGiamThanhVien, 
+                    voucherAmount = 0m,
+                    memberRankPercent = phanTramGiamRank,
+                    codes = parts 
+                });
+            }
+
+            decimal memberDiscount = subTotal * ((rankCap ?? 0) / 100m);
+            decimal afterMemberDiscount = subTotal - memberDiscount;
+
             var cartIds = string.IsNullOrWhiteSpace(productIds) ? new List<string>() : productIds.Split(',').ToList();
-            var (err, totalGiam, sau) = await VoucherCartLogic.ValidateStackedAsync(_context, parts, maKH, subTotal, cartIds, DateTime.Now, DateTime.Now, maRank, rankCap, maxVouchersAllowed: 1);
+            var (err, totalGiam, sau) = await VoucherCartLogic.ValidateStackedAsync(_context, parts, maKH, subTotalSauKhiGiamRank, cartIds, DateTime.Now, DateTime.Now, maRank, rankCap, maxVouchersAllowed: 1);
 
             if (err != null) return BadRequest(new { message = err });
-            return Ok(new { totalDiscount = totalGiam, finalAmount = sau, codes = parts });
+            
+            return Ok(new { 
+                totalDiscount = tienGiamThanhVien + totalGiam, 
+                finalAmount = sau, 
+                memberDiscount = tienGiamThanhVien, 
+                voucherAmount = totalGiam,
+                memberRankPercent = phanTramGiamRank,
+                codes = parts 
+            });
         }
 
         // 4. API LƯU ĐƠN HÀNG SẢN PHẨM MỚI TẠO 
@@ -235,12 +271,53 @@ namespace MinhTamHair.KhanchHang.Controllers
                     bool laCod = string.Equals(safePayment, "cod", StringComparison.OrdinalIgnoreCase);
                     bool laOnline = string.Equals(safePayment, "vnpay", StringComparison.OrdinalIgnoreCase)
                                   || string.Equals(safePayment, "momo", StringComparison.OrdinalIgnoreCase);
+                    
+                    // TÍNH LẠI PHẦN TRĂM GIẢM HẠNG THÀNH VIÊN
+                    int? phanTramGiamRank = 0;
+                    if (!string.IsNullOrWhiteSpace(safeKhachHang) && safeKhachHang != "GUEST")
+                    {
+                        var khDb = await _context.Khachhangs.AsNoTracking().FirstOrDefaultAsync(k => k.MaKh == safeKhachHang);
+                        if (khDb != null && !string.IsNullOrWhiteSpace(khDb.MaRank))
+                        {
+                            var rankDb = await _context.Hangthanhviens.AsNoTracking().FirstOrDefaultAsync(r => r.MaRank == khDb.MaRank);
+                            if (rankDb != null)
+                            {
+                                phanTramGiamRank = rankDb.PhanTramGiamGia;
+                            }
+                        }
+                    }
+
+                    decimal tienGiamThanhVien = 0m;
+                    if (phanTramGiamRank > 0 && subTotal > 0)
+                    {
+                        tienGiamThanhVien = Math.Round(subTotal * ((decimal)phanTramGiamRank.Value / 100m), 0);
+                    }
+
+                    decimal subTotalSauKhiGiamRank = subTotal - tienGiamThanhVien;
+                    tongSauGiam = subTotalSauKhiGiamRank;
+
+                    string? maRank = null;
+                    int? rankCap = null;
+                    if (safeKhachHang != null)
+                    {
+                        var khDb = await _context.Khachhangs.AsNoTracking().FirstOrDefaultAsync(k => k.MaKh == safeKhachHang);
+                        if (khDb != null && !string.IsNullOrWhiteSpace(khDb.MaRank))
+                        {
+                            maRank = khDb.MaRank;
+                            var rankObj = await _context.Hangthanhviens.AsNoTracking().FirstOrDefaultAsync(r => r.MaRank == maRank && (r.TrangThai == null || r.TrangThai == 1));
+                            rankCap = rankObj?.PhanTramGiamGia;
+                        }
+                    }
+
+                    decimal memberDiscount = subTotal * ((rankCap ?? 0) / 100m);
+                    decimal afterMemberDiscount = subTotal - memberDiscount;
+                    tongSauGiam = afterMemberDiscount;
 
                     if (req.VoucherIds != null && req.VoucherIds.Any() && safeKhachHang != null)
                     {
                         var cartIds = req.Products.Select(p => p.MaBienThe).ToList();
                         var (vErr, _, sau) = await VoucherCartLogic.ValidateStackedAsync(
-                            _context, req.VoucherIds.Take(1).ToList(), safeKhachHang, subTotal, cartIds, vnNow, vnNow, null, null, maxVouchersAllowed: 1);
+                            _context, req.VoucherIds.Take(1).ToList(), safeKhachHang, subTotalSauKhiGiamRank, cartIds, vnNow, vnNow, null, phanTramGiamRank, maxVouchersAllowed: 1);
 
                         if (vErr == null) tongSauGiam = sau;
                     }
@@ -257,7 +334,8 @@ namespace MinhTamHair.KhanchHang.Controllers
                         ThanhTien = finalTotal,
                         TienDaTra = safePayment == "cod" ? 0 : finalTotal,
                         TrangThai = 1,
-                        MaCode = maCodeChinh
+                        MaCode = maCodeChinh,
+                        PhanTramGiamVip = phanTramGiamRank
                     };
                     _context.HoaDons.Add(hoaDon);
 

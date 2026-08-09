@@ -122,6 +122,52 @@ public class ThongBaoController : ControllerBase
         || string.Equals(mode, "Zca", StringComparison.OrdinalIgnoreCase)
         || string.Equals(mode, "ZcaBridge", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>Danh sách khách hàng có lịch đặt — hiển thị thời gian hẹn để admin gửi thông báo nhắc lịch.</summary>
+    [HttpGet("khach-hang-dat-lich")]
+    public async Task<ActionResult<List<KhachHangDatLichDto>>> GetKhachHangDatLich(
+        [FromQuery] string? ngay,
+        [FromQuery] int? trangThai,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MinhTamHairContext>();
+
+        // Mặc định lấy hôm nay + 7 ngày tới nếu không truyền ngày
+        DateOnly targetDate;
+        if (!string.IsNullOrWhiteSpace(ngay) && DateOnly.TryParse(ngay, out var parsedDate))
+            targetDate = parsedDate;
+        else
+            targetDate = DateOnly.FromDateTime(DateTime.Today);
+
+        var query = db.Lichdats
+            .AsNoTracking()
+            .Where(ld => ld.NgayHen >= targetDate && ld.NgayHen <= targetDate.AddDays(7))
+            .AsQueryable();
+
+        if (trangThai.HasValue)
+            query = query.Where(ld => ld.TrangThai == trangThai.Value);
+
+        var list = await query
+            .OrderBy(ld => ld.NgayHen)
+            .ThenBy(ld => ld.GioBatDau)
+            .Select(ld => new KhachHangDatLichDto
+            {
+                MaLd = ld.MaLd,
+                MaKh = ld.MaKh ?? "",
+                HoTen = ld.MaKhNavigation != null ? ld.MaKhNavigation.HoTen : null,
+                Sdt = ld.MaKhNavigation != null ? ld.MaKhNavigation.Sdt : null,
+                Email = ld.MaKhNavigation != null ? ld.MaKhNavigation.Email : null,
+                NgayHen = ld.NgayHen.HasValue ? ld.NgayHen.Value.ToString("yyyy-MM-dd") : null,
+                GioBatDau = ld.GioBatDau.HasValue ? ld.GioBatDau.Value.ToString("HH:mm") : null,
+                GioKetThuc = ld.GioKetThuc.HasValue ? ld.GioKetThuc.Value.ToString("HH:mm") : null,
+                TrangThai = ld.TrangThai,
+                TongTienDuKien = ld.TongTienDuKien
+            })
+            .ToListAsync(cancellationToken);
+
+        return Ok(list);
+    }
+
     /// <summary>Danh sách khách hàng cho dropdown Admin (maKH, hoTen, SDT, email).</summary>
     [HttpGet("khach-hang")]
     public async Task<ActionResult<List<KhachHangListItemDto>>> GetKhachHangForSelect(CancellationToken cancellationToken)

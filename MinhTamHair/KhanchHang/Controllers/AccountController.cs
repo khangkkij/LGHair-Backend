@@ -71,7 +71,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 
 			if (khachHang.TrangThai == 0)
 			{
-				return BadRequest(new { success = false, message = "Tài khoản của bạn đã bị khóa. Vui lòng liên hệ quản trị viên." });
+				return BadRequest(new { success = false, message = "Tài khoản đã bị khóa. Vui lòng đăng nhập lại hoặc liên hệ hỗ trợ." });
 			}
 
             // Cập nhật lại Rank dựa trên điểm hiện tại trước khi trả về cho khách
@@ -181,6 +181,18 @@ namespace MinhTamHair.KhanchHang.Controllers
             if (string.IsNullOrEmpty(request.HoTen) || string.IsNullOrEmpty(request.Sdt) || string.IsNullOrEmpty(request.MatKhau))
             {
                 return BadRequest(new { success = false, message = "Vui lòng nhập đầy đủ thông tin bắt buộc." });
+            }
+
+            // 1.5 Validate Số điện thoại hợp lệ (đầu số nhà mạng Việt Nam: 03, 05, 07, 08, 09 và gồm 10 chữ số)
+            if (!System.Text.RegularExpressions.Regex.IsMatch(request.Sdt, @"^(03|05|07|08|09)\d{8}$"))
+            {
+                return BadRequest(new { success = false, message = "Số điện thoại không hợp lệ (phải bắt đầu bằng 03, 05, 07, 08, 09 và bao gồm 10 chữ số)." });
+            }
+
+            // 1.6 Validate Email độ dài tối đa 100 ký tự
+            if (!string.IsNullOrEmpty(request.Email) && request.Email.Trim().Length > 100)
+            {
+                return BadRequest(new { success = false, message = "Email không được vượt quá 100 ký tự." });
             }
 
             // 2. Kiểm tra Số điện thoại hoặc Email đã tồn tại chưa
@@ -343,7 +355,11 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                 if (khachHang != null && khachHang.TrangThai == 0)
                 {
-                    return BadRequest(new { success = false, message = "Tài khoản Google này liên kết với một tài khoản đã bị khóa." });
+                    if (khachHang.MaKh != null && khachHang.MaKh.StartsWith("GG", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return BadRequest(new { success = false, message = "Tài khoản đã bị khóa. Vui lòng đăng nhập lại hoặc liên hệ hỗ trợ." });
+                    }
+                    return BadRequest(new { success = false, message = "Tài khoản Google này liên kết với một tài khoản đã bị khóa. Không thể đăng nhập." });
                 }
 
                 // 3. Nếu chưa có, tạo tài khoản mới tự động
@@ -449,14 +465,25 @@ namespace MinhTamHair.KhanchHang.Controllers
         [HttpPost("send-otp")]
         public async Task<IActionResult> SendOTP([FromBody] string email)
         {
+            if (string.IsNullOrWhiteSpace(email) || email.Trim().Length > 100)
+                return BadRequest(new { success = false, message = "Email không hợp lệ hoặc vượt quá độ dài tối đa 100 ký tự." });
+
+            // Kiểm tra Rate Limit (Chặn gửi quá dồn dập trong vòng 60 giây)
+            if (_cache.TryGetValue($"OTP_Limit_{email}", out _))
+            {
+                return BadRequest(new { success = false, message = "Bạn vừa gửi yêu cầu OTP. Vui lòng thử lại sau 60 giây." });
+            }
+
             var user = await _context.Khachhangs.FirstOrDefaultAsync(kh => kh.Email == email);
             if (user == null) return BadRequest(new { success = false, message = "Email không tồn tại trên hệ thống." });
 
             string otp = new Random().Next(100000, 999999).ToString();
             _cache.Set(email, otp, TimeSpan.FromMinutes(5));
+            // Lưu thời gian khóa tần suất gửi (Cooldown 60 giây)
+            _cache.Set($"OTP_Limit_{email}", true, TimeSpan.FromSeconds(60));
 
             // Gửi mail thực tế với giao diện HTML đẹp mắt
-            string subject = "Mã xác nhận khôi phục mật khẩu - Minh Tâm Hair";
+            string subject = "Mã xác nhận khôi phục mật khẩu - LGHair";
             string body = $@"
         <div style='font-family: Arial, sans-serif; border: 1px solid #d4af37; padding: 20px; border-radius: 10px; max-width: 500px;'>
             <h2 style='color: #8a6d3b;'>Xác nhận thay đổi mật khẩu</h2>
@@ -482,15 +509,24 @@ namespace MinhTamHair.KhanchHang.Controllers
         [HttpPost("send-register-otp")]
         public async Task<IActionResult> SendRegisterOTP([FromBody] string email)
         {
-            if (string.IsNullOrEmpty(email)) return BadRequest(new { success = false, message = "Email không hợp lệ." });
+            if (string.IsNullOrWhiteSpace(email) || email.Trim().Length > 100) 
+                return BadRequest(new { success = false, message = "Email không hợp lệ hoặc vượt quá độ dài tối đa 100 ký tự." });
+
+            // Kiểm tra Rate Limit (Chặn gửi dồn dập trong vòng 60 giây)
+            if (_cache.TryGetValue($"RegOTP_Limit_{email}", out _))
+            {
+                return BadRequest(new { success = false, message = "Bạn vừa gửi yêu cầu OTP. Vui lòng thử lại sau 60 giây." });
+            }
 
             var user = await _context.Khachhangs.FirstOrDefaultAsync(kh => kh.Email == email);
             if (user != null) return BadRequest(new { success = false, message = "Email này đã được sử dụng." });
 
             string otp = new Random().Next(100000, 999999).ToString();
             _cache.Set($"RegOTP_{email}", otp, TimeSpan.FromMinutes(5));
+            // Lưu thời gian khóa tần suất gửi (Cooldown 60 giây)
+            _cache.Set($"RegOTP_Limit_{email}", true, TimeSpan.FromSeconds(60));
 
-            string subject = "Mã xác nhận đăng ký tài khoản - Minh Tâm Hair";
+            string subject = "Mã xác nhận đăng ký tài khoản - LGHair";
             string body = $@"
         <div style='font-family: Arial, sans-serif; border: 1px solid #d4af37; padding: 20px; border-radius: 10px; max-width: 500px;'>
             <h2 style='color: #8a6d3b;'>Xác nhận đăng ký tài khoản mới</h2>

@@ -257,12 +257,22 @@ namespace MinhTamHair.NhanVien.Controllers
 			return Ok(new { success = true, message = "Điểm danh mã QR thành công! Chúc bạn làm việc hiệu quả." });
 		}
 
-		// LÀM TƯƠNG TỰ CHO API RỜI CA SỚM (NẾU CÓ)
 		[HttpPatch("roi-ca-som/{maLich}")]
 		public async Task<IActionResult> CheckOut(int maLich, [FromQuery] string maNv, [FromBody] MinhTamHair.Admin.Models.CaLamDTO.RoiCaSomRequest request)
 		{
 			var lich = await _context.Lichlamviecs.FirstOrDefaultAsync(l => l.MaLich == maLich && l.MaNv == maNv);
 			if (lich == null) return NotFound(new { message = "Không tìm thấy ca làm của bạn." });
+
+			var today = DateOnly.FromDateTime(DateTime.Now);
+			if (lich.NgayLamViec > today)
+			{
+				return BadRequest(new { message = "Không thể đánh dấu rời ca sớm cho ca làm trong tương lai." });
+			}
+
+			if (lich.TrangThai != 2 && lich.TrangThai != 6)
+			{
+				return BadRequest(new { message = "Chỉ có thể đánh dấu rời ca sớm cho ca làm đã điểm danh có mặt." });
+			}
 
 			if (string.IsNullOrWhiteSpace(request.GhiChu))
 			{
@@ -326,20 +336,20 @@ namespace MinhTamHair.NhanVien.Controllers
 						MaNv = maNv,
 						NgayLamViec = date,
 						CaLam = "Chưa xếp",
-						TrangThai = 4,
+						TrangThai = 1, // Khởi tạo với trạng thái mặc định (Chờ điểm danh) thay vì 4
 						GhiChu = $"Xin xếp ca: {request.CaMoi}. Lý do: {request.LyDo}"
 					};
 					_context.Lichlamviecs.Add(lich);
 				}
 				else
 				{
-					lich.TrangThai = 4;
+					// Không đổi trạng thái
 					lich.GhiChu = $"Xin đổi ca thành: {request.CaMoi}. Lý do: {request.LyDo}";
 				}
 			}
 			else
 			{
-				lich.TrangThai = 4; // Trạng thái yêu cầu
+				// Không đổi trạng thái
 				lich.GhiChu = $"Xin đổi ca thành: {request.CaMoi}. Lý do: {request.LyDo}";
 			}
 

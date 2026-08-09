@@ -66,11 +66,11 @@ namespace MinhTamHair.Admin.Controllers
             var ld = await _context.Lichdats
                 .AsNoTracking()
                 .Include(x => x.MaKhNavigation)
-                .FirstOrDefaultAsync(x => x.MaLd == cleanId && x.TrangThai == 3);
+                .FirstOrDefaultAsync(x => x.MaLd.Trim() == cleanId && x.TrangThai == 3);
 
             if (ld == null) return NotFound("Không tìm thấy đơn hàng đang phục vụ.");
 
-            var hoaDons = await _context.HoaDons.AsNoTracking().Where(h => h.MaLd == cleanId).ToListAsync();
+            var hoaDons = await _context.HoaDons.AsNoTracking().Where(h => h.MaLd == ld.MaLd).ToListAsync();
             var mainHoaDon = hoaDons.FirstOrDefault(h => !h.MaHd.StartsWith("SP")) ?? hoaDons.FirstOrDefault();
             var maHds = hoaDons.Select(h => h.MaHd).ToList();
 
@@ -84,6 +84,7 @@ namespace MinhTamHair.Admin.Controllers
                 tongTien = hoaDons.Sum(h => h.TongTien ?? 0),
                 daThanhToan = hoaDons.Sum(h => h.TienDaTra ?? 0),
                 voucher = mainHoaDon?.MaCode,
+                phanTramGiamVip = mainHoaDon?.PhanTramGiamVip ?? 0,
                 tienGiam = hoaDons.Sum(h => (h.TongTien ?? 0) - (h.ThanhTien ?? 0)),
 
                 maNv = _context.ChitietLichdats.Where(ct => ct.MaLd == ld.MaLd).Select(ct => ct.MaNv).FirstOrDefault(),
@@ -95,6 +96,7 @@ namespace MinhTamHair.Admin.Controllers
                         id = ct.MaDv ?? ct.MaCb,
                         ten = ct.MaDvNavigation.TenDv ?? ct.MaCbNavigation.TenCombo,
                         gia = ct.GiaLucDat ?? 0,
+                        phanTramHoaHong = ct.MaDvNavigation != null ? (ct.MaDvNavigation.PhanTramHoaHong ?? 0) : 0,
                     }).ToList(),
 
                 sanPhams = _context.ChitietHoadonSps
@@ -104,7 +106,8 @@ namespace MinhTamHair.Admin.Controllers
                         id = temp.ct.MaBienThe,
                         ten = sp.TenSp + " - " + temp.bt.TenBienThe,
                         soLuong = temp.ct.SoLuong,
-                        gia = temp.ct.DonGiaLucBan
+                        gia = temp.ct.DonGiaLucBan,
+                        phanTramHoaHong = temp.bt.PhanTramHoaHong ?? 0
                     }).ToList()
             };
 
@@ -357,6 +360,7 @@ namespace MinhTamHair.Admin.Controllers
                                         tenSanPham = sp.TenSp + " - " + bt.TenBienThe,
                                         gia = bt.GiaBan ?? 0,
                                         soLuongTon = bt.SoLuongTon,
+                                        phanTramHoaHong = bt.PhanTramHoaHong ?? 0,
                                         hinhAnh = string.IsNullOrEmpty(bt.HinhAnhDaiDien) ? sp.HinhAnhDaiDien : bt.HinhAnhDaiDien
                                     }).ToListAsync();
                 return Ok(result);

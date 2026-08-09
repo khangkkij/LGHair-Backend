@@ -335,8 +335,8 @@ public class AdminVoucherController : ControllerBase
             PhanTramGiam = pt,
             SoTienGiam = money,
             GiaTriToiThieu = dto.GiaTriToiThieu,
-            NgayBatDau = dto.NgayBatDau,
-            NgayKetThuc = dto.NgayKetThuc,
+            NgayBatDau = MinhTamHair.Services.TimeHelper.VnTimeHelper.ToVnTime(dto.NgayBatDau),
+            NgayKetThuc = MinhTamHair.Services.TimeHelper.VnTimeHelper.ToVnTime(dto.NgayKetThuc),
             SoLuong = dto.SoLuong,
             SoLuongDaDung = 0,
             TrangThai = 1,
@@ -626,14 +626,17 @@ public class AdminVoucherController : ControllerBase
         if (!dto.SoLuong.HasValue || dto.SoLuong <= 0)
             return "Tổng số lượng phát hành phải lớn hơn 0.";
 
-        if (!dto.NgayKetThuc.HasValue)
+        var vBatDau = MinhTamHair.Services.TimeHelper.VnTimeHelper.ToVnTime(dto.NgayBatDau);
+        var vKetThuc = MinhTamHair.Services.TimeHelper.VnTimeHelper.ToVnTime(dto.NgayKetThuc);
+
+        if (!vKetThuc.HasValue)
             return "Ngày kết thúc là bắt buộc.";
 
-        var now = DateTime.Now;
-        if (dto.NgayKetThuc <= now)
+        var now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
+        if (vKetThuc <= now)
             return "Ngày kết thúc phải ở tương lai.";
 
-        if (dto.NgayBatDau.HasValue && dto.NgayKetThuc.HasValue && dto.NgayKetThuc <= dto.NgayBatDau)
+        if (vBatDau.HasValue && vKetThuc.HasValue && vKetThuc <= vBatDau)
             return "Ngày kết thúc phải sau ngày bắt đầu.";
 
         return null;
@@ -694,6 +697,9 @@ public class AdminVoucherController : ControllerBase
         var coTuongTac = daDung > 0 || savedCustomerCount > 0;
         var cheDoHanChe = !chuaBatDau && coTuongTac;
 
+        var vBatDau = MinhTamHair.Services.TimeHelper.VnTimeHelper.ToVnTime(dto.NgayBatDau);
+        var vKetThuc = MinhTamHair.Services.TimeHelper.VnTimeHelper.ToVnTime(dto.NgayKetThuc);
+
         if (cheDoHanChe)
         {
             if (!NullableEquals(dto.PhanTramGiam, cur.PhanTramGiam) ||
@@ -701,23 +707,23 @@ public class AdminVoucherController : ControllerBase
                 !NullableDecimalEquals(dto.GiaTriToiThieu, cur.GiaTriToiThieu))
                 return "Voucher đã bắt đầu và đã có khách lưu mã hoặc đã phát sinh lượt dùng — không được sửa mức giảm hoặc đơn tối thiểu.";
 
-            if (!NullableEqualsDate(dto.NgayBatDau, cur.NgayBatDau))
+            if (!NullableEqualsDate(vBatDau, cur.NgayBatDau))
                 return "Voucher đã bắt đầu và đã có khách lưu mã hoặc đã phát sinh lượt dùng — không được đổi ngày bắt đầu.";
 
             var dtoRank = NormalizeRankCsv(dto.ApDungMaRank);
            
 
-            if (!dto.NgayKetThuc.HasValue)
+            if (!vKetThuc.HasValue)
                 return "Ngày kết thúc là bắt buộc.";
 
-            if (cur.NgayKetThuc.HasValue && dto.NgayKetThuc < cur.NgayKetThuc)
+            if (cur.NgayKetThuc.HasValue && vKetThuc < cur.NgayKetThuc)
                 return "Chỉ được gia hạn ngày kết thúc, không được rút ngắn.";
 
-            if (dto.NgayKetThuc <= now)
+            if (vKetThuc <= now)
                 return "Ngày kết thúc phải lớn hơn thời điểm hiện tại.";
 
             var startRef = cur.NgayBatDau;
-            if (startRef.HasValue && dto.NgayKetThuc <= startRef)
+            if (startRef.HasValue && vKetThuc <= startRef)
                 return "Ngày kết thúc phải sau ngày bắt đầu.";
 
             patch.MoTa = string.IsNullOrWhiteSpace(dto.MoTa) ? null : dto.MoTa.Trim();
@@ -725,7 +731,7 @@ public class AdminVoucherController : ControllerBase
             patch.SoTienGiam = cur.SoTienGiam;
             patch.GiaTriToiThieu = cur.GiaTriToiThieu;
             patch.NgayBatDau = cur.NgayBatDau;
-            patch.NgayKetThuc = dto.NgayKetThuc;
+            patch.NgayKetThuc = vKetThuc;
             patch.SoLuong = dto.SoLuong;
             patch.TrangThai = dto.TrangThai ?? cur.TrangThai;
            
@@ -736,21 +742,21 @@ public class AdminVoucherController : ControllerBase
         if (discoErr != null)
             return discoErr;
 
-        if (!dto.NgayKetThuc.HasValue)
+        if (!vKetThuc.HasValue)
             return "Ngày kết thúc là bắt buộc.";
 
-        if (dto.NgayKetThuc <= now)
+        if (vKetThuc <= now)
             return "Ngày kết thúc phải ở tương lai.";
 
-        if (dto.NgayBatDau.HasValue && dto.NgayKetThuc.HasValue && dto.NgayKetThuc <= dto.NgayBatDau)
+        if (vBatDau.HasValue && vKetThuc.HasValue && vKetThuc <= vBatDau)
             return "Ngày kết thúc phải sau ngày bắt đầu.";
 
         patch.MoTa = string.IsNullOrWhiteSpace(dto.MoTa) ? null : dto.MoTa.Trim();
         patch.PhanTramGiam = pt;
         patch.SoTienGiam = money;
         patch.GiaTriToiThieu = dto.GiaTriToiThieu;
-        patch.NgayBatDau = dto.NgayBatDau;
-        patch.NgayKetThuc = dto.NgayKetThuc;
+        patch.NgayBatDau = vBatDau;
+        patch.NgayKetThuc = vKetThuc;
         patch.SoLuong = dto.SoLuong;
         patch.TrangThai = dto.TrangThai ?? cur.TrangThai ?? 1;
         patch.ApDungMaRank = NormalizeRankCsv(dto.ApDungMaRank);
