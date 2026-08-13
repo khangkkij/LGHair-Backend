@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Admin.Models;
 using MinhTamHair.Models;
@@ -217,7 +217,7 @@ public class AdminKhachHangController : ControllerBase
             Email = emailTrim,
             GioiTinh = gioiTinhTrim,
             MatKhau = BCrypt.Net.BCrypt.HashPassword(matKhau),
-            NgayTao = DateTime.Now,
+            NgayTao = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(),
             TrangThai = 1,
             DiemTichLuy = 0,
             MaRank = await GetRankByPointsAsync(0, cancellationToken),

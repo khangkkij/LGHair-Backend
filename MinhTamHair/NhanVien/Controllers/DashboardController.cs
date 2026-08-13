@@ -32,7 +32,7 @@ namespace MinhTamHair.Controllers
         public async Task<IActionResult> GetCurrentMonthIncome(string maNV)
         {
             // Lấy ra ngày giờ hiện tại của hệ thống máy chủ
-            var ngayHienTai = DateTime.Now;
+            var ngayHienTai = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
 
             // Gọi hàm xử lý logic dùng chung ở bên dưới, truyền vào tháng và năm hiện tại
             var result = await TinhToanThuNhapHieuNangCao(maNV, ngayHienTai.Month, ngayHienTai.Year);
@@ -101,10 +101,10 @@ namespace MinhTamHair.Controllers
             var ngayKetThucDT = new DateTime(year, month, DateTime.DaysInMonth(year, month));
 
             // Tối ưu hóa: Nếu người dùng đang tra cứu trúng tháng hiện tại, 
-            // thì mốc kết thúc chỉ cần lấy tới thời điểm hiện tại (DateTime.Now) thay vì chạy tới cuối tháng
-            if (year == DateTime.Now.Year && month == DateTime.Now.Month)
+            // thì mốc kết thúc chỉ cần lấy tới thời điểm hiện tại (MinhTamHair.Services.TimeHelper.VnTimeHelper.Now()) thay vì chạy tới cuối tháng
+            if (year == MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().Year && month == MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().Month)
             {
-                ngayKetThucDT = DateTime.Now;
+                ngayKetThucDT = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
             }
 
             // Ép kiểu từ DateTime sang DateOnly (cắt bỏ Giờ/Phút/Giây) 
@@ -208,9 +208,9 @@ namespace MinhTamHair.Controllers
             var ngayKetThucDT = new DateTime(year, month, DateTime.DaysInMonth(year, month));
 
             // Nếu là tháng hiện tại thì chỉ tính tới thời điểm hiện tại
-            if (year == DateTime.Now.Year && month == DateTime.Now.Month)
+            if (year == MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().Year && month == MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().Month)
             {
-                ngayKetThucDT = DateTime.Now;
+                ngayKetThucDT = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
             }
 
             var ngayBatDauDO = DateOnly.FromDateTime(ngayBatDauDT);

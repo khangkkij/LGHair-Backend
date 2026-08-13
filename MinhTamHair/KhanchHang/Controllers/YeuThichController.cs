@@ -63,7 +63,7 @@ namespace MinhTamHair.Controllers
             {
                 MaKH = request.MaKH,
                 MaDV = request.ItemId, // Gán itemId trực tiếp vào trường MaDV của bảng trung gian
-                NgayThem = DateTime.Now
+                NgayThem = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now()
             };
 
             _context.Set<YeuThichDichVu>().Add(favoriteService);
@@ -134,7 +134,7 @@ namespace MinhTamHair.Controllers
             {
                 MaKH = request.MaKH,
                 MaSP = request.ItemId, // Gán itemId trực tiếp vào trường MaSP của bảng trung gian
-                NgayThem = DateTime.Now
+                NgayThem = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now()
             };
 
             _context.Set<YeuThichSanPham>().Add(favoriteProduct);

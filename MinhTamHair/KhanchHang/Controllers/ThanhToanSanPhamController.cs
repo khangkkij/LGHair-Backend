@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -110,10 +110,10 @@ namespace MinhTamHair.KhanchHang.Controllers
         [HttpGet("get-my-vouchers/{maKH}")]
         public async Task<IActionResult> GetMyVouchers(string maKH, [FromQuery] decimal subTotal, [FromQuery] string? productIds)
         {
-            await VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, DateTime.Now);
+            await VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, MinhTamHair.Services.TimeHelper.VnTimeHelper.Now());
             var kh = await _context.Khachhangs.Include(k => k.MaCodes).FirstOrDefaultAsync(k => k.MaKh == maKH);
 
-            var now = DateTime.Now;
+            var now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
             var cartIds = string.IsNullOrWhiteSpace(productIds) ? new List<string>() : productIds.Split(',').ToList();
 
             string? maRank = kh?.MaRank;
@@ -227,7 +227,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             decimal afterMemberDiscount = subTotal - memberDiscount;
 
             var cartIds = string.IsNullOrWhiteSpace(productIds) ? new List<string>() : productIds.Split(',').ToList();
-            var (err, totalGiam, sau) = await VoucherCartLogic.ValidateStackedAsync(_context, parts, maKH, subTotalSauKhiGiamRank, cartIds, DateTime.Now, DateTime.Now, maRank, rankCap, maxVouchersAllowed: 1);
+            var (err, totalGiam, sau) = await VoucherCartLogic.ValidateStackedAsync(_context, parts, maKH, subTotalSauKhiGiamRank, cartIds, MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(), MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(), maRank, rankCap, maxVouchersAllowed: 1);
 
             if (err != null) return BadRequest(new { message = err });
             

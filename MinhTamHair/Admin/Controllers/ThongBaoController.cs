@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Http;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
@@ -251,7 +251,7 @@ public class ThongBaoController : ControllerBase
             NoiDung = noiDung,
             KenhGui = "GMAIL",
             LoaiTin = "THU_CONG",
-            NgayTao = DateTime.Now,
+            NgayTao = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(),
             TrangThai = 0
         };
         db.Thongbaos.Add(tb);
@@ -290,7 +290,7 @@ public class ThongBaoController : ControllerBase
             NoiDung = noiDung,
             KenhGui = "ZALO",
             LoaiTin = "THU_CONG",
-            NgayTao = DateTime.Now,
+            NgayTao = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(),
             TrangThai = 0
         };
         db.Thongbaos.Add(tb);

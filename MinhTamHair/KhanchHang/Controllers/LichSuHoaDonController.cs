@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using MinhTamHair.Models;
@@ -238,7 +238,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 }
 
                 // Ghi dữ liệu khách hàng vào dòng mới
-                string newLine = $"{req.MaLd},\"{req.NganHang}\",'{req.Stk},\"{req.ChuTk}\",{DateTime.Now:dd/MM/yyyy HH:mm}\n";
+                string newLine = $"{req.MaLd},\"{req.NganHang}\",'{req.Stk},\"{req.ChuTk}\",{MinhTamHair.Services.TimeHelper.VnTimeHelper.Now():dd/MM/yyyy HH:mm}\n";
                 await System.IO.File.AppendAllTextAsync(filePath, newLine, System.Text.Encoding.UTF8);
 
                 return Ok(new { message = "Hủy đơn hàng thành công! Thông tin hoàn tiền đã được hệ thống ghi nhận." });
@@ -267,9 +267,9 @@ namespace MinhTamHair.KhanchHang.Controllers
                 }
 
                 // 3. (Tùy chọn) Kiểm tra thời gian hẹn mới không được nhỏ hơn thời gian hiện tại
-                // Lưu ý: Nếu bạn có VnTimeHelper, hãy thay DateTime.Now bằng VnTimeHelper.Now()
+                // Lưu ý: Nếu bạn có VnTimeHelper, hãy thay MinhTamHair.Services.TimeHelper.VnTimeHelper.Now() bằng VnTimeHelper.Now()
                 var newDateTime = req.NgayHenMoi.ToDateTime(req.GioBatDauMoi);
-                if (newDateTime <= DateTime.Now)
+                if (newDateTime <= MinhTamHair.Services.TimeHelper.VnTimeHelper.Now())
                 {
                     return BadRequest(new { message = "Thời gian hẹn mới phải lớn hơn thời gian hiện tại." });
                 }
@@ -297,8 +297,8 @@ namespace MinhTamHair.KhanchHang.Controllers
         }
         private async Task AutoCancelOverdueBookings(string maKh)
         {
-            // Lấy ngày hiện tại (nếu project của bạn dùng VnTimeHelper thì thay DateTime.Now bằng VnTimeHelper.Now())
-            var currentDate = DateOnly.FromDateTime(DateTime.Now);
+            // Lấy ngày hiện tại (nếu project của bạn dùng VnTimeHelper thì thay MinhTamHair.Services.TimeHelper.VnTimeHelper.Now() bằng VnTimeHelper.Now())
+            var currentDate = DateOnly.FromDateTime(MinhTamHair.Services.TimeHelper.VnTimeHelper.Now());
 
             // Tìm các lịch hẹn của khách hàng này có trạng thái đang chờ (1 hoặc 2) nhưng ngày hẹn bé hơn ngày hiện tại
             var overdueBookings = await _context.Lichdats

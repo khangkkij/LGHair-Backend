@@ -38,11 +38,11 @@ namespace MinhTamHair.Controllers
             try
             {
                 var sales = await _context.Flashsales
-             .Where(x => x.TrangThai != 2 || x.NgayKetThuc > DateTime.Now)
+             .Where(x => x.TrangThai != 2 || x.NgayKetThuc > MinhTamHair.Services.TimeHelper.VnTimeHelper.Now())
               .ToListAsync();
 
                 bool statusChanged = false;
-                var dateNow = DateTime.Now;
+                var dateNow = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
 
                 foreach (var s in sales)
                 {
@@ -156,7 +156,7 @@ namespace MinhTamHair.Controllers
                     return NotFound(new { message = "Không tìm thấy đợt Flash Sale này!" });
                 }
 
-                var dateNow = DateTime.Now;
+                var dateNow = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
                 bool statusChanged = false;
 
                 // Cập nhật trạng thái theo thời gian thực (0: Chưa bắt đầu, 1: Đang diễn ra, 2: Đã kết thúc)

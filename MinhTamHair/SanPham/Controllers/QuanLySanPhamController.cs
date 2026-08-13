@@ -437,7 +437,7 @@ public class QuanLySanPhamController : ControllerBase
                 MaChungTu = null,
                 MaNv = dto.MaNv,
                 GhiChu = string.IsNullOrWhiteSpace(dto.GhiChu) ? "Tạo biến thể mới" : dto.GhiChu.Trim(),
-                ThoiGian = DateTime.Now
+                ThoiGian = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now()
             });
             await _context.SaveChangesAsync();
         }
@@ -473,7 +473,7 @@ public class QuanLySanPhamController : ControllerBase
                 MaChungTu = null,
                 MaNv = dto.MaNv,
                 GhiChu = dto.GhiChu.Trim(),
-                ThoiGian = DateTime.Now
+                ThoiGian = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now()
             });
         }
 

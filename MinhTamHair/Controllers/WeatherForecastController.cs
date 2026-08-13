@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 
 namespace MinhTamHair.Controllers
 {
@@ -23,7 +23,7 @@ namespace MinhTamHair.Controllers
         {
             return Enumerable.Range(1, 5).Select(index => new WeatherForecast
             {
-                Date = DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
+                Date = DateOnly.FromDateTime(MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().AddDays(index)),
                 TemperatureC = Random.Shared.Next(-20, 55),
                 Summary = Summaries[Random.Shared.Next(Summaries.Length)]
             })
@@ -32,7 +32,7 @@ namespace MinhTamHair.Controllers
         [HttpGet("test")]
         public IActionResult Test()
         {
-            return Ok(new { now = DateTime.Now, utcNow = DateTime.UtcNow });
+            return Ok(new { now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(), utcNow = DateTime.UtcNow });
         }
     }
 }

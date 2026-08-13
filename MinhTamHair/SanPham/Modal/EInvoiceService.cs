@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using MinhTamHair.Models;
@@ -188,7 +188,7 @@ namespace MinhTamHair.Services
             {
                 template_code = templateCode,
                 invoice_series = _options.InvoiceSeries,
-                issued_date = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                issued_date = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().ToString("yyyy-MM-dd HH:mm:ss"),
                 currency = "VND",
                 provider_account_id = _options.ProviderAccountId,
                 payment_method = "TM",
@@ -258,7 +258,7 @@ namespace MinhTamHair.Services
                     hoaDonDT.KyHieu = checkBody.Data.Invoice.InvoiceSeries;
                     hoaDonDT.LinkPdf = checkBody.Data.Invoice.PdfUrl;
                     hoaDonDT.LinkXml = checkBody.Data.Invoice.XmlUrl;
-                    hoaDonDT.NgayXuat = DateTime.Now;
+                    hoaDonDT.NgayXuat = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
                     await _context.SaveChangesAsync();
 
                     // ===== GỬI EMAIL HÓA ĐƠN ĐIỆN TỬ CHO KHÁCH =====

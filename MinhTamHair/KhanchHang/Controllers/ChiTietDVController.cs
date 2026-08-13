@@ -29,7 +29,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             if (cachedData != null)
                 return Content(cachedData, "application/json");
 
-            var now = DateTime.Now;
+            var now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
 
             // ================= SERVICE =================
             var service = await _context.Dichvus

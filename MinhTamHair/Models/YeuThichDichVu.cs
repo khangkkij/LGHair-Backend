@@ -8,6 +8,6 @@
         public string MaDV { get; set; }
         public Dichvu Dichvu { get; set; }
 
-        public DateTime NgayThem { get; set; } = DateTime.Now;
+        public DateTime NgayThem { get; set; } = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
     }
 }

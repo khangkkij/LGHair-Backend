@@ -8,6 +8,6 @@
         public string MaSP { get; set; }
         public SanPham SanPham { get; set; }
 
-        public DateTime NgayThem { get; set; } = DateTime.Now;
+        public DateTime NgayThem { get; set; } = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
     }
 }
