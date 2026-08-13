@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
+using MinhTamHair.Services.UploadIMG;
 
 namespace MinhTamHair.Controllers;
 
@@ -10,37 +11,112 @@ public class QuanLySanPhamController : ControllerBase
 {
     private readonly MinhTamHairContext _context;
     private readonly IWebHostEnvironment _env;
+    private readonly IUploadDVSP _uploadImg;
 
-    public QuanLySanPhamController(MinhTamHairContext context, IWebHostEnvironment env)
+    public QuanLySanPhamController(MinhTamHairContext context, IWebHostEnvironment env, IUploadDVSP uploadImg)
     {
         _context = context;
         _env = env;
+        _uploadImg = uploadImg;
     }
 
+    // Upload ảnh lên Cloudinary qua service IUploadDVSP (riêng cho module Sản phẩm).
+    // Trả về SecureUrl (link đầy đủ https) để lưu thẳng vào DB.
+    // Lưu ý: IUploadDVSP.AddIMG hiện upload cố định vào folder "DVSP" trên Cloudinary
+    // (tham số subfolder không còn tác dụng phân thư mục nữa, giữ lại để không phải sửa
+    // toàn bộ chỗ gọi hàm này trong file).
     private async Task<string?> SaveImageAsync(IFormFile? file, string subfolder)
     {
-        if (file == null || file.Length == 0) return null;
+        if (file == null || file.Length == 0)
+        {
+            Console.WriteLine("[SaveImageAsync] Không có file (null hoặc rỗng).");
+            return null;
+        }
         var allowed = new[] { "image/jpeg", "image/png", "image/webp", "image/gif" };
-        if (!allowed.Contains(file.ContentType)) return null;
+        if (!allowed.Contains(file.ContentType))
+        {
+            Console.WriteLine($"[SaveImageAsync] ContentType không hợp lệ: {file.ContentType}");
+            return null;
+        }
 
-        var dir = Path.Combine(_env.WebRootPath, "uploads", subfolder);
-        Directory.CreateDirectory(dir);
+        var result = await _uploadImg.AddIMG(file);
+        if (result?.Error != null)
+        {
+            Console.WriteLine($"[SaveImageAsync] Cloudinary trả lỗi: {result.Error.Message}");
+            return null;
+        }
+        if (string.IsNullOrEmpty(result?.SecureUrl?.ToString()))
+        {
+            Console.WriteLine($"[SaveImageAsync] Upload không có lỗi nhưng SecureUrl rỗng. StatusCode={result?.StatusCode}");
+            return null;
+        }
 
-        var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
-        var name = $"{Guid.NewGuid():N}{ext}";
-        var full = Path.Combine(dir, name);
-
-        await using var fs = System.IO.File.Create(full);
-        await file.CopyToAsync(fs);
-
-        return $"/uploads/{subfolder}/{name}";
+        Console.WriteLine($"[SaveImageAsync] Upload OK: {result.SecureUrl}");
+        return result.SecureUrl.ToString();
     }
 
-    private void DeleteImageFile(string? relativePath)
+    // Xóa ảnh trên Cloudinary dựa vào URL đã lưu trong DB.
+    // Cloudinary cần "public ID" (không phải URL) để xóa, nên phải suy ngược lại từ URL.
+    private async Task DeleteImageFile(string? imageUrl)
     {
-        if (string.IsNullOrWhiteSpace(relativePath)) return;
-        var full = Path.Combine(_env.WebRootPath, relativePath.TrimStart('/'));
-        if (System.IO.File.Exists(full)) System.IO.File.Delete(full);
+        var publicId = GetPublicIdFromUrl(imageUrl);
+        if (publicId == null) return;
+
+        await _uploadImg.DelIMG(publicId);
+    }
+
+    // URL Cloudinary dạng:
+    // https://res.cloudinary.com/<cloud_name>/image/upload/v1234567890/minhtamhair/sanpham/abc123.jpg
+    // Public ID là phần "minhtamhair/sanpham/abc123" (bỏ domain, "v<version>/" và phần đuôi mở rộng).
+    private static string? GetPublicIdFromUrl(string? imageUrl)
+    {
+        if (string.IsNullOrWhiteSpace(imageUrl) || !imageUrl.Contains("res.cloudinary.com"))
+            return null;
+
+        var uploadIndex = imageUrl.IndexOf("/upload/", StringComparison.OrdinalIgnoreCase);
+        if (uploadIndex < 0) return null;
+
+        var afterUpload = imageUrl[(uploadIndex + "/upload/".Length)..];
+
+        // Bỏ segment version (v1234567890/) nếu có
+        var parts = afterUpload.Split('/');
+        var startIdx = (parts.Length > 0 && parts[0].StartsWith('v') && parts[0].Length > 1 && parts[0][1..].All(char.IsDigit))
+            ? 1
+            : 0;
+
+        var withoutVersion = string.Join('/', parts[startIdx..]);
+        var lastDot = withoutVersion.LastIndexOf('.');
+        return lastDot > 0 ? withoutVersion[..lastDot] : withoutVersion;
+    }
+
+    // Sinh mã tự động dạng PREFIX + số thứ tự (VD: SP01, SP02...).
+    // Lấy toàn bộ mã có prefix phù hợp, tách phần số, lấy giá trị lớn nhất rồi +1,
+    // tránh trường hợp trùng mã khi có mã cũ không đúng định dạng số hoặc bị xóa ở giữa.
+    private async Task<string> SinhMaTuDongAsync(string prefix, int soChuSo)
+    {
+        var maList = prefix == "SP"
+            ? await _context.SanPhams.Select(s => s.MaSp).Where(m => m.StartsWith(prefix)).ToListAsync()
+            : await _context.BienTheSanphams.Select(b => b.MaBienThe).Where(m => m.StartsWith(prefix)).ToListAsync();
+
+        var maxSo = 0;
+        foreach (var ma in maList)
+        {
+            var phanSo = ma.Substring(prefix.Length);
+            if (int.TryParse(phanSo, out var so) && so > maxSo)
+                maxSo = so;
+        }
+
+        var soMoi = maxSo + 1;
+        return prefix + soMoi.ToString().PadLeft(soChuSo, '0');
+    }
+
+    // Lấy phần số đứng sau prefix chữ cái để sort theo giá trị số thực,
+    // tránh sort sai khi mã có độ dài khác nhau (VD "SP100" đứng trước "SP99" nếu so chuỗi).
+    private static int LayPhanSoTuMa(string? ma)
+    {
+        if (string.IsNullOrEmpty(ma)) return 0;
+        var phanSo = new string(ma.Where(char.IsDigit).ToArray());
+        return int.TryParse(phanSo, out var so) ? so : 0;
     }
 
 
@@ -98,11 +174,16 @@ public class QuanLySanPhamController : ControllerBase
         var total = await query.CountAsync();
         var totalPages = (int)Math.Ceiling(total / (double)pageSize);
 
-        // Chỉ lấy đúng số dòng của trang hiện tại — DB tự Skip/Take, không tải hết rồi cắt ở app
-        var list = await query
-            .OrderBy(s => s.TenSp)
+        // Lấy trước danh sách mã để sort theo số thứ tự (mã mới nhất lên đầu),
+        // vì OrderBy trên DB không parse được phần số bên trong chuỗi MaSp.
+        var maSpSapXep = (await query.Select(s => s.MaSp).ToListAsync())
+            .OrderByDescending(LayPhanSoTuMa)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
+            .ToList();
+
+        var listTho = await query
+            .Where(s => maSpSapXep.Contains(s.MaSp))
             .Select(s => new
             {
                 s.MaSp,
@@ -115,23 +196,24 @@ public class QuanLySanPhamController : ControllerBase
             })
             .ToListAsync();
 
+        // EF không giữ nguyên thứ tự của mệnh đề Where(Contains), nên sắp lại theo maSpSapXep
+        var list = maSpSapXep
+            .Select(ma => listTho.First(s => s.MaSp == ma))
+            .ToList();
+
         return Ok(new { data = list, total, totalPages, page, pageSize });
     }
 
     [HttpPost]
     public async Task<IActionResult> Create([FromForm] CreateSanPhamDto dto)
     {
-        if (string.IsNullOrWhiteSpace(dto.MaSp))
-            return BadRequest(new { message = "Mã sản phẩm không được trống." });
-
-        if (await _context.SanPhams.AnyAsync(s => s.MaSp == dto.MaSp.Trim()))
-            return Conflict(new { message = "Mã sản phẩm đã tồn tại." });
+        var maSpMoi = await SinhMaTuDongAsync("SP", 2);
 
         var imgPath = await SaveImageAsync(dto.File, "sanpham");
 
         var sp = new Models.SanPham
         {
-            MaSp = dto.MaSp.Trim(),
+            MaSp = maSpMoi,
             TenSp = dto.TenSp?.Trim(),
             MaDanhMuc = dto.MaDanhMuc,
             MaTh = string.IsNullOrWhiteSpace(dto.MaTh) ? null : dto.MaTh,
@@ -170,7 +252,7 @@ public class QuanLySanPhamController : ControllerBase
 
         if (dto.File != null && dto.File.Length > 0)
         {
-            DeleteImageFile(sp.HinhAnhDaiDien);
+            await DeleteImageFile(sp.HinhAnhDaiDien);
             sp.HinhAnhDaiDien = await SaveImageAsync(dto.File, "sanpham");
         }
 
@@ -218,15 +300,15 @@ public class QuanLySanPhamController : ControllerBase
 
         foreach (var bt in sp.BienTheSanphams)
         {
-            DeleteImageFile(bt.HinhAnhDaiDien);
+            await DeleteImageFile(bt.HinhAnhDaiDien);
             foreach (var hbt in bt.HinhanhBTs)
-                DeleteImageFile(hbt.DuongDan);
+                await DeleteImageFile(hbt.DuongDan);
         }
 
         foreach (var h in sp.Hinhanhsps)
-            DeleteImageFile(h.DuongDan);
+            await DeleteImageFile(h.DuongDan);
 
-        DeleteImageFile(sp.HinhAnhDaiDien);
+        await DeleteImageFile(sp.HinhAnhDaiDien);
 
         _context.SanPhams.Remove(sp);
         await _context.SaveChangesAsync();
@@ -281,7 +363,7 @@ public class QuanLySanPhamController : ControllerBase
     {
         var h = await _context.Hinhanhsps.FindAsync(maHa);
         if (h == null) return NotFound(new { message = "Không tìm thấy ảnh." });
-        DeleteImageFile(h.DuongDan);
+        await DeleteImageFile(h.DuongDan);
         _context.Hinhanhsps.Remove(h);
         await _context.SaveChangesAsync();
         return Ok(new { message = "Đã xóa ảnh." });
@@ -291,9 +373,8 @@ public class QuanLySanPhamController : ControllerBase
     public async Task<IActionResult> GetBienThe(string maSP)
     {
         await DongBoTrangThaiTheoSoLuongAsync(maSP);
-        var list = await _context.BienTheSanphams
+        var listTho = await _context.BienTheSanphams
             .Where(bt => bt.MaSanPham == maSP)
-            .OrderBy(bt => bt.GiaBan)
             .Select(bt => new
             {
                 bt.MaBienThe,
@@ -307,22 +388,21 @@ public class QuanLySanPhamController : ControllerBase
             })
             .ToListAsync();
 
+        // Biến thể mới tạo (mã lớn hơn) hiển thị trước
+        var list = listTho.OrderByDescending(bt => LayPhanSoTuMa(bt.MaBienThe)).ToList();
+
         return Ok(list);
     }
     [HttpPost("bienthe")]
     public async Task<IActionResult> CreateBienThe([FromForm] CreateBienTheDto dto)
     {
-        if (string.IsNullOrWhiteSpace(dto.MaBienThe))
-            return BadRequest(new { message = "Mã biến thể không được trống." });
-
-        if (await _context.BienTheSanphams.AnyAsync(bt => bt.MaBienThe == dto.MaBienThe.Trim()))
-            return Conflict(new { message = "Mã biến thể đã tồn tại." });
+        var maBtMoi = await SinhMaTuDongAsync("BT", 2);
 
         var imgPath = await SaveImageAsync(dto.File, "bienthe");
 
         var bt = new BienTheSanpham
         {
-            MaBienThe = dto.MaBienThe.Trim(),
+            MaBienThe = maBtMoi,
             MaSanPham = dto.MaSanPham,
             TenBienThe = dto.TenBienThe?.Trim(),
             GiaBan = dto.GiaBan ?? 0,
@@ -401,7 +481,7 @@ public class QuanLySanPhamController : ControllerBase
 
         if (dto.File != null && dto.File.Length > 0)
         {
-            DeleteImageFile(bt.HinhAnhDaiDien);
+            await DeleteImageFile(bt.HinhAnhDaiDien);
             bt.HinhAnhDaiDien = await SaveImageAsync(dto.File, "bienthe");
         }
 
@@ -448,12 +528,12 @@ public class QuanLySanPhamController : ControllerBase
 
         foreach (var h in bt.HinhanhBTs)
         {
-            DeleteImageFile(h.DuongDan);
+            await DeleteImageFile(h.DuongDan);
         }
 
         _context.HinhanhBTs.RemoveRange(bt.HinhanhBTs);
 
-        DeleteImageFile(bt.HinhAnhDaiDien);
+        await DeleteImageFile(bt.HinhAnhDaiDien);
 
         _context.BienTheSanphams.Remove(bt);
 
@@ -497,7 +577,7 @@ public class QuanLySanPhamController : ControllerBase
     {
         var h = await _context.HinhanhBTs.FindAsync(maHa);
         if (h == null) return NotFound(new { message = "Không tìm thấy ảnh." });
-        DeleteImageFile(h.DuongDan);
+        await DeleteImageFile(h.DuongDan);
         _context.HinhanhBTs.Remove(h);
         await _context.SaveChangesAsync();
         return Ok(new { message = "Đã xóa ảnh." });
@@ -712,7 +792,6 @@ public class QuanLySanPhamController : ControllerBase
 
 public class CreateSanPhamDto
 {
-    public string? MaSp { get; set; }
     public string? TenSp { get; set; }
     public string? MaDanhMuc { get; set; }
     public string? MaTh { get; set; }
@@ -738,7 +817,6 @@ public class ToggleStatusDto
 
 public class CreateBienTheDto
 {
-    public string? MaBienThe { get; set; }
     public string? MaSanPham { get; set; }
     public string? TenBienThe { get; set; }
     public decimal? GiaBan { get; set; }

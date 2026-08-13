@@ -5,6 +5,7 @@ using Microsoft.Extensions.Caching.Distributed;
 using MinhTamHair.Models;
 using Microsoft.Extensions.Caching.Distributed;
 using System.Text.Json;
+using MinhTamHair.Services.UploadIMG;
 namespace MinhTamHair.Controllers
 {
     [ApiController]
@@ -14,18 +15,18 @@ namespace MinhTamHair.Controllers
         private readonly MinhTamHairContext _context;
         private readonly IDistributedCache _cache;
         private readonly IWebHostEnvironment _env;
+        private readonly IUploadDVSP _uploadImg;
 
-        // Thư mục lưu ảnh danh mục (bên trong wwwroot)
-        private const string UploadFolder = "uploads/danhmuc";
-        private static readonly string[] AllowedExt = { ".jpg", ".jpeg", ".png", ".webp", ".gif" };
-        private const long MaxFileSize = 5 * 1024 * 1024; // 5MB
-
-        public DanhMucController(MinhTamHairContext context, IDistributedCache cache, IWebHostEnvironment env)
+        public DanhMucController(MinhTamHairContext context, IDistributedCache cache, IWebHostEnvironment env, IUploadDVSP uploadImg)
         {
             _context = context;
             _cache = cache;
             _env = env;
+            _uploadImg = uploadImg;
         }
+
+        private static readonly string[] AllowedExt = { ".jpg", ".jpeg", ".png", ".webp", ".gif" };
+        private const long MaxFileSize = 5 * 1024 * 1024; // 5MB
 
         private (bool ok, string? error) ValidateImage(IFormFile file)
         {
@@ -37,38 +38,70 @@ namespace MinhTamHair.Controllers
             return (true, null);
         }
 
-        private string GetUploadFolderPath()
+        // Upload ảnh lên Cloudinary (cloud CloudinaryDVSP, folder "DVSP").
+        // Trả về SecureUrl đầy đủ (https://res.cloudinary.com/...) để lưu thẳng vào cột HinhAnh.
+        private async Task<string?> SaveImageAsync(IFormFile file)
         {
-            var webRoot = _env.WebRootPath ?? Path.Combine(_env.ContentRootPath, "wwwroot");
-            var folderPath = Path.Combine(webRoot, UploadFolder);
-            Directory.CreateDirectory(folderPath);
-            return folderPath;
+            var result = await _uploadImg.AddIMG(file);
+            if (result?.Error != null) return null;
+            return result?.SecureUrl?.ToString();
         }
 
-        private async Task<string> SaveImageAsync(IFormFile file)
+        // Xóa ảnh trên Cloudinary dựa vào URL đầy đủ đã lưu trong DB.
+        private async Task DeleteImageFile(string? imageUrl)
         {
-            var folderPath = GetUploadFolderPath();
-            var fileName = $"{Guid.NewGuid()}{Path.GetExtension(file.FileName)}";
-            var filePath = Path.Combine(folderPath, fileName);
-
-            using (var stream = new FileStream(filePath, FileMode.Create))
-                await file.CopyToAsync(stream);
-
-            return fileName;
+            var publicId = GetPublicIdFromUrl(imageUrl);
+            if (publicId == null) return;
+            await _uploadImg.DelIMG(publicId);
         }
 
-        private void DeleteImageFile(string? fileName)
+        // Cột HinhAnh giờ lưu URL Cloudinary đầy đủ — không cần ghép domain nữa,
+        // chỉ trả về nguyên giá trị (giữ tên hàm cũ để không phải sửa chỗ gọi).
+        private string? GetImageUrl(string? hinhAnh)
         {
-            if (string.IsNullOrEmpty(fileName)) return;
-            var filePath = Path.Combine(GetUploadFolderPath(), fileName);
-            if (System.IO.File.Exists(filePath))
-                System.IO.File.Delete(filePath);
+            return string.IsNullOrEmpty(hinhAnh) ? null : hinhAnh;
         }
 
-        private string? GetImageUrl(string? fileName)
+        // URL Cloudinary dạng: https://res.cloudinary.com/<cloud>/image/upload/v.../DVSP/abc.jpg
+        // Public ID là phần "DVSP/abc" (bỏ domain, "v<version>/" và đuôi mở rộng).
+        private static string? GetPublicIdFromUrl(string? imageUrl)
         {
-            if (string.IsNullOrEmpty(fileName)) return null;
-            return $"{Request.Scheme}://{Request.Host}/{UploadFolder}/{fileName}";
+            if (string.IsNullOrWhiteSpace(imageUrl) || !imageUrl.Contains("res.cloudinary.com"))
+                return null;
+
+            var uploadIndex = imageUrl.IndexOf("/upload/", StringComparison.OrdinalIgnoreCase);
+            if (uploadIndex < 0) return null;
+
+            var afterUpload = imageUrl[(uploadIndex + "/upload/".Length)..];
+            var parts = afterUpload.Split('/');
+            var startIdx = (parts.Length > 0 && parts[0].StartsWith('v') && parts[0].Length > 1 && parts[0][1..].All(char.IsDigit))
+                ? 1
+                : 0;
+
+            var withoutVersion = string.Join('/', parts[startIdx..]);
+            var lastDot = withoutVersion.LastIndexOf('.');
+            return lastDot > 0 ? withoutVersion[..lastDot] : withoutVersion;
+        }
+
+        // 🔢 Sinh mã danh mục tự động dạng DM01, DM02, DM03...
+        private async Task<string> GenerateMaDanhMucAsync()
+        {
+            var maDanhMucs = await _context.DanhMucs
+                .Where(d => d.MaDm.StartsWith("DM"))
+                .Select(d => d.MaDm.Substring(2))
+                .ToListAsync();
+
+            var maxNumber = 0;
+            foreach (var s in maDanhMucs)
+            {
+                if (int.TryParse(s, out var n) && n > maxNumber)
+                {
+                    maxNumber = n;
+                }
+            }
+
+            var next = maxNumber + 1;
+            return $"DM{next:D2}";
         }
 
         [HttpGet]
@@ -86,9 +119,18 @@ namespace MinhTamHair.Controllers
             if (trangThai.HasValue)
                 query = query.Where(d => d.TrangThai == trangThai.Value);
 
-            var list = await query
-                .OrderByDescending(d => d.NgayTao)
-                .ToListAsync();
+            var list = await query.ToListAsync();
+
+            // 🆕 Mã danh mục mới nhất (số lớn hơn) lên đầu, mã cũ xuống sau
+            list = list
+                .OrderByDescending(d =>
+                {
+                    var suffix = d.MaDm != null && d.MaDm.StartsWith("DM")
+                        ? d.MaDm.Substring(2)
+                        : d.MaDm;
+                    return int.TryParse(suffix, out var n) ? n : -1;
+                })
+                .ToList();
 
             var result = list.Select(d => new
             {
@@ -126,18 +168,14 @@ namespace MinhTamHair.Controllers
         [HttpPost]
         public async Task<IActionResult> Create([FromForm] DanhMucDTO dto)
         {
-            // Validate mã
-            if (string.IsNullOrWhiteSpace(dto.MaDM))
-                return BadRequest(new { message = "Mã danh mục không được để trống." });
-
-            if (await _context.DanhMucs.AnyAsync(x => x.MaDm == dto.MaDM.Trim()))
-                return BadRequest(new { message = "Mã danh mục đã tồn tại." });
-
             if (string.IsNullOrWhiteSpace(dto.TenDanhMuc))
                 return BadRequest(new { message = "Tên danh mục không được để trống." });
             // ❌ Check tên danh mục
             if (await _context.DanhMucs.AnyAsync(x => x.TenDanhMuc.ToLower() == dto.TenDanhMuc.Trim().ToLower()))
                 return BadRequest(new { message = "Tên danh mục đã tồn tại." });
+
+            // 🔢 Mã danh mục được sinh tự động (DM01, DM02, ...), không nhận từ client
+            var maDm = await GenerateMaDanhMucAsync();
 
             // ❌ Validate & lưu ảnh (nếu có upload)
             string? fileName = null;
@@ -150,7 +188,7 @@ namespace MinhTamHair.Controllers
 
             var entity = new DanhMuc
             {
-                MaDm = dto.MaDM.Trim().ToUpper(),
+                MaDm = maDm,
                 TenDanhMuc = dto.TenDanhMuc.Trim(),
                 HinhAnh = fileName,
                 NgayTao = DateOnly.FromDateTime(DateTime.Today),
@@ -185,11 +223,11 @@ namespace MinhTamHair.Controllers
 
                 var oldImage = entity.HinhAnh;
                 entity.HinhAnh = await SaveImageAsync(dto.HinhAnh);
-                DeleteImageFile(oldImage);
+                await DeleteImageFile(oldImage);
             }
             else if (dto.XoaHinh)
             {
-                DeleteImageFile(entity.HinhAnh);
+                await DeleteImageFile(entity.HinhAnh);
                 entity.HinhAnh = null;
             }
 
@@ -220,7 +258,7 @@ namespace MinhTamHair.Controllers
                 });
 
             // ❌ Xóa file ảnh vật lý trên đĩa (nếu có) trước khi xóa bản ghi
-            DeleteImageFile(entity.HinhAnh);
+            await DeleteImageFile(entity.HinhAnh);
 
             _context.DanhMucs.Remove(entity);
             await _context.SaveChangesAsync();

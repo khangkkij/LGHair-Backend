@@ -6,6 +6,7 @@ using MinhTamHair.Models;
 using System;
 using Microsoft.Extensions.Caching.Distributed;
 using System.Text.Json;
+using MinhTamHair.Services.UploadIMG;
 
 namespace MinhTamHair.KhanchHang.Controllers
 {
@@ -15,11 +16,55 @@ namespace MinhTamHair.KhanchHang.Controllers
     {
         private readonly MinhTamHairContext _context;
         private readonly IDistributedCache _cache;
+        private readonly IUploadDVSP _uploadImg;
 
-        public ComboController(MinhTamHairContext context, IDistributedCache cache)
+        public ComboController(MinhTamHairContext context, IDistributedCache cache, IUploadDVSP uploadImg)
         {
             _context = context;
             _cache = cache;
+            _uploadImg = uploadImg;
+        }
+
+        // Upload ảnh lên Cloudinary (cloud CloudinaryDVSP, folder "DVSP") thay vì lưu wwwroot.
+        private async Task<(string? Url, string? Error)> SaveImageAsync(IFormFile file)
+        {
+            var result = await _uploadImg.AddIMG(file);
+            if (result?.Error != null)
+                return (null, result.Error.Message);
+            if (string.IsNullOrEmpty(result?.SecureUrl?.ToString()))
+                return (null, "Upload ảnh lên Cloudinary thất bại.");
+
+            return (result.SecureUrl.ToString(), null);
+        }
+
+        // Xóa ảnh trên Cloudinary dựa vào URL đã lưu trong DB.
+        private async Task DeleteImageAsync(string? imageUrl)
+        {
+            var publicId = GetPublicIdFromUrl(imageUrl);
+            if (publicId == null) return;
+
+            await _uploadImg.DelIMG(publicId);
+        }
+
+        // URL Cloudinary dạng: https://res.cloudinary.com/<cloud>/image/upload/v.../DVSP/abc.jpg
+        // Public ID là phần "DVSP/abc" (bỏ domain, "v<version>/" và đuôi mở rộng).
+        private static string? GetPublicIdFromUrl(string? imageUrl)
+        {
+            if (string.IsNullOrWhiteSpace(imageUrl) || !imageUrl.Contains("res.cloudinary.com"))
+                return null;
+
+            var uploadIndex = imageUrl.IndexOf("/upload/", StringComparison.OrdinalIgnoreCase);
+            if (uploadIndex < 0) return null;
+
+            var afterUpload = imageUrl[(uploadIndex + "/upload/".Length)..];
+            var parts = afterUpload.Split('/');
+            var startIdx = (parts.Length > 0 && parts[0].StartsWith('v') && parts[0].Length > 1 && parts[0][1..].All(char.IsDigit))
+                ? 1
+                : 0;
+
+            var withoutVersion = string.Join('/', parts[startIdx..]);
+            var lastDot = withoutVersion.LastIndexOf('.');
+            return lastDot > 0 ? withoutVersion[..lastDot] : withoutVersion;
         }
 
         [HttpGet]
@@ -43,6 +88,17 @@ namespace MinhTamHair.KhanchHang.Controllers
             }
 
             var combos = await query.ToListAsync();
+
+            // 🆕 Mã combo mới nhất (số lớn hơn) lên đầu, mã cũ xuống sau
+            combos = combos
+                .OrderByDescending(c =>
+                {
+                    var suffix = c.MaCb != null && c.MaCb.StartsWith("CB")
+                        ? c.MaCb.Substring(2)
+                        : c.MaCb;
+                    return int.TryParse(suffix, out var n) ? n : -1;
+                })
+                .ToList();
 
             var result = combos.Select(c =>
             {
@@ -71,12 +127,36 @@ namespace MinhTamHair.KhanchHang.Controllers
             return Ok(result);
         }
 
+        // 🔢 Sinh mã combo tự động dạng CB01, CB02, CB03...
+        private async Task<string> GenerateMaComboAsync()
+        {
+            var maCombos = await _context.Combos
+                .Where(c => c.MaCb.StartsWith("CB"))
+                .Select(c => c.MaCb.Substring(2))
+                .ToListAsync();
+
+            var maxNumber = 0;
+            foreach (var s in maCombos)
+            {
+                if (int.TryParse(s, out var n) && n > maxNumber)
+                {
+                    maxNumber = n;
+                }
+            }
+
+            var next = maxNumber + 1;
+            return $"CB{next:D2}";
+        }
+
         [HttpPost]
         public async Task<IActionResult> Create([FromForm] ComboDTO dto)
         {
+            // 🔢 Mã combo được sinh tự động (CB01, CB02, ...), không nhận từ client
+            var maCb = await GenerateMaComboAsync();
+
             var combo = new Combo
             {
-                MaCb = dto.MaCB,
+                MaCb = maCb,
                 TenCombo = dto.TenCombo,
                 Gia = dto.Gia,
                 MoTa = dto.MoTa,
@@ -84,23 +164,11 @@ namespace MinhTamHair.KhanchHang.Controllers
             };
             if (dto.File != null && dto.File.Length > 0)
             {
-                var folder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot/assets/images");
+                var (url, error) = await SaveImageAsync(dto.File);
+                if (error != null)
+                    return BadRequest(new { message = error });
 
-                if (!Directory.Exists(folder))
-                {
-                    Directory.CreateDirectory(folder);
-                }
-
-                var fileName = Guid.NewGuid().ToString() + Path.GetExtension(dto.File.FileName);
-
-                var filePath = Path.Combine(folder, fileName);
-
-                using (var stream = new FileStream(filePath, FileMode.Create))
-                {
-                    await dto.File.CopyToAsync(stream);
-                }
-
-                combo.HinhAnh = "/assets/images/"+ fileName;
+                combo.HinhAnh = url;
             }
 
             _context.Combos.Add(combo);
@@ -109,7 +177,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             {
                 _context.Combo_DichVus.Add(new Combo_DichVu
                 {
-                    MaCB = dto.MaCB,
+                    MaCB = maCb,
                     MaDV = dv
                 });
             }
@@ -135,38 +203,15 @@ namespace MinhTamHair.KhanchHang.Controllers
             // 🔥 Nếu có ảnh mới → xóa ảnh cũ + lưu ảnh mới
             if (dto.File != null && dto.File.Length > 0)
             {
-                // ✅ XÓA ẢNH CŨ
-                if (!string.IsNullOrEmpty(combo.HinhAnh))
-                {
-                    var oldPath = Path.Combine(
-                        Directory.GetCurrentDirectory(),
-                        "wwwroot",
-                        combo.HinhAnh.TrimStart('/')
-                    );
+                // ✅ XÓA ẢNH CŨ (trên Cloudinary)
+                await DeleteImageAsync(combo.HinhAnh);
 
-                    if (System.IO.File.Exists(oldPath))
-                    {
-                        System.IO.File.Delete(oldPath);
-                    }
-                }
+                // ✅ LƯU ẢNH MỚI (lên Cloudinary)
+                var (url, error) = await SaveImageAsync(dto.File);
+                if (error != null)
+                    return BadRequest(new { message = error });
 
-                // ✅ LƯU ẢNH MỚI
-                var folder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot/assets/images");
-
-                if (!Directory.Exists(folder))
-                {
-                    Directory.CreateDirectory(folder);
-                }
-
-                var fileName = Guid.NewGuid().ToString() + Path.GetExtension(dto.File.FileName);
-                var filePath = Path.Combine(folder, fileName);
-
-                using (var stream = new FileStream(filePath, FileMode.Create))
-                {
-                    await dto.File.CopyToAsync(stream);
-                }
-
-                combo.HinhAnh = "/assets/images/" + fileName;
+                combo.HinhAnh = url;
             }
 
             // Xóa dịch vụ cũ
@@ -202,20 +247,8 @@ namespace MinhTamHair.KhanchHang.Controllers
             {
                 return BadRequest("Combo đang nằm trong Flash Sale, không thể xóa!");
             }
-            // 🔥 Xóa ảnh nếu có
-            if (!string.IsNullOrEmpty(combo.HinhAnh))
-            {
-                var filePath = Path.Combine(
-                    Directory.GetCurrentDirectory(),
-                    "wwwroot",
-                    combo.HinhAnh.TrimStart('/') // bỏ dấu /
-                );
-
-                if (System.IO.File.Exists(filePath))
-                {
-                    System.IO.File.Delete(filePath);
-                }
-            }
+            // 🔥 Xóa ảnh nếu có (trên Cloudinary)
+            await DeleteImageAsync(combo.HinhAnh);
 
             // Xóa chi tiết trước
             var chiTiet = _context.Combo_DichVus.Where(x => x.MaCB == id);

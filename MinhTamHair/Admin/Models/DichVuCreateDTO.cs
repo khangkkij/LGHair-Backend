@@ -1,6 +1,6 @@
 ﻿public class DichVuCreateDTO
 {
-    public string MaDv { get; set; }
+    public string? MaDv { get; set; } // Không bắt buộc khi tạo mới — server tự sinh mã. Chỉ dùng khi cập nhật.
     public string TenDv { get; set; }
     public string MaDm { get; set; }
     public decimal Gia { get; set; }
