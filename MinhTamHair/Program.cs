@@ -189,6 +189,11 @@ builder.Services.AddScoped<ILightXService, LightXService>();
 builder.Services.AddHttpClient<GeminiService>();
 //                  DI CLOUDINARY
 
+//                  DI CLOUDINARY DVSP (Dịch Vụ / Sản Phẩm) — cloud riêng, tách khỏi Cloudinary ở trên
+builder.Services.Configure<CloudinaryDVSPSettings>(builder.Configuration.GetSection("CloudinaryDVSP"));
+builder.Services.AddScoped<IUploadDVSP, UploadDVSP>();
+//                  DI CLOUDINARY DVSP
+
 // ===== FIREBASE FIRESTORE SERVICE =====
 // Dùng REST API - không cần Service Account JSON, đăng ký Scoped
 builder.Services.AddScoped<IFirestoreService, FirestoreService>();
@@ -209,8 +214,8 @@ app.Use((context, next) =>
 
 // Configure the HTTP request pipeline.
 
-    app.UseSwagger();
-    app.UseSwaggerUI();
+app.UseSwagger();
+app.UseSwaggerUI();
 
 app.UseHttpsRedirection();
 app.UseDefaultFiles();
@@ -235,4 +240,3 @@ app.UseAuthorization();     // Bật Phân quyền sau
 app.MapControllers();
 app.MapFallbackToFile("/dist/index.html");
 app.Run();
- 

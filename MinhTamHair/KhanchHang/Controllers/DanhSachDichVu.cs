@@ -1,8 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
-using Microsoft.Extensions.Caching.Distributed;
-using System.Text.Json;
 
 namespace MinhTamHair.KhanchHang.Controllers
 {
@@ -11,32 +9,16 @@ namespace MinhTamHair.KhanchHang.Controllers
     public class DanhSachDichVuController : ControllerBase
     {
         private readonly MinhTamHairContext _context;
-        private readonly IDistributedCache _cache;
 
-        public DanhSachDichVuController(MinhTamHairContext context, IDistributedCache cache)
+        public DanhSachDichVuController(MinhTamHairContext context)
         {
             _context = context;
-            _cache = cache;
         }
 
-        // Thời gian sống cache Redis cho toàn bộ endpoint dịch vụ: 20 phút.
-        private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(20);
-
         // Truy vấn "top dịch vụ hot theo từng danh mục" khá nặng (join + group by trên
-        // ChitietLichdats). Nó không đổi trong ngắn hạn nên tách ra cache riêng (20 phút)
-        // và dùng chung cho cả GetAll lẫn Filter, thay vì phải tính lại mỗi lần cache
-        // tổng bị miss. Đây là phần giúp response nhanh gần như ngay lập tức (<300ms)
-        // khi cache còn hạn, thay vì phải chờ query nặng chạy lại.
+        // ChitietLichdats), dùng chung cho cả GetAll lẫn Filter.
         private async Task<HashSet<string>> GetHotServiceIdsAsync()
         {
-            const string cacheKey = "hot_service_ids";
-
-            var cached = await _cache.GetStringAsync(cacheKey);
-            if (cached != null)
-            {
-                return JsonSerializer.Deserialize<HashSet<string>>(cached) ?? new HashSet<string>();
-            }
-
             var hotServiceIds = (await _context.ChitietLichdats
                 .AsNoTracking()
                 .Where(x => x.MaDv != null)
@@ -54,17 +36,12 @@ namespace MinhTamHair.KhanchHang.Controllers
                 .Select(x => x.MaDv)
                 .ToHashSet();
 
-            await _cache.SetStringAsync(cacheKey, JsonSerializer.Serialize(hotServiceIds),
-                new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = CacheTtl });
-
             return hotServiceIds;
         }
 
-        // 🔥 GetAll giờ phân trang cả dịch vụ lẫn combo (mỗi trang chỉ load + trả đúng phần
-        // cần hiển thị), thay vì trước đây load TOÀN BỘ Dichvus/Combos trong 1 lần rồi cache
-        // chung 1 key "home_all" (rất nặng khi bảng lớn, và cache miss thì phải tính lại hết).
-        // Mặc định: 6 dịch vụ/trang, 3 combo/trang — trang sau chỉ được load khi FE
-        // chủ động gọi lại với servicePage/comboPage tương ứng (giống cơ chế của /filter).
+        // GetAll phân trang cả dịch vụ lẫn combo (mỗi trang chỉ load + trả đúng phần
+        // cần hiển thị). Mặc định: 6 dịch vụ/trang, 3 combo/trang — trang sau chỉ
+        // được load khi FE chủ động gọi lại với servicePage/comboPage tương ứng.
         [HttpGet]
         public async Task<IActionResult> GetAll(
             int servicePage = 1,
@@ -72,14 +49,6 @@ namespace MinhTamHair.KhanchHang.Controllers
             int comboPage = 1,
             int comboPageSize = 3)
         {
-            var cacheKey = $"home_all_{servicePage}_{servicePageSize}_{comboPage}_{comboPageSize}";
-
-            var cachedData = await _cache.GetStringAsync(cacheKey);
-            if (cachedData != null)
-            {
-                return Content(cachedData, "application/json");
-            }
-
             var categories = await _context.DanhMucs
                 .AsNoTracking()
                 .Where(x => x.TrangThai == 1)
@@ -193,18 +162,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                 combosCurrentPage = comboPage
             };
 
-            var json = JsonSerializer.Serialize(result,
-                new JsonSerializerOptions
-                {
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-                });
-
-            await _cache.SetStringAsync(cacheKey, json,
-                new DistributedCacheEntryOptions
-                {
-                    AbsoluteExpirationRelativeToNow = CacheTtl
-                });
-
             return Ok(result);
         }
         [HttpGet("filter")]
@@ -215,14 +172,6 @@ namespace MinhTamHair.KhanchHang.Controllers
             int page = 1,
             int pageSize = 6)
         {
-            var cacheKey = $"filter_{search}_{category}_{priceRange}_{page}_{pageSize}";
-
-            var cachedData = await _cache.GetStringAsync(cacheKey);
-            if (cachedData != null)
-            {
-                return Content(cachedData, "application/json");
-            }
-
             var query = _context.Dichvus
                 .AsNoTracking()
                 .Where(x => x.TrangThai == 1)
@@ -313,18 +262,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                 currentPage = page
             };
 
-            var json = JsonSerializer.Serialize(result,
-                new JsonSerializerOptions
-                {
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-                });
-
-            await _cache.SetStringAsync(cacheKey, json,
-                new DistributedCacheEntryOptions
-                {
-                    AbsoluteExpirationRelativeToNow = CacheTtl
-                });
-
             return Ok(result);
         }
 
@@ -342,14 +279,6 @@ namespace MinhTamHair.KhanchHang.Controllers
             int page = 1,
             int pageSize = 3)
         {
-            var cacheKey = $"filter_combo_{search}_{page}_{pageSize}";
-
-            var cachedData = await _cache.GetStringAsync(cacheKey);
-            if (cachedData != null)
-            {
-                return Content(cachedData, "application/json");
-            }
-
             var now = DateTime.Now;
 
             var query = _context.Combos
@@ -421,18 +350,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                 totalPages = (int)Math.Ceiling((double)totalItems / pageSize),
                 currentPage = page
             };
-
-            var json = JsonSerializer.Serialize(result,
-                new JsonSerializerOptions
-                {
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-                });
-
-            await _cache.SetStringAsync(cacheKey, json,
-                new DistributedCacheEntryOptions
-                {
-                    AbsoluteExpirationRelativeToNow = CacheTtl
-                });
 
             return Ok(result);
         }

@@ -1,8 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Caching.Distributed;
 using MinhTamHair.Models;
-using System.Text.Json;
 
 namespace MinhTamHair.Controllers;
 
@@ -11,45 +9,17 @@ namespace MinhTamHair.Controllers;
 public class SanPhamController : ControllerBase
 {
     private readonly MinhTamHairContext _context;
-    private readonly IDistributedCache _cache;
 
-    public SanPhamController(MinhTamHairContext context, IDistributedCache cache)
+    public SanPhamController(MinhTamHairContext context)
     {
         _context = context;
-        _cache = cache;
     }
-
-    // Options JSON dùng chung cho mọi response cache — đồng bộ camelCase với bên DichVu
-    // để FE (Shop.vue) không phải sửa gì cả khi đọc dữ liệu từ cache lẫn từ Ok(...).
-    private static readonly JsonSerializerOptions JsonOpts = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-    };
-
-    // Cache "init" (danh mục + thương hiệu) và "filter" gần như không đổi trong ngắn hạn
-    // → 20 phút, giống bên dịch vụ.
-    private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(20);
-
-    // Chi tiết sản phẩm có thể được admin cập nhật (giá, tồn kho...) thường xuyên hơn
-    // nên để TTL ngắn hơn một chút, tránh khách thấy giá/tồn kho cũ quá lâu.
-    private static readonly TimeSpan DetailCacheTtl = TimeSpan.FromMinutes(10);
 
     // =========================================================
     // Top 3 sản phẩm bán nhiều nhất TRONG TỪNG DANH MỤC
-    // Query này join + group by trên ChitietHoadonSp khá nặng nhưng không đổi trong
-    // ngắn hạn → tách cache riêng (20 phút), dùng chung cho Filter (và có thể tái sử
-    // dụng ở nơi khác nếu cần), y hệt GetHotServiceIdsAsync bên DichVu.
     // =========================================================
     private async Task<HashSet<string>> GetHotProductIdsAsync()
     {
-        const string cacheKey = "hot_product_ids";
-
-        var cached = await _cache.GetStringAsync(cacheKey);
-        if (cached != null)
-        {
-            return JsonSerializer.Deserialize<HashSet<string>>(cached) ?? new HashSet<string>();
-        }
-
         var hotProductIds = (await _context.ChitietHoadonSps
             .AsNoTracking()
             .Join(
@@ -72,23 +42,12 @@ public class SanPhamController : ControllerBase
             .Select(x => x.MaSanPham)
             .ToHashSet();
 
-        await _cache.SetStringAsync(cacheKey, JsonSerializer.Serialize(hotProductIds),
-            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = CacheTtl });
-
         return hotProductIds;
     }
 
     [HttpGet("init")]
     public async Task<IActionResult> GetInit()
     {
-        const string cacheKey = "product_init";
-
-        var cachedData = await _cache.GetStringAsync(cacheKey);
-        if (cachedData != null)
-        {
-            return Content(cachedData, "application/json");
-        }
-
         var danhMuc = await _context.DanhMucSPs
             .AsNoTracking()
             .Where(dm => dm.TrangThai == 1)
@@ -111,10 +70,6 @@ public class SanPhamController : ControllerBase
 
         var result = new { danhMuc, thuongHieu };
 
-        var json = JsonSerializer.Serialize(result, JsonOpts);
-        await _cache.SetStringAsync(cacheKey, json,
-            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = CacheTtl });
-
         return Ok(result);
     }
 
@@ -127,15 +82,6 @@ public class SanPhamController : ControllerBase
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 9)
     {
-        // Cache theo đúng tổ hợp tham số lọc — giống hệt cách Filter bên DichVu đang làm.
-        var cacheKey = $"product_filter_{search}_{danhMuc}_{thuongHieu}_{priceRange}_{page}_{pageSize}";
-
-        var cachedData = await _cache.GetStringAsync(cacheKey);
-        if (cachedData != null)
-        {
-            return Content(cachedData, "application/json");
-        }
-
         // Query "gọn" (chưa Include) dùng để đếm tổng + lọc theo giá ngay trong SQL.
         // Không gọi ToListAsync() ở bước này — mọi điều kiện lọc vẫn còn là IQueryable
         // nên EF Core dịch hết ra SQL (kể cả lọc theo giá qua subquery Min trên biến thể),
@@ -194,7 +140,7 @@ public class SanPhamController : ControllerBase
             .AsSplitQuery()
             .ToListAsync();
 
-        // Top 3 sản phẩm bán nhiều nhất TRONG TỪNG DANH MỤC — lấy từ cache riêng (20 phút)
+        // Top 3 sản phẩm bán nhiều nhất TRONG TỪNG DANH MỤC
         var hotProductIds = await GetHotProductIdsAsync();
 
         var result = paged.Select(sp =>
@@ -247,10 +193,6 @@ public class SanPhamController : ControllerBase
 
         var response = new { data = result, totalPages, total };
 
-        var json = JsonSerializer.Serialize(response, JsonOpts);
-        await _cache.SetStringAsync(cacheKey, json,
-            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = CacheTtl });
-
         return Ok(response);
     }
 
@@ -270,17 +212,6 @@ public class SanPhamController : ControllerBase
     [HttpGet("danh-muc-feed")]
     public async Task<IActionResult> GetDanhMucFeed()
     {
-        // 🔥 "_v2": đổi version khi đổi FORMAT dữ liệu trả về (vd thêm field maDanhMucGop) để
-        // cache cũ (set trước lúc deploy, còn hạn TTL 20 phút) không bị phục vụ nhầm — tránh
-        // trường hợp deploy xong nhưng vẫn thấy hành vi cũ do cache chưa hết hạn.
-        const string cacheKey = "product_danhmuc_feed_v2";
-
-        var cachedData = await _cache.GetStringAsync(cacheKey);
-        if (cachedData != null)
-        {
-            return Content(cachedData, "application/json");
-        }
-
         // Danh mục thật (loại bỏ các row banner TrangThai == 2)
         var danhMucs = await _context.DanhMucSPs
             .AsNoTracking()
@@ -356,10 +287,6 @@ public class SanPhamController : ControllerBase
                 maDanhMucGop = new List<string> { dm.MaDMSP },
             }).ToList();
 
-        var json = JsonSerializer.Serialize(new { data = result }, JsonOpts);
-        await _cache.SetStringAsync(cacheKey, json,
-            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = CacheTtl });
-
         return Ok(new { data = result });
     }
 
@@ -386,14 +313,6 @@ public class SanPhamController : ControllerBase
 
         if (maDanhMucList.Count == 0)
             return BadRequest(new { message = "Thiếu mã danh mục." });
-
-        var cacheKey = $"product_by_danhmuc_{string.Join("_", maDanhMucList)}_{page}_{pageSize}";
-
-        var cachedData = await _cache.GetStringAsync(cacheKey);
-        if (cachedData != null)
-        {
-            return Content(cachedData, "application/json");
-        }
 
         var query = _context.SanPhams
             .AsNoTracking()
@@ -456,10 +375,6 @@ public class SanPhamController : ControllerBase
 
         var response = new { data = result, totalPages, total, page };
 
-        var json = JsonSerializer.Serialize(response, JsonOpts);
-        await _cache.SetStringAsync(cacheKey, json,
-            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = CacheTtl });
-
         return Ok(response);
     }
 
@@ -469,14 +384,6 @@ public class SanPhamController : ControllerBase
     [HttpGet("{id}")]
     public async Task<IActionResult> GetById(string id)
     {
-        var cacheKey = $"product_detail_{id}";
-
-        var cachedData = await _cache.GetStringAsync(cacheKey);
-        if (cachedData != null)
-        {
-            return Content(cachedData, "application/json");
-        }
-
         var sp = await _context.SanPhams
             .AsNoTracking()
             .Include(s => s.MaDanhMucTheNavigation)
@@ -587,10 +494,6 @@ public class SanPhamController : ControllerBase
 
             SuggestedProducts = goiY,
         };
-
-        var json = JsonSerializer.Serialize(result, JsonOpts);
-        await _cache.SetStringAsync(cacheKey, json,
-            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = DetailCacheTtl });
 
         return Ok(result);
     }

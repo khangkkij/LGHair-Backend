@@ -1,6 +1,6 @@
 ﻿public class ComboDTO
 {
-    public string MaCB { get; set; }
+    public string? MaCB { get; set; }
     public string TenCombo { get; set; }
     public decimal Gia { get; set; }
     public decimal GiaGoc { get; set; }

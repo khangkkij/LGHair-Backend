@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
+using MinhTamHair.Services.UploadIMG;
 
 namespace MinhTamHair.Controllers;
 
@@ -11,11 +12,13 @@ public class QuanLyDanhMucSPController : ControllerBase
 {
     private readonly MinhTamHairContext _context;
     private readonly IWebHostEnvironment _env;
+    private readonly IUploadDVSP _uploadImg;
 
-    public QuanLyDanhMucSPController(MinhTamHairContext context, IWebHostEnvironment env)
+    public QuanLyDanhMucSPController(MinhTamHairContext context, IWebHostEnvironment env, IUploadDVSP uploadImg)
     {
         _context = context;
         _env = env;
+        _uploadImg = uploadImg;
     }
 
     // ══ GET ALL ══════════════════════════════════════════════════════
@@ -37,7 +40,7 @@ public class QuanLyDanhMucSPController : ControllerBase
             query = query.Where(d => d.TrangThai == trangThai.Value);
 
         var data = await query
-            .OrderBy(d => d.TenDanhMuc)
+            .OrderByDescending(d => d.MaDMSP)
             .Select(d => new DanhMucSPDto
             {
                 MaDMSP = d.MaDMSP,
@@ -84,12 +87,7 @@ public class QuanLyDanhMucSPController : ControllerBase
             return BadRequest(new { message = firstError });
         }
 
-        var maDMSP = req.MaDMSP?.Trim().ToUpper();
-        if (string.IsNullOrWhiteSpace(maDMSP))
-            return BadRequest(new { message = "Mã danh mục không được để trống." });
-
-        if (await _context.DanhMucSPs.AnyAsync(d => d.MaDMSP == maDMSP))
-            return Conflict(new { message = $"Mã danh mục \"{maDMSP}\" đã tồn tại trong hệ thống." });
+        var maDMSP = await GenerateNextMaDMSPAsync();
 
         // Kiểm tra tên trùng
         var tenNorm = req.TenDanhMuc?.Trim();
@@ -169,7 +167,7 @@ public class QuanLyDanhMucSPController : ControllerBase
 
         if (req.File != null)
         {
-            DeleteImageIfExists(dm.HinhAnh);
+            await DeleteImageIfExists(dm.HinhAnh);
 
             var result = await SaveImageAsync(req.File, "danhmuc");
             if (result.Error != null)
@@ -227,7 +225,7 @@ public class QuanLyDanhMucSPController : ControllerBase
         if (dm.SanPhams.Any())
             return BadRequest(new { message = $"Không thể xóa — danh mục đang có {dm.SanPhams.Count} sản phẩm." });
 
-        DeleteImageIfExists(dm.HinhAnh);
+        await DeleteImageIfExists(dm.HinhAnh);
 
         _context.DanhMucSPs.Remove(dm);
         await _context.SaveChangesAsync();
@@ -352,7 +350,7 @@ public class QuanLyDanhMucSPController : ControllerBase
 
         if (file != null)
         {
-            DeleteImageIfExists(banner.HinhAnh);
+            await DeleteImageIfExists(banner.HinhAnh);
 
             var result = await SaveImageAsync(file, "danhmuc-banner");
             if (result.Error != null)
@@ -381,7 +379,7 @@ public class QuanLyDanhMucSPController : ControllerBase
         if (banner == null)
             return NotFound(new { message = "Không tìm thấy banner." });
 
-        DeleteImageIfExists(banner.HinhAnh);
+        await DeleteImageIfExists(banner.HinhAnh);
 
         _context.DanhMucSPs.Remove(banner);
         await _context.SaveChangesAsync();
@@ -389,7 +387,38 @@ public class QuanLyDanhMucSPController : ControllerBase
         return Ok(new { message = "Đã xóa banner!" });
     }
 
+    // ══ SINH MÃ DANH MỤC TỰ ĐỘNG ══════════════════════════════════════
+    // Dạng: DMSP01, DMSP02, DMSP03, ... (không tính các row banner "-STT")
+    private const string MA_DMSP_PREFIX = "DMSP";
+
+    private async Task<string> GenerateNextMaDMSPAsync()
+    {
+        var existingCodes = await _context.DanhMucSPs
+            .Where(d => d.TrangThai != TRANG_THAI_BANNER && d.MaDMSP.StartsWith(MA_DMSP_PREFIX))
+            .Select(d => d.MaDMSP)
+            .ToListAsync();
+
+        int nextSo = 1;
+        if (existingCodes.Any())
+        {
+            nextSo = existingCodes
+                .Select(m =>
+                {
+                    var suffix = m.Substring(MA_DMSP_PREFIX.Length);
+                    return int.TryParse(suffix, out var n) ? n : 0;
+                })
+                .DefaultIfEmpty(0)
+                .Max() + 1;
+        }
+
+        return $"{MA_DMSP_PREFIX}{nextSo:D2}";
+    }
+
     // ══ IMAGE HELPERS ═════════════════════════════════════════════════
+    // Upload ảnh lên Cloudinary (cloud CloudinaryDVSP, folder "DVSP") thay vì lưu wwwroot.
+    // Giữ nguyên chữ ký (Path, Error) để không phải sửa toàn bộ chỗ gọi trong file.
+    // "folder" (danhmuc / danhmuc-banner) không còn tác dụng phân thư mục Cloudinary nữa,
+    // giữ tham số lại để không đổi các lệnh gọi hiện có.
     private async Task<(string? Path, string? Error)> SaveImageAsync(IFormFile file, string folder)
     {
         if (!file.ContentType.StartsWith("image/"))
@@ -397,25 +426,45 @@ public class QuanLyDanhMucSPController : ControllerBase
         if (file.Length > 5 * 1024 * 1024)
             return (null, "File vượt quá 5MB.");
 
-        var uploadsDir = Path.Combine(_env.WebRootPath, "uploads", folder);
-        Directory.CreateDirectory(uploadsDir);
+        var result = await _uploadImg.AddIMG(file);
+        if (result?.Error != null)
+            return (null, result.Error.Message);
+        if (string.IsNullOrEmpty(result?.SecureUrl?.ToString()))
+            return (null, "Upload ảnh lên Cloudinary thất bại.");
 
-        var ext = Path.GetExtension(file.FileName).ToLower();
-        var fileName = $"{Guid.NewGuid()}{ext}";
-        var filePath = Path.Combine(uploadsDir, fileName);
-
-        await using var stream = new FileStream(filePath, FileMode.Create);
-        await file.CopyToAsync(stream);
-
-        return ($"/uploads/{folder}/{fileName}", null);
+        return (result.SecureUrl.ToString(), null);
     }
 
-    private void DeleteImageIfExists(string? relativePath)
+    // Xóa ảnh trên Cloudinary dựa vào URL đã lưu trong DB.
+    private async Task DeleteImageIfExists(string? imageUrl)
     {
-        if (string.IsNullOrWhiteSpace(relativePath)) return;
-        var fullPath = Path.Combine(_env.WebRootPath, relativePath.TrimStart('/'));
-        if (System.IO.File.Exists(fullPath))
-            System.IO.File.Delete(fullPath);
+        var publicId = GetPublicIdFromUrl(imageUrl);
+        if (publicId == null) return;
+
+        await _uploadImg.DelIMG(publicId);
+    }
+
+    // URL Cloudinary dạng:
+    // https://res.cloudinary.com/<cloud_name>/image/upload/v1234567890/DVSP/abc123.jpg
+    // Public ID là phần "DVSP/abc123" (bỏ domain, "v<version>/" và phần đuôi mở rộng).
+    private static string? GetPublicIdFromUrl(string? imageUrl)
+    {
+        if (string.IsNullOrWhiteSpace(imageUrl) || !imageUrl.Contains("res.cloudinary.com"))
+            return null;
+
+        var uploadIndex = imageUrl.IndexOf("/upload/", StringComparison.OrdinalIgnoreCase);
+        if (uploadIndex < 0) return null;
+
+        var afterUpload = imageUrl[(uploadIndex + "/upload/".Length)..];
+
+        var parts = afterUpload.Split('/');
+        var startIdx = (parts.Length > 0 && parts[0].StartsWith('v') && parts[0].Length > 1 && parts[0][1..].All(char.IsDigit))
+            ? 1
+            : 0;
+
+        var withoutVersion = string.Join('/', parts[startIdx..]);
+        var lastDot = withoutVersion.LastIndexOf('.');
+        return lastDot > 0 ? withoutVersion[..lastDot] : withoutVersion;
     }
 }
 
@@ -432,12 +481,6 @@ public class DanhMucSPDto
 
 public class CreateDanhMucSPRequest
 {
-    [Required(ErrorMessage = "Mã danh mục không được để trống.")]
-    [StringLength(10, MinimumLength = 2, ErrorMessage = "Mã danh mục phải từ 2 đến 10 ký tự.")]
-    [RegularExpression(@"^[A-Za-z0-9]+$",
-        ErrorMessage = "Mã danh mục chỉ được chứa chữ cái (A–Z) và chữ số, không dấu, không khoảng trắng.")]
-    public string? MaDMSP { get; set; }
-
     [Required(ErrorMessage = "Tên danh mục không được để trống.")]
     [StringLength(100, MinimumLength = 2, ErrorMessage = "Tên danh mục phải từ 2 đến 100 ký tự.")]
     public string? TenDanhMuc { get; set; }

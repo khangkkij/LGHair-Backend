@@ -7,6 +7,7 @@ using MinhTamHair.Models;
 using System;
 using Microsoft.Extensions.Caching.Distributed;
 using System.Text.Json;
+using MinhTamHair.Services.UploadIMG;
 
 namespace MinhTamHair.KhanchHang.Controllers
 {
@@ -15,10 +16,51 @@ namespace MinhTamHair.KhanchHang.Controllers
     public class DichVuController : ControllerBase
     {
         private readonly MinhTamHairContext _context;
+        private readonly IUploadDVSP _uploadImg;
 
-        public DichVuController(MinhTamHairContext context)
+        public DichVuController(MinhTamHairContext context, IUploadDVSP uploadImg)
         {
             _context = context;
+            _uploadImg = uploadImg;
+        }
+
+        // Upload ảnh lên Cloudinary (cloud CloudinaryDVSP, folder "DVSP").
+        // Trả về SecureUrl đầy đủ, hoặc null nếu lỗi (bỏ qua ảnh đó, giữ hành vi cũ
+        // là không chặn cả request khi 1 ảnh trong nhiều ảnh bị lỗi).
+        private async Task<string?> SaveImageAsync(IFormFile file)
+        {
+            var result = await _uploadImg.AddIMG(file);
+            if (result?.Error != null) return null;
+            return result?.SecureUrl?.ToString();
+        }
+
+        // Xóa ảnh trên Cloudinary dựa vào URL đầy đủ đã lưu trong DB.
+        private async Task DeleteImageAsync(string? imageUrl)
+        {
+            var publicId = GetPublicIdFromUrl(imageUrl);
+            if (publicId == null) return;
+            await _uploadImg.DelIMG(publicId);
+        }
+
+        // URL Cloudinary dạng: https://res.cloudinary.com/<cloud>/image/upload/v.../DVSP/abc.jpg
+        // Public ID là phần "DVSP/abc" (bỏ domain, "v<version>/" và đuôi mở rộng).
+        private static string? GetPublicIdFromUrl(string? imageUrl)
+        {
+            if (string.IsNullOrWhiteSpace(imageUrl) || !imageUrl.Contains("res.cloudinary.com"))
+                return null;
+
+            var uploadIndex = imageUrl.IndexOf("/upload/", StringComparison.OrdinalIgnoreCase);
+            if (uploadIndex < 0) return null;
+
+            var afterUpload = imageUrl[(uploadIndex + "/upload/".Length)..];
+            var parts = afterUpload.Split('/');
+            var startIdx = (parts.Length > 0 && parts[0].StartsWith('v') && parts[0].Length > 1 && parts[0][1..].All(char.IsDigit))
+                ? 1
+                : 0;
+
+            var withoutVersion = string.Join('/', parts[startIdx..]);
+            var lastDot = withoutVersion.LastIndexOf('.');
+            return lastDot > 0 ? withoutVersion[..lastDot] : withoutVersion;
         }
 
         [HttpGet]
@@ -46,7 +88,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 query = query.Where(x => x.TrangThai == trangThai);
             }
 
-            var data = await query
+            var raw = await query
                 .Select(dv => new
                 {
                     dv.MaDv,
@@ -65,15 +107,46 @@ namespace MinhTamHair.KhanchHang.Controllers
                     })
                 })
                 .ToListAsync();
+
+            // Sắp xếp mã đúng chuẩn "DV" + số (DV001, DV002...) theo số giảm dần, mã mới nhất lên trước.
+            // Mã không theo chuẩn (vd "vip") luôn bị đẩy xuống cuối danh sách, không xen vào giữa.
+            var data = raw
+                .OrderByDescending(x => x.MaDv.StartsWith("DV") && int.TryParse(x.MaDv.Substring(2), out _))
+                .ThenByDescending(x =>
+                    x.MaDv.StartsWith("DV") && int.TryParse(x.MaDv.Substring(2), out var so) ? so : 0)
+                .ToList();
+
             return Ok(data);
+        }
+
+        // Tự sinh mã dịch vụ dạng DV001, DV002, DV003...
+        private async Task<string> GenerateMaDvAsync()
+        {
+            var maxSo = await _context.Dichvus
+                .Where(x => x.MaDv.StartsWith("DV"))
+                .Select(x => x.MaDv.Substring(2))
+                .ToListAsync();
+
+            int max = 0;
+            foreach (var s in maxSo)
+            {
+                if (int.TryParse(s, out var so) && so > max)
+                {
+                    max = so;
+                }
+            }
+
+            return "DV" + (max + 1).ToString("D3");
         }
 
         [HttpPost]
         public async Task<IActionResult> Create([FromForm] DichVuCreateDTO dto)
         {
+            var maDv = await GenerateMaDvAsync();
+
             var dv = new Dichvu
             {
-                MaDv = dto.MaDv,
+                MaDv = maDv,
                 TenDv = dto.TenDv,
                 Gia = dto.Gia,
                 PhanTramHoaHong = dto.PhanTramHoaHong,
@@ -89,26 +162,13 @@ namespace MinhTamHair.KhanchHang.Controllers
             {
                 foreach (var file in dto.Files)
                 {
-                    var fileName = Guid.NewGuid() + Path.GetExtension(file.FileName);
-
-                    // 1. Lấy đường dẫn tuyệt đối đến thư mục chứa ảnh
-                    var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "assets", "images");
-
-                    // 2. Kiểm tra xem thư mục đã tồn tại chưa, chưa có thì tự động tạo mới
-                    if (!Directory.Exists(folderPath))
-                    {
-                        Directory.CreateDirectory(folderPath);
-                    }
-
-                    // 3. Tiến hành lưu file
-                    var path = Path.Combine(folderPath, fileName);
-                    using var stream = new FileStream(path, FileMode.Create);
-                    await file.CopyToAsync(stream);
+                    var url = await SaveImageAsync(file);
+                    if (url == null) continue; // ảnh lỗi thì bỏ qua, không chặn cả request
 
                     _context.Hinhanhs.Add(new Hinhanh
                     {
                         MaDv = dv.MaDv,
-                        DuongDan = "/assets/images/" + fileName
+                        DuongDan = url
                     });
                 }
             }
@@ -140,37 +200,35 @@ namespace MinhTamHair.KhanchHang.Controllers
             {
                 foreach (var file in dto.Files)
                 {
-                    var fileName = Guid.NewGuid() + Path.GetExtension(file.FileName);
-                    var path = Path.Combine("wwwroot/assets/images", fileName);
-
-                    using var stream = new FileStream(path, FileMode.Create);
-                    await file.CopyToAsync(stream);
+                    var url = await SaveImageAsync(file);
+                    if (url == null) continue;
 
                     _context.Hinhanhs.Add(new Hinhanh
                     {
                         MaDv = dv.MaDv,
-                        DuongDan = "/assets/images/" + fileName
+                        DuongDan = url
                     });
                 }
             }
-            
+
             if (dto.DeletedImages != null && dto.DeletedImages.Count > 0)
             {
                 foreach (var imgUrl in dto.DeletedImages)
                 {
-                    var relativePath = imgUrl.Replace("https://localhost:7196", "").Replace("https://latuthien2005-001-site1.dtempurl.com", "");
-
-                    var img = dv.Hinhanhs.FirstOrDefault(x => x.DuongDan == relativePath);
+                    // Ảnh Cloudinary: DuongDan trong DB đã là URL đầy đủ, FE gửi lên y nguyên
+                    // -> so khớp trực tiếp là đủ.
+                    // Ảnh local cũ (trước khi có Cloudinary): DuongDan trong DB chỉ là path
+                    // tương đối (vd "/assets/images/xxx.png"), nhưng FE luôn gửi URL đã ghép
+                    // domain (vd "https://localhost:7196/assets/images/xxx.png") vì dùng chung
+                    // hàm toAbsUrl() cho mọi ảnh. So sánh "==" nên luôn fail với nhóm này.
+                    // Dùng EndsWith để khớp được cả hai trường hợp.
+                    var img = dv.Hinhanhs.FirstOrDefault(x =>
+                        x.DuongDan == imgUrl ||
+                        (!string.IsNullOrEmpty(x.DuongDan) && imgUrl.EndsWith(x.DuongDan, StringComparison.OrdinalIgnoreCase)));
 
                     if (img != null)
                     {
-                        var path = Path.Combine("wwwroot", img.DuongDan.TrimStart('/'));
-
-                        if (System.IO.File.Exists(path))
-                        {
-                            System.IO.File.Delete(path);
-                        }
-
+                        await DeleteImageAsync(img.DuongDan);
                         _context.Hinhanhs.Remove(img);
                     }
                 }
@@ -185,12 +243,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             var img = await _context.Hinhanhs.FindAsync(id);
             if (img == null) return NotFound();
 
-            var path = Path.Combine("wwwroot", img.DuongDan.TrimStart('/'));
-
-            if (System.IO.File.Exists(path))
-            {
-                System.IO.File.Delete(path);
-            }
+            await DeleteImageAsync(img.DuongDan);
 
             _context.Hinhanhs.Remove(img);
             await _context.SaveChangesAsync();
@@ -227,16 +280,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             }
             foreach (var img in dv.Hinhanhs)
             {
-                var path = Path.Combine(
-                    Directory.GetCurrentDirectory(),
-                    "wwwroot",
-                    img.DuongDan.TrimStart('/')
-                );
-
-                if (System.IO.File.Exists(path))
-                {
-                    System.IO.File.Delete(path);
-                }
+                await DeleteImageAsync(img.DuongDan);
             }
             foreach (var td in dv.TieudeDichvus)
             {
@@ -244,16 +288,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 {
                     if (!string.IsNullOrEmpty(ct.HinhAnh))
                     {
-                        var path = Path.Combine(
-                            Directory.GetCurrentDirectory(),
-                            "wwwroot",
-                            ct.HinhAnh.TrimStart('/')
-                        );
-
-                        if (System.IO.File.Exists(path))
-                        {
-                            System.IO.File.Delete(path);
-                        }
+                        await DeleteImageAsync(ct.HinhAnh);
                     }
                 }
             }

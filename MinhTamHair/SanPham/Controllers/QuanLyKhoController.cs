@@ -156,7 +156,7 @@ public class QuanLyKhoController : ControllerBase
         if (denNgay.HasValue) q = q.Where(p => p.NgayNhap <= denNgay.Value.AddDays(1));
 
         var list = await q
-            .OrderByDescending(p => p.NgayNhap)
+            .OrderByDescending(p => p.MaPn)
             .Select(p => new
             {
                 p.MaPn,
@@ -225,17 +225,31 @@ public class QuanLyKhoController : ControllerBase
         });
     }
 
-    private static readonly System.Text.RegularExpressions.Regex MaPnRegex =
-        new(@"^[A-Za-z0-9]{2,15}$");
+    // Tự sinh mã phiếu nhập dạng PN01, PN02, PN03...
+    private async Task<string> GenerateMaPnAsync()
+    {
+        var maxSo = await _db.Phieunhaps
+            .Where(p => p.MaPn.StartsWith("PN"))
+            .Select(p => p.MaPn.Substring(2))
+            .ToListAsync();
+
+        int max = 0;
+        foreach (var s in maxSo)
+        {
+            if (int.TryParse(s, out var so) && so > max)
+            {
+                max = so;
+            }
+        }
+
+        return "PN" + (max + 1).ToString("D2");
+    }
 
     [HttpPost("phieunhap")]
     public async Task<IActionResult> CreatePhieuNhap([FromBody] CreatePhieuNhapRequest req)
     {
-        if (string.IsNullOrWhiteSpace(req.MaPn))
-            return BadRequest(new { message = "Mã phiếu nhập không được để trống." });
-        if (!MaPnRegex.IsMatch(req.MaPn.Trim()))
-            return BadRequest(new { message = "Mã phiếu nhập chỉ gồm chữ và số, 2–15 ký tự." });
-        req.MaPn = req.MaPn.Trim();
+        var maPn = await GenerateMaPnAsync();
+        req.MaPn = maPn;
 
         if (req.MaNv != null && req.MaNv.Trim().Length > 20)
             return BadRequest(new { message = "Mã nhân viên không hợp lệ." });
@@ -717,7 +731,7 @@ public class QuanLyKhoController : ControllerBase
 
 public class CreatePhieuNhapRequest
 {
-    public string MaPn { get; set; } = null!;
+    public string? MaPn { get; set; } // Không cần gửi khi tạo mới — server tự sinh mã (PN01, PN02...)
     public string? MaNcc { get; set; }
     public string? MaNv { get; set; }
     public DateTime? NgayNhap { get; set; }
