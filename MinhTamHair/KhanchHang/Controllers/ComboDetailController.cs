@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Distributed;
 using System.Text.Json;
@@ -33,7 +33,7 @@ namespace MinhTamHair.Controllers
                 return Ok(cachedResult);
             }
 
-            var now = DateTime.Now;
+            var now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
 
             // ================= COMBO =================
             var combo = await _context.Combos

@@ -1,4 +1,4 @@
-using System.Data;
+﻿using System.Data;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
@@ -26,7 +26,7 @@ public class AdminVoucherController : ControllerBase
     [HttpGet]
     public async Task<IActionResult> GetAll([FromQuery] string? lifecycle = null)
     {
-        var now = DateTime.Now;
+        var now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
         await MinhTamHair.VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, now);
         var key = NormalizeLifecycleKey(lifecycle);
 
@@ -103,7 +103,7 @@ public class AdminVoucherController : ControllerBase
 
         try
         {
-            await MinhTamHair.VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, DateTime.Now);
+            await MinhTamHair.VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, MinhTamHair.Services.TimeHelper.VnTimeHelper.Now());
             var head = await _context.Vouchers
                 .AsNoTracking()
                 .Where(x => x.MaCode == maCode)
@@ -247,7 +247,7 @@ public class AdminVoucherController : ControllerBase
     {
         try
         {
-            await MinhTamHair.VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, DateTime.Now);
+            await MinhTamHair.VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, MinhTamHair.Services.TimeHelper.VnTimeHelper.Now());
             var v = await _context.Vouchers
                 .AsNoTracking()
                 .Where(x => x.MaCode == maCode)
@@ -692,7 +692,7 @@ public class AdminVoucherController : ControllerBase
         if (dto.TrangThai is int tt && tt != 0 && tt != 1)
             return "Trạng thái không hợp lệ (chỉ 0 hoặc 1).";
 
-        var now = DateTime.Now;
+        var now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
         var chuaBatDau = cur.NgayBatDau.HasValue && now < cur.NgayBatDau.Value;
         var coTuongTac = daDung > 0 || savedCustomerCount > 0;
         var cheDoHanChe = !chuaBatDau && coTuongTac;

@@ -189,7 +189,7 @@ namespace MinhTamHair.Controllers
 
                 if (dv == null) return NotFound(new { message = "Không tìm thấy dịch vụ." });
 
-                var (giaGoc, giaBan) = TinhGiaSauFlashSale(dv.Gia ?? 0, dv.ChitietFlashsales, DateTime.Now);
+                var (giaGoc, giaBan) = TinhGiaSauFlashSale(dv.Gia ?? 0, dv.ChitietFlashsales, MinhTamHair.Services.TimeHelper.VnTimeHelper.Now());
 
                 var existingItem = cart.Items.FirstOrDefault(x => x.Id == request.MaDv && x.Loai == "DICHVU");
                 if (existingItem != null)
@@ -436,7 +436,7 @@ namespace MinhTamHair.Controllers
 
                 if (cb == null) return NotFound(new { message = "Không tìm thấy combo." });
 
-                var (giaGoc, giaBan) = TinhGiaSauFlashSale(cb.Gia ?? 0, cb.ChitietFlashsales, DateTime.Now);
+                var (giaGoc, giaBan) = TinhGiaSauFlashSale(cb.Gia ?? 0, cb.ChitietFlashsales, MinhTamHair.Services.TimeHelper.VnTimeHelper.Now());
 
                 var existingItem = cart.Items.FirstOrDefault(x => x.Id == request.MaCb && x.Loai == "COMBO");
                 if (existingItem != null)

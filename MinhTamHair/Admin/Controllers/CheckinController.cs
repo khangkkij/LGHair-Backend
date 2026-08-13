@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
 using System;
@@ -158,7 +158,7 @@ namespace MinhTamHair.Admin.Controllers
         {
             try
             {
-                var now = DateTime.Now;
+                var now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
 
                 // 1. Lấy danh sách dịch vụ
                 var servicesRaw = await _context.Dichvus
@@ -349,7 +349,7 @@ namespace MinhTamHair.Admin.Controllers
 
                     if (walkInAccounts.Count == 0)
                     {
-                        maKh = "KVL" + DateTime.Now.ToString("ddHHmm");
+                        maKh = "KVL" + MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().ToString("ddHHmm");
                         var newKh = new Khachhang
                         {
                             MaKh = maKh,
@@ -357,7 +357,7 @@ namespace MinhTamHair.Admin.Controllers
                             Sdt = "0000000000",
                             Email = "khachvanglai@gmail.com",
                             TrangThai = 1,
-                            NgayTao = DateTime.Now,
+                            NgayTao = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(),
                             MaRank = "RANK01",
                             DiemTichLuy = 0
                         };
@@ -371,7 +371,7 @@ namespace MinhTamHair.Admin.Controllers
                         maKh = walkInAccounts[index];
                     }
 
-                    string maLd = "WLK" + DateTime.Now.ToString("HHmmss");
+                    string maLd = "WLK" + MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().ToString("HHmmss");
                     decimal tongTien = request.Services.Sum(s => s.Gia);
 
                     var ld = new Lichdat
@@ -379,8 +379,8 @@ namespace MinhTamHair.Admin.Controllers
                         MaLd = maLd,
                         MaKh = maKh,
                         NgayHen = DateOnly.FromDateTime(DateTime.Today),
-                        GioBatDau = TimeOnly.FromDateTime(DateTime.Now),
-                        GioKetThuc = TimeOnly.FromDateTime(DateTime.Now).AddMinutes(60),
+                        GioBatDau = TimeOnly.FromDateTime(MinhTamHair.Services.TimeHelper.VnTimeHelper.Now()),
+                        GioKetThuc = TimeOnly.FromDateTime(MinhTamHair.Services.TimeHelper.VnTimeHelper.Now()).AddMinutes(60),
                         TongTienDuKien = tongTien,
                         TrangThai = 3
                     };
@@ -407,7 +407,7 @@ namespace MinhTamHair.Admin.Controllers
                         MaHd = maLd,
                         MaLd = maLd,
                         MaKh = maKh,
-                        NgayTao = DateTime.Now,
+                        NgayTao = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(),
                         TongTien = tongTien,
                         TienDaTra = 0,
                         TrangThai = 0

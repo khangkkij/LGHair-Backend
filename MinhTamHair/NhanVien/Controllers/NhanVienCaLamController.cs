@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
@@ -29,7 +29,7 @@ namespace MinhTamHair.NhanVien.Controllers
 		{
 			if (string.IsNullOrEmpty(maNv)) return BadRequest(new { message = "Thiếu mã nhân viên" });
 
-			var today = DateOnly.FromDateTime(DateTime.Now);
+			var today = DateOnly.FromDateTime(MinhTamHair.Services.TimeHelper.VnTimeHelper.Now());
 			var yesterday = today.AddDays(-1); // Tạo thêm biến Ngày Hôm Qua
 			var sevenDaysAgo = today.AddDays(-7);
 			var sevenDaysAhead = today.AddDays(7);
@@ -67,7 +67,7 @@ namespace MinhTamHair.NhanVien.Controllers
 				.ToListAsync();
 
 			bool isModified = false;
-			var currentTime = DateTime.Now.TimeOfDay;
+			var currentTime = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().TimeOfDay;
 
 			foreach (var l in rawShifts)
 			{
@@ -132,7 +132,7 @@ namespace MinhTamHair.NhanVien.Controllers
 			// ==========================================
 			// THÊM MỚI: KIỂM TRA GIỜ GIẤC ĐIỂM DANH
 			// ==========================================
-			var now = DateTime.Now.TimeOfDay; // Lấy giờ phút hiện tại
+			var now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().TimeOfDay; // Lấy giờ phút hiện tại
 			TimeSpan shiftStartTime;
 
 			// Xác định giờ bắt đầu dựa vào tên ca (Hiếu nhớ chỉnh lại giờ cho đúng với Salon nhé)
@@ -183,7 +183,7 @@ namespace MinhTamHair.NhanVien.Controllers
 		{
 			if (string.IsNullOrEmpty(maNv)) return BadRequest(new { message = "Thiếu mã nhân viên" });
 
-			var dateStr = DateTime.Now.ToString("yyyyMMdd");
+			var dateStr = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().ToString("yyyyMMdd");
 			var expectedQR = $"MinhTamHair-DiemDanh-{dateStr}";
 
 			if (qrCode != expectedQR)
@@ -201,7 +201,7 @@ namespace MinhTamHair.NhanVien.Controllers
 			// ==========================================
 			// THÊM MỚI: KIỂM TRA GIỜ GIẤC ĐIỂM DANH
 			// ==========================================
-			var now = DateTime.Now.TimeOfDay; // Lấy giờ phút hiện tại
+			var now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().TimeOfDay; // Lấy giờ phút hiện tại
 			TimeSpan shiftStartTime;
 
 			// Xác định giờ bắt đầu dựa vào tên ca
@@ -263,7 +263,7 @@ namespace MinhTamHair.NhanVien.Controllers
 			var lich = await _context.Lichlamviecs.FirstOrDefaultAsync(l => l.MaLich == maLich && l.MaNv == maNv);
 			if (lich == null) return NotFound(new { message = "Không tìm thấy ca làm của bạn." });
 
-			var today = DateOnly.FromDateTime(DateTime.Now);
+			var today = DateOnly.FromDateTime(MinhTamHair.Services.TimeHelper.VnTimeHelper.Now());
 			if (lich.NgayLamViec > today)
 			{
 				return BadRequest(new { message = "Không thể đánh dấu rời ca sớm cho ca làm trong tương lai." });
@@ -324,7 +324,7 @@ namespace MinhTamHair.NhanVien.Controllers
 
 			if (lich == null && maLich == 0)
 			{
-				var date = DateOnly.FromDateTime(DateTime.Now);
+				var date = DateOnly.FromDateTime(MinhTamHair.Services.TimeHelper.VnTimeHelper.Now());
 				lich = await _context.Lichlamviecs
 					.Include(l => l.MaNvNavigation)
 					.FirstOrDefaultAsync(l => l.MaNv == maNv && l.NgayLamViec == date);

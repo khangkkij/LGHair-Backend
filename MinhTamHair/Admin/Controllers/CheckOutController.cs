@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -172,7 +172,7 @@ namespace MinhTamHair.Admin.Controllers
                                 TonSau = bt.SoLuongTon.Value,
                                 MaChungTu = hoaDon.MaHd,
                                 GhiChu = "Cập nhật giỏ hàng Check-out",
-                                ThoiGian = DateTime.Now
+                                ThoiGian = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now()
                             });
                         }
                     }
@@ -186,13 +186,13 @@ namespace MinhTamHair.Admin.Controllers
                         if (hoaDonSp == null)
                         {
                             // Tạo hóa đơn sản phẩm mới nếu chưa có
-                            string maHdSp = "SP" + DateTime.Now.ToString("ddHHmmss");
+                            string maHdSp = "SP" + MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().ToString("ddHHmmss");
                             hoaDonSp = new HoaDon
                             {
                                 MaHd = maHdSp,
                                 MaLd = request.MaLd,
                                 MaKh = ld.MaKh,
-                                NgayTao = DateTime.Now,
+                                NgayTao = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(),
                                 TongTien = 0,
                                 ThanhTien = 0,
                                 TienDaTra = 0,
@@ -231,7 +231,7 @@ namespace MinhTamHair.Admin.Controllers
                                 TonSau = bt.SoLuongTon.Value,
                                 MaChungTu = hoaDonSp.MaHd,
                                 GhiChu = "Khách mua thêm tại quầy",
-                                ThoiGian = DateTime.Now
+                                ThoiGian = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now()
                             });
                         }
 
@@ -380,7 +380,7 @@ namespace MinhTamHair.Admin.Controllers
             vnpay.AddRequestData("vnp_Command", "pay");
             vnpay.AddRequestData("vnp_TmnCode", _configuration["Vnpay:TmnCode"]);
             vnpay.AddRequestData("vnp_Amount", (amount * 100).ToString());
-            vnpay.AddRequestData("vnp_CreateDate", DateTime.Now.ToString("yyyyMMddHHmmss"));
+            vnpay.AddRequestData("vnp_CreateDate", MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().ToString("yyyyMMddHHmmss"));
             vnpay.AddRequestData("vnp_CurrCode", "VND");
             vnpay.AddRequestData("vnp_IpAddr", "127.0.0.1");
             vnpay.AddRequestData("vnp_Locale", "vn");
@@ -389,7 +389,7 @@ namespace MinhTamHair.Admin.Controllers
 
             // Cấu hình URL trả về sau khi quét VNPay tại quầy
             vnpay.AddRequestData("vnp_ReturnUrl", _configuration["Vnpay:ReturnUrlCheckIn"]);
-            vnpay.AddRequestData("vnp_TxnRef", maHd + "_" + DateTime.Now.Ticks);
+            vnpay.AddRequestData("vnp_TxnRef", maHd + "_" + MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().Ticks);
 
             return vnpay.CreateRequestUrl(_configuration["Vnpay:BaseUrl"], _configuration["Vnpay:HashSecret"]);
         }
@@ -403,7 +403,7 @@ namespace MinhTamHair.Admin.Controllers
             var redirectUrl = _configuration["Momo:ReturnUrlCheckIn"];
             var ipnUrl = _configuration["Momo:NotifyUrl"];
 
-            string orderId = maHd + "_" + DateTime.Now.Ticks;
+            string orderId = maHd + "_" + MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().Ticks;
             string requestId = Guid.NewGuid().ToString();
             string orderInfo = "Thanh toan CheckOut";
 

@@ -60,7 +60,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 .ToListAsync();
 
             var hotServiceIds = await GetHotServiceIdsAsync();
-            var now = DateTime.Now;
+            var now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
 
             // ---------- DỊCH VỤ (phân trang) ----------
             var serviceQuery = _context.Dichvus
@@ -186,7 +186,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             if (!string.IsNullOrEmpty(category) && category != "all")
                 query = query.Where(x => x.MaDm == category);
 
-            var now = DateTime.Now;
+            var now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
 
             // Giá sau flash sale (nếu đang chạy) mới là giá khách thực trả,
             // nên phải tính trước rồi mới lọc theo priceRange thay vì lọc
@@ -279,7 +279,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             int page = 1,
             int pageSize = 3)
         {
-            var now = DateTime.Now;
+            var now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
 
             var query = _context.Combos
                 .AsNoTracking()

@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
 
@@ -47,13 +47,13 @@ namespace MinhTamHair.KhanchHang.Controllers
                 }
             }
 
-            await VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, DateTime.Now);
+            await VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, MinhTamHair.Services.TimeHelper.VnTimeHelper.Now());
 
             var query = _context.Vouchers.AsQueryable();
 
             // Không lọc theo rank ở bước hiển thị (ưu đãi rank xử lý khi Collect).
 
-            var now = DateTime.Now;
+            var now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
             // Chỉ đưa vào danh sách công khai: còn hiệu lực + trong thời gian.
             // Ẩn hoàn toàn các voucher đã hết hạn hoặc bị vô hiệu khỏi trang chủ/khách hàng.
             query = query.Where(v =>
@@ -112,7 +112,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 .ToListAsync();
 
             var usedCodeSet = usedCodes.ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var now = DateTime.Now;
+            var now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
             await VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, now);
 
             var result = khachHang.MaCodes
@@ -164,7 +164,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 return Ok(new { message = "Voucher đã có trong kho." });
             }
 
-            var now = DateTime.Now;
+            var now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
             if (voucher.TrangThai.HasValue && voucher.TrangThai != 1)
             {
                 return BadRequest(new { message = "Voucher không còn hiệu lực." });

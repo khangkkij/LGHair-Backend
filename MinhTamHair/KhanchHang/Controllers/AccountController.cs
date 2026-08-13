@@ -1,4 +1,4 @@
-using System.IdentityModel.Tokens.Jwt;
+﻿using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
@@ -83,7 +83,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             // Dọn dẹp các token đã hết hạn của khách hàng này
             var expiredTokens = await _context.Refreshtokens
-                .Where(rt => rt.UserId == khachHang.MaKh && rt.ExpiredAt <= DateTime.Now)
+                .Where(rt => rt.UserId == khachHang.MaKh && rt.ExpiredAt <= MinhTamHair.Services.TimeHelper.VnTimeHelper.Now())
                 .ToListAsync();
             if (expiredTokens.Any())
             {
@@ -95,8 +95,8 @@ namespace MinhTamHair.KhanchHang.Controllers
             {
                 UserId = khachHang.MaKh,
                 Token = refreshToken,
-                IssuedAt = DateTime.Now,
-                ExpiredAt = DateTime.Now.AddDays(7)
+                IssuedAt = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(),
+                ExpiredAt = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().AddDays(7)
             };
             _context.Refreshtokens.Add(refreshTokenEntity);
 
@@ -232,7 +232,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 Sdt = request.Sdt,
                 Email = request.Email,
                 MatKhau = BCrypt.Net.BCrypt.HashPassword(request.MatKhau), // Đã mã hóa mật khẩu bằng BCrypt
-                NgayTao = DateTime.Now,
+                NgayTao = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(),
                 MaRank = await GetRankByPointsAsync(0),
                 TrangThai = 1, // 1 là Active
                 DiemTichLuy = 0
@@ -253,8 +253,8 @@ namespace MinhTamHair.KhanchHang.Controllers
             {
                 UserId = newKhachHang.MaKh,
                 Token = refreshToken,
-                IssuedAt = DateTime.Now,
-                ExpiredAt = DateTime.Now.AddDays(7)
+                IssuedAt = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(),
+                ExpiredAt = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().AddDays(7)
             };
 
             _context.Refreshtokens.Add(refreshTokenEntity);
@@ -371,7 +371,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         HoTen = payload.Name,
                         Email = payload.Email,
                         HinhAnh = payload.Picture,
-                        NgayTao = DateTime.Now,
+                        NgayTao = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(),
                         TrangThai = 1,
                         MaRank = await GetRankByPointsAsync(0), // Không gán cứng RANK01
                         DiemTichLuy = 0,
@@ -399,8 +399,8 @@ namespace MinhTamHair.KhanchHang.Controllers
                 {
                     UserId = khachHang.MaKh,
                     Token = refreshToken,
-                    IssuedAt = DateTime.Now,
-                    ExpiredAt = DateTime.Now.AddDays(7)
+                    IssuedAt = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(),
+                    ExpiredAt = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().AddDays(7)
                 };
 
                 _context.Refreshtokens.Add(refreshTokenEntity);
