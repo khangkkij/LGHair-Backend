@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
@@ -159,15 +159,15 @@ namespace MinhTamHair.NhanVien.Controllers
 					break;
 			}
 
-			// Cho phép điểm danh sớm 30 phút trước khi vào ca
-			// Ví dụ: Ca 8h thì 7h30 mới được hiện nút bấm (hợp lệ)
+			// Cho phép điểm danh sớm 1 tiếng (60 phút) trước khi vào ca
+			// Ví dụ: Ca 7h thì từ 6h00 đã được điểm danh hợp lệ
 			if (shiftStartTime.TotalHours > 0)
 			{
-				var allowedCheckInTime = shiftStartTime.Subtract(TimeSpan.FromMinutes(30));
+				var allowedCheckInTime = shiftStartTime.Subtract(TimeSpan.FromHours(1));
 
 				if (now < allowedCheckInTime)
 				{
-					return BadRequest(new { message = $"Chưa đến giờ làm! {lich.CaLam} bắt đầu lúc {shiftStartTime:hh\\:mm}. Bạn chỉ được điểm danh sớm 30 phút." });
+					return BadRequest(new { message = $"Chưa đến giờ làm! {lich.CaLam} bắt đầu lúc {shiftStartTime:hh\\:mm}. Hệ thống chỉ mở điểm danh trước giờ làm tối đa 1 tiếng (từ {allowedCheckInTime:hh\\:mm})." });
 				}
 			}
 			// ==========================================
@@ -229,11 +229,11 @@ namespace MinhTamHair.NhanVien.Controllers
 
 			if (shiftStartTime.TotalHours > 0)
 			{
-				var allowedCheckInTime = shiftStartTime.Subtract(TimeSpan.FromMinutes(30));
+				var allowedCheckInTime = shiftStartTime.Subtract(TimeSpan.FromHours(1));
 
 				if (now < allowedCheckInTime)
 				{
-					return BadRequest(new { message = $"Chưa đến giờ làm! {lich.CaLam} bắt đầu lúc {shiftStartTime:hh\\:mm}. Bạn chỉ được điểm danh sớm 30 phút." });
+					return BadRequest(new { message = $"Chưa đến giờ làm! {lich.CaLam} bắt đầu lúc {shiftStartTime:hh\\:mm}. Hệ thống chỉ mở điểm danh trước giờ làm tối đa 1 tiếng (từ {allowedCheckInTime:hh\\:mm})." });
 				}
 
 				var lateTime = shiftStartTime.Add(TimeSpan.FromMinutes(15));
