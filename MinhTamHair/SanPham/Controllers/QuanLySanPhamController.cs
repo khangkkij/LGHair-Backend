@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
+using MinhTamHair.Services;
 using MinhTamHair.Services.UploadIMG;
 
 namespace MinhTamHair.Controllers;
@@ -12,12 +13,15 @@ public class QuanLySanPhamController : ControllerBase
     private readonly MinhTamHairContext _context;
     private readonly IWebHostEnvironment _env;
     private readonly IUploadDVSP _uploadImg;
+    private readonly IProductCacheService _cache;
 
-    public QuanLySanPhamController(MinhTamHairContext context, IWebHostEnvironment env, IUploadDVSP uploadImg)
+    public QuanLySanPhamController(
+        MinhTamHairContext context, IWebHostEnvironment env, IUploadDVSP uploadImg, IProductCacheService cache)
     {
         _context = context;
         _env = env;
         _uploadImg = uploadImg;
+        _cache = cache;
     }
 
     // Upload ảnh lên Cloudinary qua service IUploadDVSP (riêng cho module Sản phẩm).
@@ -204,39 +208,123 @@ public class QuanLySanPhamController : ControllerBase
         return Ok(new { data = list, total, totalPages, page, pageSize });
     }
 
+    // Tạo sản phẩm luôn phải kèm theo biến thể đầu tiên trong CÙNG 1 request:
+    // sản phẩm chỉ là thông tin chung, đơn vị thực sự được bán là biến thể.
+    // Toàn bộ được bọc trong 1 transaction — nếu bước tạo biến thể lỗi thì
+    // rollback luôn sản phẩm, tránh phát sinh "sản phẩm mồ côi" không có biến thể nào để bán.
     [HttpPost]
     public async Task<IActionResult> Create([FromForm] CreateSanPhamDto dto)
     {
-        var maSpMoi = await SinhMaTuDongAsync("SP", 2);
+        // "Tên biến thể" (phân loại) không bắt buộc phía người dùng — UI không nhắc khái niệm
+        // "biến thể" khi tạo sản phẩm đơn giản, nên nếu thiếu thì fallback về "Mặc định"
+        // thay vì chặn request. Giá bán vẫn bắt buộc vì không thể suy luận ra giá trị mặc định hợp lý.
+        var tenBienThe = string.IsNullOrWhiteSpace(dto.TenBienThe) ? "Mặc định" : dto.TenBienThe.Trim();
+        if (dto.GiaBan == null || dto.GiaBan <= 0)
+            return BadRequest(new { message = "Vui lòng nhập giá bán hợp lệ." });
 
-        var imgPath = await SaveImageAsync(dto.File, "sanpham");
+        // Dùng CreateExecutionStrategy() vì DbContext đã bật EnableRetryOnFailure ở Program.cs.
+        // Không được BeginTransactionAsync() trực tiếp trong trường hợp này, vì execution strategy
+        // cần kiểm soát toàn bộ transaction để có thể tự retry lại từ đầu khi gặp lỗi transient.
+        var strategy = _context.Database.CreateExecutionStrategy();
 
-        var sp = new Models.SanPham
+        return await strategy.ExecuteAsync(async () =>
         {
-            MaSp = maSpMoi,
-            TenSp = dto.TenSp?.Trim(),
-            MaDanhMuc = dto.MaDanhMuc,
-            MaTh = string.IsNullOrWhiteSpace(dto.MaTh) ? null : dto.MaTh,
-            HinhAnhDaiDien = imgPath,
-            TrangThai = dto.TrangThai ?? 1,
-        };
-
-        _context.SanPhams.Add(sp);
-        await _context.SaveChangesAsync();
-
-        // Lưu ảnh gallery nếu có
-        if (dto.GalleryFiles != null && dto.GalleryFiles.Count > 0)
-        {
-            foreach (var gf in dto.GalleryFiles.Take(10))
+            await using var transaction = await _context.Database.BeginTransactionAsync();
+            try
             {
-                var gPath = await SaveImageAsync(gf, "sanpham_gallery");
-                if (gPath != null)
-                    _context.Hinhanhsps.Add(new Hinhanhsp { MaSanPham = sp.MaSp, DuongDan = gPath });
-            }
-            await _context.SaveChangesAsync();
-        }
+                var maSpMoi = await SinhMaTuDongAsync("SP", 2);
+                var imgPath = await SaveImageAsync(dto.File, "sanpham");
 
-        return Ok(new { message = "Thêm sản phẩm thành công.", maSp = sp.MaSp });
+                var sp = new Models.SanPham
+                {
+                    MaSp = maSpMoi,
+                    TenSp = dto.TenSp?.Trim(),
+                    MaDanhMuc = dto.MaDanhMuc,
+                    MaTh = string.IsNullOrWhiteSpace(dto.MaTh) ? null : dto.MaTh,
+                    HinhAnhDaiDien = imgPath,
+                    TrangThai = dto.TrangThai ?? 1,
+                };
+                _context.SanPhams.Add(sp);
+                await _context.SaveChangesAsync();
+
+                // Ảnh gallery của sản phẩm
+                if (dto.GalleryFiles != null && dto.GalleryFiles.Count > 0)
+                {
+                    foreach (var gf in dto.GalleryFiles.Take(10))
+                    {
+                        var gPath = await SaveImageAsync(gf, "sanpham_gallery");
+                        if (gPath != null)
+                            _context.Hinhanhsps.Add(new Hinhanhsp { MaSanPham = sp.MaSp, DuongDan = gPath });
+                    }
+                    await _context.SaveChangesAsync();
+                }
+
+                // Giá bán & tồn kho ban đầu — lưu vào 1 biến thể mặc định, tạo ngay trong cùng transaction
+                var maBtMoi = await SinhMaTuDongAsync("BT", 2);
+                var btImgPath = await SaveImageAsync(dto.BienTheFile, "bienthe");
+
+                var bt = new BienTheSanpham
+                {
+                    MaBienThe = maBtMoi,
+                    MaSanPham = sp.MaSp,
+                    TenBienThe = tenBienThe,
+                    GiaBan = dto.GiaBan ?? 0,
+                    SoLuongTon = dto.SoLuong ?? 0,
+                    PhanTramHoaHong = dto.PhanTramHoaHong,
+                    HinhAnhDaiDien = btImgPath,
+                    TrangThai = 1,
+                };
+                ChuanHoaTrangThaiBienThe(bt);
+                _context.BienTheSanphams.Add(bt);
+                await _context.SaveChangesAsync();
+
+                if (dto.BienTheGalleryFiles != null && dto.BienTheGalleryFiles.Count > 0)
+                {
+                    foreach (var gf in dto.BienTheGalleryFiles.Take(10))
+                    {
+                        var gPath = await SaveImageAsync(gf, "bienthe_gallery");
+                        if (gPath != null)
+                            _context.HinhanhBTs.Add(new HinhanhBT { MaBienThe = bt.MaBienThe, DuongDan = gPath });
+                    }
+                    await _context.SaveChangesAsync();
+                }
+
+                if (bt.SoLuongTon.GetValueOrDefault() > 0)
+                {
+                    _context.LichSuTonKhos.Add(new LichSuTonKho
+                    {
+                        MaBienThe = bt.MaBienThe,
+                        LoaiBienDong = "DIEU_CHINH",
+                        SoLuongThayDoi = bt.SoLuongTon!.Value,
+                        TonTruoc = 0,
+                        TonSau = bt.SoLuongTon.Value,
+                        MaChungTu = null,
+                        MaNv = dto.MaNv,
+                        GhiChu = "Tạo biến thể mới cùng sản phẩm",
+                        ThoiGian = DateTime.Now
+                    });
+                    await _context.SaveChangesAsync();
+                }
+
+                await transaction.CommitAsync();
+
+                // Xóa cache SAU khi transaction commit thành công — tránh xóa cache rồi lại rollback,
+                // vốn sẽ để lại cache trống trong khi DB thực ra chưa có gì thay đổi.
+                await _cache.InvalidateAllProductCacheAsync();
+
+                return Ok(new
+                {
+                    message = "Thêm sản phẩm và biến thể thành công.",
+                    maSp = sp.MaSp,
+                    maBienThe = bt.MaBienThe
+                });
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
+        });
     }
 
     [HttpPut("{id}")]
@@ -268,6 +356,7 @@ public class QuanLySanPhamController : ControllerBase
         }
 
         await _context.SaveChangesAsync();
+        await _cache.InvalidateAllProductCacheAsync();
         return Ok(new { message = "Cập nhật thành công." });
     }
 
@@ -312,6 +401,7 @@ public class QuanLySanPhamController : ControllerBase
 
         _context.SanPhams.Remove(sp);
         await _context.SaveChangesAsync();
+        await _cache.InvalidateAllProductCacheAsync();
         return Ok(new { message = "Đã xóa sản phẩm." });
     }
 
@@ -322,6 +412,7 @@ public class QuanLySanPhamController : ControllerBase
         if (sp == null) return NotFound();
         sp.TrangThai = dto.TrangThai;
         await _context.SaveChangesAsync();
+        await _cache.InvalidateAllProductCacheAsync();
         return Ok(new { message = "Đã cập nhật trạng thái.", trangThai = sp.TrangThai });
     }
 
@@ -355,6 +446,9 @@ public class QuanLySanPhamController : ControllerBase
             added.Add(new { h.MaHa, h.DuongDan });
         }
 
+        if (added.Count > 0)
+            await _cache.InvalidateAllProductCacheAsync();
+
         return Ok(new { message = $"Đã thêm {added.Count} ảnh.", images = added });
     }
 
@@ -366,6 +460,7 @@ public class QuanLySanPhamController : ControllerBase
         await DeleteImageFile(h.DuongDan);
         _context.Hinhanhsps.Remove(h);
         await _context.SaveChangesAsync();
+        await _cache.InvalidateAllProductCacheAsync();
         return Ok(new { message = "Đã xóa ảnh." });
     }
 
@@ -441,6 +536,7 @@ public class QuanLySanPhamController : ControllerBase
             });
             await _context.SaveChangesAsync();
         }
+        await _cache.InvalidateAllProductCacheAsync();
         return Ok(new { message = "Thêm biến thể thành công.", maBienThe = bt.MaBienThe });
     }
     [HttpPut("bienthe/{maBienThe}")]
@@ -496,6 +592,7 @@ public class QuanLySanPhamController : ControllerBase
         }
 
         await _context.SaveChangesAsync();
+        await _cache.InvalidateAllProductCacheAsync();
         return Ok(new { message = "Cập nhật biến thể thành công." });
     }
     [HttpDelete("bienthe/{maBienThe}")]
@@ -538,6 +635,7 @@ public class QuanLySanPhamController : ControllerBase
         _context.BienTheSanphams.Remove(bt);
 
         await _context.SaveChangesAsync();
+        await _cache.InvalidateAllProductCacheAsync();
 
         return Ok(new { message = "Đã xóa biến thể." });
     }
@@ -570,6 +668,9 @@ public class QuanLySanPhamController : ControllerBase
             added.Add(new { h.MaHa, h.DuongDan });
         }
 
+        if (added.Count > 0)
+            await _cache.InvalidateAllProductCacheAsync();
+
         return Ok(new { message = $"Đã thêm {added.Count} ảnh.", images = added });
     }
     [HttpDelete("bienthe/gallery/{maHa:int}")]
@@ -580,6 +681,7 @@ public class QuanLySanPhamController : ControllerBase
         await DeleteImageFile(h.DuongDan);
         _context.HinhanhBTs.Remove(h);
         await _context.SaveChangesAsync();
+        await _cache.InvalidateAllProductCacheAsync();
         return Ok(new { message = "Đã xóa ảnh." });
     }
     [HttpGet("init")]
@@ -798,6 +900,16 @@ public class CreateSanPhamDto
     public int? TrangThai { get; set; }
     public IFormFile? File { get; set; }
     public List<IFormFile>? GalleryFiles { get; set; }
+
+    // ── Giá bán & tồn kho ban đầu (bắt buộc giá): tạo sản phẩm luôn phải kèm 1 biến thể để bán được.
+    //    TenBienThe không bắt buộc, fallback "Mặc định" nếu người dùng không nhập ──
+    public string? TenBienThe { get; set; }
+    public decimal? GiaBan { get; set; }
+    public int? SoLuong { get; set; }
+    public decimal? PhanTramHoaHong { get; set; }
+    public IFormFile? BienTheFile { get; set; }
+    public List<IFormFile>? BienTheGalleryFiles { get; set; }
+    public string? MaNv { get; set; }
 }
 
 public class UpdateSanPhamDto

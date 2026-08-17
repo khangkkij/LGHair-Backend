@@ -71,12 +71,16 @@ builder.Services.AddCors(options =>
     });
 });
 // cấu hình redis
-//builder.Services.AddStackExchangeRedisCache(options =>
-//{
-//    options.Configuration = builder.Configuration.GetValue<string>("Redis");
-//    options.InstanceName = "MyApp:";
-//});
-builder.Services.AddDistributedMemoryCache();
+var redisConnectionString = builder.Configuration.GetValue<string>("Redis");
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = redisConnectionString;
+    options.InstanceName = "MinhTamHair:";
+});
+// Đăng ký thêm IConnectionMultiplexer để dùng khi cần xóa cache theo pattern (KEYS/SCAN),
+// việc IDistributedCache không hỗ trợ trực tiếp (chỉ Get/Set/Remove theo đúng 1 key).
+builder.Services.AddSingleton<IConnectionMultiplexer>(sp =>
+    ConnectionMultiplexer.Connect(redisConnectionString));
 // --- 4. Cấu hình Authentication (JWT + Cookie ) ---
 builder.Services.AddAuthentication(options =>
 {
@@ -198,6 +202,14 @@ builder.Services.AddScoped<IUploadDVSP, UploadDVSP>();
 // Dùng REST API - không cần Service Account JSON, đăng ký Scoped
 builder.Services.AddScoped<IFirestoreService, FirestoreService>();
 // ===== END FIREBASE FIRESTORE SERVICE =====
+
+// ===== PRODUCT CACHE SERVICE (Redis) =====
+builder.Services.AddScoped<IProductCacheService, ProductCacheService>();
+// ===== END PRODUCT CACHE SERVICE =====
+
+// ===== SERVICE CACHE SERVICE (Redis) — module Dịch vụ / Combo / Tiêu đề =====
+builder.Services.AddScoped<IServiceCacheService, ServiceCacheService>();
+// ===== END SERVICE CACHE SERVICE =====
 
 var app = builder.Build();
 
