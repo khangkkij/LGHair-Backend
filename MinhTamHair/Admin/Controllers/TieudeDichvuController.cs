@@ -3,8 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.KhanchHang.Models;
 using MinhTamHair.Models;
-using Microsoft.Extensions.Caching.Distributed;
-using System.Text.Json;
+using MinhTamHair.Services;
 using MinhTamHair.Services.UploadIMG;
 
 namespace MinhTamHair.KhanchHang.Controllers
@@ -14,14 +13,14 @@ namespace MinhTamHair.KhanchHang.Controllers
     public class TieudeDichvuController : ControllerBase
     {
         private readonly MinhTamHairContext _context;
-        private readonly IDistributedCache _cache;
         private readonly IUploadDVSP _uploadImg;
+        private readonly IServiceCacheService _cache;
 
-        public TieudeDichvuController(MinhTamHairContext context, IDistributedCache cache, IUploadDVSP uploadImg)
+        public TieudeDichvuController(MinhTamHairContext context, IUploadDVSP uploadImg, IServiceCacheService cache)
         {
             _context = context;
-            _cache = cache;
             _uploadImg = uploadImg;
+            _cache = cache;
         }
 
         // Upload ảnh lên Cloudinary (cloud CloudinaryDVSP, folder "DVSP").
@@ -162,6 +161,8 @@ namespace MinhTamHair.KhanchHang.Controllers
                 return StatusCode(500, new { message = ex.Message });
             }
 
+            await _cache.InvalidateAllServiceCacheAsync();
+
             return Ok(new
             {
                 tieude.MaTd,
@@ -190,6 +191,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             tieude.TrangThai = dto.TrangThai;
 
             await _context.SaveChangesAsync();
+            await _cache.InvalidateAllServiceCacheAsync();
 
             return Ok(new
             {
@@ -228,6 +230,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             _context.TieudeDichvus.Remove(tieude);
             await _context.SaveChangesAsync();
+            await _cache.InvalidateAllServiceCacheAsync();
 
             return Ok(new { message = "Đã xóa tiêu đề và toàn bộ ảnh liên quan." });
         }
@@ -273,6 +276,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             _context.ChitietTieudes.Add(chitiet);
             await _context.SaveChangesAsync();
+            await _cache.InvalidateAllServiceCacheAsync();
 
             return Ok(new
             {
@@ -315,6 +319,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             }
 
             await _context.SaveChangesAsync();
+            await _cache.InvalidateAllServiceCacheAsync();
 
             return Ok(new
             {
@@ -343,6 +348,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             _context.ChitietTieudes.Remove(chitiet);
             await _context.SaveChangesAsync();
+            await _cache.InvalidateAllServiceCacheAsync();
 
             return Ok(new { message = "Đã xóa chi tiết." });
         }

@@ -1,12 +1,10 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Caching.Distributed;
 using MinhTamHair.KhanchHang.Models;
 using MinhTamHair.Models;
 using System;
-using Microsoft.Extensions.Caching.Distributed;
-using System.Text.Json;
+using MinhTamHair.Services;
 using MinhTamHair.Services.UploadIMG;
 
 namespace MinhTamHair.KhanchHang.Controllers
@@ -17,11 +15,13 @@ namespace MinhTamHair.KhanchHang.Controllers
     {
         private readonly MinhTamHairContext _context;
         private readonly IUploadDVSP _uploadImg;
+        private readonly IServiceCacheService _cache;
 
-        public DichVuController(MinhTamHairContext context, IUploadDVSP uploadImg)
+        public DichVuController(MinhTamHairContext context, IUploadDVSP uploadImg, IServiceCacheService cache)
         {
             _context = context;
             _uploadImg = uploadImg;
+            _cache = cache;
         }
 
         // Upload ảnh lên Cloudinary (cloud CloudinaryDVSP, folder "DVSP").
@@ -174,6 +174,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             }
 
             await _context.SaveChangesAsync();
+            await _cache.InvalidateAllServiceCacheAsync();
             return Ok(dv);
         }
 
@@ -234,6 +235,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 }
             }
             await _context.SaveChangesAsync();
+            await _cache.InvalidateAllServiceCacheAsync();
             return Ok(dv);
         }
 
@@ -247,6 +249,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             _context.Hinhanhs.Remove(img);
             await _context.SaveChangesAsync();
+            await _cache.InvalidateAllServiceCacheAsync();
 
             return Ok();
         }
@@ -301,6 +304,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             _context.Dichvus.Remove(dv);
 
             await _context.SaveChangesAsync();
+            await _cache.InvalidateAllServiceCacheAsync();
 
             return Ok();
         }

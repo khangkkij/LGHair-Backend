@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
+using MinhTamHair.Services;
 
 namespace MinhTamHair.KhanchHang.Controllers
 {
@@ -9,10 +10,15 @@ namespace MinhTamHair.KhanchHang.Controllers
     public class DanhSachDichVuController : ControllerBase
     {
         private readonly MinhTamHairContext _context;
+        private readonly IServiceCacheService _cache;
 
-        public DanhSachDichVuController(MinhTamHairContext context)
+        // TTL 10 phút cho toàn bộ cache đọc dịch vụ — đổi ở đây thay vì rải khắp file.
+        private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(10);
+
+        public DanhSachDichVuController(MinhTamHairContext context, IServiceCacheService cache)
         {
             _context = context;
+            _cache = cache;
         }
 
         // Truy vấn "top dịch vụ hot theo từng danh mục" khá nặng (join + group by trên
@@ -48,6 +54,18 @@ namespace MinhTamHair.KhanchHang.Controllers
             int servicePageSize = 6,
             int comboPage = 1,
             int comboPageSize = 3)
+        {
+            var cacheKey = $"sv:getall:{servicePage}:{servicePageSize}:{comboPage}:{comboPageSize}";
+
+            var json = await _cache.GetOrCreateJsonAsync(cacheKey, async () =>
+                await BuildGetAllResultAsync(servicePage, servicePageSize, comboPage, comboPageSize),
+                CacheTtl);
+
+            return Content(json, "application/json");
+        }
+
+        private async Task<object?> BuildGetAllResultAsync(
+            int servicePage, int servicePageSize, int comboPage, int comboPageSize)
         {
             var categories = await _context.DanhMucs
                 .AsNoTracking()
@@ -162,7 +180,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 combosCurrentPage = comboPage
             };
 
-            return Ok(result);
+            return result;
         }
         [HttpGet("filter")]
         public async Task<IActionResult> Filter(
@@ -171,6 +189,17 @@ namespace MinhTamHair.KhanchHang.Controllers
             string? priceRange,
             int page = 1,
             int pageSize = 6)
+        {
+            var cacheKey = $"sv:filter:{search}:{category}:{priceRange}:{page}:{pageSize}";
+
+            var json = await _cache.GetOrCreateJsonAsync(cacheKey, async () =>
+                await BuildFilterResultAsync(search, category, priceRange, page, pageSize), CacheTtl);
+
+            return Content(json, "application/json");
+        }
+
+        private async Task<object?> BuildFilterResultAsync(
+            string? search, string? category, string? priceRange, int page, int pageSize)
         {
             var query = _context.Dichvus
                 .AsNoTracking()
@@ -262,7 +291,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 currentPage = page
             };
 
-            return Ok(result);
+            return result;
         }
 
         // -------------------------------------------------------
@@ -278,6 +307,16 @@ namespace MinhTamHair.KhanchHang.Controllers
             string? search,
             int page = 1,
             int pageSize = 3)
+        {
+            var cacheKey = $"sv:filtercombo:{search}:{page}:{pageSize}";
+
+            var json = await _cache.GetOrCreateJsonAsync(cacheKey, async () =>
+                await BuildFilterComboResultAsync(search, page, pageSize), CacheTtl);
+
+            return Content(json, "application/json");
+        }
+
+        private async Task<object?> BuildFilterComboResultAsync(string? search, int page, int pageSize)
         {
             var now = DateTime.Now;
 
@@ -351,7 +390,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 currentPage = page
             };
 
-            return Ok(result);
+            return result;
         }
     }
 }

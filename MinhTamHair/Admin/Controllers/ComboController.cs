@@ -4,8 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using MinhTamHair.KhanchHang.Models;
 using MinhTamHair.Models;
 using System;
-using Microsoft.Extensions.Caching.Distributed;
-using System.Text.Json;
+using MinhTamHair.Services;
 using MinhTamHair.Services.UploadIMG;
 
 namespace MinhTamHair.KhanchHang.Controllers
@@ -15,14 +14,14 @@ namespace MinhTamHair.KhanchHang.Controllers
     public class ComboController : ControllerBase
     {
         private readonly MinhTamHairContext _context;
-        private readonly IDistributedCache _cache;
         private readonly IUploadDVSP _uploadImg;
+        private readonly IServiceCacheService _cache;
 
-        public ComboController(MinhTamHairContext context, IDistributedCache cache, IUploadDVSP uploadImg)
+        public ComboController(MinhTamHairContext context, IUploadDVSP uploadImg, IServiceCacheService cache)
         {
             _context = context;
-            _cache = cache;
             _uploadImg = uploadImg;
+            _cache = cache;
         }
 
         // Upload ảnh lên Cloudinary (cloud CloudinaryDVSP, folder "DVSP") thay vì lưu wwwroot.
@@ -183,6 +182,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             }
 
             await _context.SaveChangesAsync();
+            await _cache.InvalidateAllServiceCacheAsync();
             return Ok(combo);
         }
 
@@ -228,6 +228,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             }
 
             await _context.SaveChangesAsync();
+            await _cache.InvalidateAllServiceCacheAsync();
             return Ok(combo);
         }
 
@@ -256,6 +257,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             _context.Combos.Remove(combo);
             await _context.SaveChangesAsync();
+            await _cache.InvalidateAllServiceCacheAsync();
 
             return Ok();
         }

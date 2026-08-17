@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
+using MinhTamHair.Services;
 
 namespace MinhTamHair.Controllers;
 
@@ -9,10 +10,15 @@ namespace MinhTamHair.Controllers;
 public class SanPhamController : ControllerBase
 {
     private readonly MinhTamHairContext _context;
+    private readonly IProductCacheService _cache;
 
-    public SanPhamController(MinhTamHairContext context)
+    // TTL 10 phút cho toàn bộ cache đọc sản phẩm — đổi ở đây thay vì rải khắp file.
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(10);
+
+    public SanPhamController(MinhTamHairContext context, IProductCacheService cache)
     {
         _context = context;
+        _cache = cache;
     }
 
     // =========================================================
@@ -48,29 +54,32 @@ public class SanPhamController : ControllerBase
     [HttpGet("init")]
     public async Task<IActionResult> GetInit()
     {
-        var danhMuc = await _context.DanhMucSPs
-            .AsNoTracking()
-            .Where(dm => dm.TrangThai == 1)
-            .Select(dm => new { dm.MaDMSP, dm.TenDanhMuc })
-            .OrderBy(dm => dm.TenDanhMuc)
-            .ToListAsync();
+        var json = await _cache.GetOrCreateJsonAsync("sp:init", async () =>
+        {
+            var danhMuc = await _context.DanhMucSPs
+                .AsNoTracking()
+                .Where(dm => dm.TrangThai == 1)
+                .Select(dm => new { dm.MaDMSP, dm.TenDanhMuc })
+                .OrderBy(dm => dm.TenDanhMuc)
+                .ToListAsync();
 
-        var thuongHieu = await _context.Thuonghieus
-            .AsNoTracking()
-            .Where(th => th.TrangThai == 1)
-            .Select(th => new
-            {
-                th.MaTh,
-                th.TenThuongHieu,
-                th.HinhAnh,
-                SoLuongSP = th.Sanphams.Count(sp => sp.TrangThai == 1)
-            })
-            .OrderBy(th => th.TenThuongHieu)
-            .ToListAsync();
+            var thuongHieu = await _context.Thuonghieus
+                .AsNoTracking()
+                .Where(th => th.TrangThai == 1)
+                .Select(th => new
+                {
+                    th.MaTh,
+                    th.TenThuongHieu,
+                    th.HinhAnh,
+                    SoLuongSP = th.Sanphams.Count(sp => sp.TrangThai == 1)
+                })
+                .OrderBy(th => th.TenThuongHieu)
+                .ToListAsync();
 
-        var result = new { danhMuc, thuongHieu };
+            return new { danhMuc, thuongHieu };
+        }, CacheTtl);
 
-        return Ok(result);
+        return Content(json, "application/json");
     }
 
     [HttpGet("filter")]
@@ -81,6 +90,18 @@ public class SanPhamController : ControllerBase
         [FromQuery] string? priceRange,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 9)
+    {
+        // Key gộp mọi tham số ảnh hưởng tới kết quả — mỗi tổ hợp search/lọc/trang là 1 cache riêng.
+        var cacheKey = $"sp:filter:{search}:{danhMuc}:{thuongHieu}:{priceRange}:{page}:{pageSize}";
+
+        var json = await _cache.GetOrCreateJsonAsync(cacheKey, async () =>
+            await BuildFilterResultAsync(search, danhMuc, thuongHieu, priceRange, page, pageSize), CacheTtl);
+
+        return Content(json, "application/json");
+    }
+
+    private async Task<object?> BuildFilterResultAsync(
+        string? search, string? danhMuc, string? thuongHieu, string? priceRange, int page, int pageSize)
     {
         // Query "gọn" (chưa Include) dùng để đếm tổng + lọc theo giá ngay trong SQL.
         // Không gọi ToListAsync() ở bước này — mọi điều kiện lọc vẫn còn là IQueryable
@@ -193,7 +214,7 @@ public class SanPhamController : ControllerBase
 
         var response = new { data = result, totalPages, total };
 
-        return Ok(response);
+        return response;
     }
 
     // =========================================================
@@ -211,6 +232,17 @@ public class SanPhamController : ControllerBase
     /// </summary>
     [HttpGet("danh-muc-feed")]
     public async Task<IActionResult> GetDanhMucFeed()
+    {
+        var json = await _cache.GetOrCreateJsonAsync("sp:danhmucfeed", async () =>
+        {
+            var data = await BuildDanhMucFeedAsync();
+            return new { data };
+        }, CacheTtl);
+
+        return Content(json, "application/json");
+    }
+
+    private async Task<object?> BuildDanhMucFeedAsync()
     {
         // Danh mục thật (loại bỏ các row banner TrangThai == 2)
         var danhMucs = await _context.DanhMucSPs
@@ -287,7 +319,7 @@ public class SanPhamController : ControllerBase
                 maDanhMucGop = new List<string> { dm.MaDMSP },
             }).ToList();
 
-        return Ok(new { data = result });
+        return result;
     }
 
     /// <summary>
@@ -314,6 +346,16 @@ public class SanPhamController : ControllerBase
         if (maDanhMucList.Count == 0)
             return BadRequest(new { message = "Thiếu mã danh mục." });
 
+        var cacheKey = $"sp:theodanhmuc:{string.Join(',', maDanhMucList.OrderBy(x => x))}:{page}:{pageSize}";
+
+        var json = await _cache.GetOrCreateJsonAsync(cacheKey, async () =>
+            await BuildSanPhamTheoDanhMucAsync(maDanhMucList, page, pageSize), CacheTtl);
+
+        return Content(json, "application/json");
+    }
+
+    private async Task<object?> BuildSanPhamTheoDanhMucAsync(List<string> maDanhMucList, int page, int pageSize)
+    {
         var query = _context.SanPhams
             .AsNoTracking()
             .Where(sp => sp.TrangThai == 1 && maDanhMucList.Contains(sp.MaDanhMuc))
@@ -375,7 +417,7 @@ public class SanPhamController : ControllerBase
 
         var response = new { data = result, totalPages, total, page };
 
-        return Ok(response);
+        return response;
     }
 
     // =========================================================
@@ -383,6 +425,21 @@ public class SanPhamController : ControllerBase
     // =========================================================
     [HttpGet("{id}")]
     public async Task<IActionResult> GetById(string id)
+    {
+        // "Không tìm thấy" KHÔNG được cache — nếu cache lỗi 404 sẽ chặn sản phẩm mới tạo
+        // trong 10 phút kế tiếp dù DB đã có, nên IProductCacheService tự bỏ qua việc cache null
+        // (xem NullMarker trong ProductCacheService) và trả "__NULL__" cho trường hợp này.
+        var cacheKey = $"sp:detail:{id}";
+        var json = await _cache.GetOrCreateJsonAsync(cacheKey, async () =>
+            await BuildSanPhamDetailAsync(id), CacheTtl);
+
+        if (json == ProductCacheConstants.NullMarker)
+            return NotFound(new { message = "Không tìm thấy sản phẩm." });
+
+        return Content(json, "application/json");
+    }
+
+    private async Task<object?> BuildSanPhamDetailAsync(string id)
     {
         var sp = await _context.SanPhams
             .AsNoTracking()
@@ -399,7 +456,7 @@ public class SanPhamController : ControllerBase
             sp = null;
 
         if (sp == null)
-            return NotFound(new { message = "Không tìm thấy sản phẩm." });
+            return null;
 
         var btHoatDong = sp.BienTheSanphams
             .Where(bt => bt.TrangThai == 1)
@@ -495,6 +552,6 @@ public class SanPhamController : ControllerBase
             SuggestedProducts = goiY,
         };
 
-        return Ok(result);
+        return result;
     }
 }
