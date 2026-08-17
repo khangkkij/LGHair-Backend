@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MinhTamHair.Admin.Services;
@@ -57,11 +57,11 @@ namespace MinhTamHair.Admin.Controllers
                         message = "Tháng không hợp lệ. Vui lòng nhập giá trị từ 1 đến 12."
                     });
 
-                if (year < 2020 || year > DateTime.Now.Year + 1)
+                if (year < 2020 || year > MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().Year + 1)
                     return BadRequest(new
                     {
                         success = false,
-                        message = $"Năm không hợp lệ. Vui lòng nhập năm từ 2020 đến {DateTime.Now.Year + 1}."
+                        message = $"Năm không hợp lệ. Vui lòng nhập năm từ 2020 đến {MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().Year + 1}."
                     });
 
                 // --- GỌI SERVICE TÍNH LƯƠNG ---
@@ -139,7 +139,7 @@ namespace MinhTamHair.Admin.Controllers
                         message = "Tháng không hợp lệ. Vui lòng nhập giá trị từ 1 đến 12."
                     });
 
-                if (year < 2020 || year > DateTime.Now.Year + 1)
+                if (year < 2020 || year > MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().Year + 1)
                     return BadRequest(new
                     {
                         success = false,

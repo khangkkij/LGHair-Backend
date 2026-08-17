@@ -31,7 +31,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 .Select(hd => new PendingOrderResponse
                 {
                     Id = hd.MaHd,
-                    Date = hd.NgayTao ?? DateTime.Now,
+                    Date = hd.NgayTao ?? MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(),
                     ViewMode = "",
 
                     // 1. TRUY XUẤT DỊCH VỤ 
@@ -180,7 +180,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         SoSao = item.SoSao,
                         NoiDung = item.NoiDung,
                         HinhAnh = imagePath, // Lưu đường dẫn ảnh vừa upload
-                        // NgayTao = DateTime.Now // Bỏ comment dòng này nếu bảng DanhGia của bạn có cột lưu ngày
+                        // NgayTao = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now() // Bỏ comment dòng này nếu bảng DanhGia của bạn có cột lưu ngày
                     };
 
                     _context.DanhgiaDichvus.Add(newReview);
@@ -318,7 +318,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         MaNv = item.MaNv,
                         SoSao = item.SoSao,
                         NoiDung = item.NoiDung,
-                        NgayDanhGia = DateTime.Now,
+                        NgayDanhGia = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(),
                         TrangThai = 1
                     };
                     _context.DanhgiaNhanviens.Add(newReview);
@@ -428,7 +428,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                             SoSao = dto.GeneralRating,
                             NoiDung = dto.GeneralComment,
                             HinhAnh = imagePath,
-                            NgayDanhGia = DateTime.Now,
+                            NgayDanhGia = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(),
                             TrangThai = 1
                         };
                         _context.DanhgiaDichvus.Add(newReview);
@@ -469,7 +469,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         comment = dg.NoiDung ?? "Không có nội dung đánh giá",
                         image = dg.HinhAnh,
                         // 3. CHỐNG LỖI CRASH VÌ NGÀY BỊ NULL (Lấy ngày hiện tại để thay thế nếu DB trống)
-                        date = dg.NgayDanhGia ?? DateTime.Now
+                        date = dg.NgayDanhGia ?? MinhTamHair.Services.TimeHelper.VnTimeHelper.Now()
                     })
                     .OrderByDescending(r => r.date)
                     .ToListAsync();
@@ -524,7 +524,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 .Select(hd => new
                 {
                     MaHd = hd.MaHd,
-                    NgayTao = hd.NgayTao ?? DateTime.Now,
+                    NgayTao = hd.NgayTao ?? MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(),
 
                     // 2. Lấy danh sách sản phẩm từ bảng chi tiết hóa đơn sản phẩm
                     Products = hd.ChitietHoadonSps.Select(ct => new {
@@ -611,7 +611,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         SoSao = item.SoSao,
                         NoiDung = item.NoiDung,
                         HinhAnh = imagePath,
-                        NgayDanhGia = DateTime.Now,
+                        NgayDanhGia = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(),
                         TrangThai = 1
                     };
 
@@ -773,7 +773,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         comment = dg.NoiDung ?? "Không có nội dung đánh giá",
                         image = dg.HinhAnh,
                         reply = dg.PhanHoi,
-                        date = dg.NgayDanhGia ?? DateTime.Now
+                        date = dg.NgayDanhGia ?? MinhTamHair.Services.TimeHelper.VnTimeHelper.Now()
                     })
                     .OrderByDescending(r => r.date)
                     .ToListAsync();

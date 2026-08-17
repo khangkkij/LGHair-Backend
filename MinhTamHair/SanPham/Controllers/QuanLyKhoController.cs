@@ -301,7 +301,7 @@ public class QuanLyKhoController : ControllerBase
             MaPn = req.MaPn,
             MaNcc = req.MaNcc,
             MaNv = req.MaNv,
-            NgayNhap = DateTime.Now,
+            NgayNhap = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(),
             TongTien = tongTien,
             GhiChu = req.GhiChu,
             TrangThai = 0,
@@ -377,7 +377,7 @@ public class QuanLyKhoController : ControllerBase
                         MaChungTu = phieu.MaPn,
                         MaNv = phieu.MaNv,
                         GhiChu = $"Duyệt phiếu nhập {phieu.MaPn}",
-                        ThoiGian = DateTime.Now
+                        ThoiGian = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now()
                     });
                 }
 
@@ -693,7 +693,7 @@ public class QuanLyKhoController : ControllerBase
     [HttpGet("thongkenhapkho")]
     public async Task<IActionResult> GetThongKeNhapKho([FromQuery] int? nam)
     {
-        var namXet = nam ?? DateTime.Now.Year;
+        var namXet = nam ?? MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().Year;
 
         var raw = await _db.Phieunhaps
             .Where(p => p.TrangThai == 1 && p.NgayNhap.HasValue && p.NgayNhap.Value.Year == namXet)

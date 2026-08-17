@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
 using System;
@@ -138,7 +138,7 @@ namespace MinhTamHair.Controllers
                 }
                 else
                 {
-                    maLoai = "LNV" + DateTime.Now.ToString("yyMMddHHmmss");
+                    maLoai = "LNV" + MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().ToString("yyMMddHHmmss");
                 }
 
                 var entity = new Loainhanvien

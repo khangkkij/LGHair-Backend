@@ -1,4 +1,4 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -43,7 +43,7 @@ namespace MinhTamHair.Admin.Controllers
         [HttpGet("danh-sach")]
         public async Task<IActionResult> GetLichLamViec([FromQuery] string? tuNgay, [FromQuery] string? denNgay, [FromQuery] int? trangThai)
         {
-            var today = DateOnly.FromDateTime(DateTime.Now);
+            var today = DateOnly.FromDateTime(MinhTamHair.Services.TimeHelper.VnTimeHelper.Now());
             var retentionLimit = today.AddYears(-1).AddDays(-15); // Mốc giới hạn 1 năm 15 ngày
 
             var query = _context.Lichlamviecs
@@ -74,7 +74,7 @@ namespace MinhTamHair.Admin.Controllers
             var rawLichs = await query.ToListAsync();
 
             bool isModified = false;
-            var currentTime = DateTime.Now.TimeOfDay;
+            var currentTime = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().TimeOfDay;
 
             foreach (var l in rawLichs)
             {
@@ -286,7 +286,7 @@ namespace MinhTamHair.Admin.Controllers
             if (lich == null) return NotFound();
             if (lich.TrangThai == 2) return BadRequest(new { message = "Ca làm này đã được điểm danh." });
 
-            var now = DateTime.Now;
+            var now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
             var today = DateOnly.FromDateTime(now);
             var currentTime = TimeOnly.FromDateTime(now);
 
@@ -371,7 +371,7 @@ namespace MinhTamHair.Admin.Controllers
             }
             else
             {
-                targetDate = DateOnly.FromDateTime(DateTime.Now);
+                targetDate = DateOnly.FromDateTime(MinhTamHair.Services.TimeHelper.VnTimeHelper.Now());
             }
 
             // --- BẮT ĐẦU LOGIC CLEAR TỰ ĐỘNG ---
@@ -471,7 +471,7 @@ namespace MinhTamHair.Admin.Controllers
 			try
 			{
 				// 1. Xác định mốc thời gian: Từ hôm nay đến 30 ngày sau
-				DateOnly today = DateOnly.FromDateTime(DateTime.Now);
+				DateOnly today = DateOnly.FromDateTime(MinhTamHair.Services.TimeHelper.VnTimeHelper.Now());
 				DateOnly endDate = today.AddDays(30);
 
 				// 2. Lấy danh sách thợ hợp lệ (Được phép đặt lịch)
@@ -635,7 +635,7 @@ namespace MinhTamHair.Admin.Controllers
 		[HttpGet("qr-diem-danh")]
 		public IActionResult GetDailyQRCode()
 		{
-			var dateStr = DateTime.Now.ToString("yyyyMMdd");
+			var dateStr = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().ToString("yyyyMMdd");
 			var qrCode = $"MinhTamHair-DiemDanh-{dateStr}";
 			return Ok(new { success = true, qrCode = qrCode });
 		}
