@@ -71,12 +71,51 @@ builder.Services.AddCors(options =>
     });
 });
 // cấu hình redis
+//var redisConnectionString = builder.Configuration.GetValue<string>("Redis");
+//builder.Services.AddStackExchangeRedisCache(options =>
+//{
+    //options.Configuration = redisConnectionString;
+    //options.InstanceName = "MinhTamHair:";
+//});
+
+// --- Tự động phát hiện & Kiểm tra kết nối Redis ---
 var redisConnectionString = builder.Configuration.GetValue<string>("Redis");
-builder.Services.AddStackExchangeRedisCache(options =>
+bool isRedisAvailable = false;
+
+if (!string.IsNullOrWhiteSpace(redisConnectionString))
 {
-    options.Configuration = redisConnectionString;
-    options.InstanceName = "MinhTamHair:";
-});
+    try
+    {
+        // Ping thử Redis trong tối đa 1.5 giây
+        var redisOptions = StackExchange.Redis.ConfigurationOptions.Parse(redisConnectionString);
+        redisOptions.ConnectTimeout = 1500; // 1.5s
+        redisOptions.AbortOnConnectFail = true;
+
+        using var testConnection = StackExchange.Redis.ConnectionMultiplexer.Connect(redisOptions);
+        if (testConnection.IsConnected)
+        {
+            isRedisAvailable = true;
+            builder.Services.AddStackExchangeRedisCache(options =>
+            {
+                options.Configuration = redisConnectionString;
+                options.InstanceName = "LGHair:";
+            });
+            Console.WriteLine(">>> [REDIS CACHE] Đã kết nối Redis Cloud thành công!");
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($">>> [CACHE WARNING] Không thể kết nối Redis ({ex.Message}). Tự động chuyển về Memory Cache.");
+    }
+}
+
+if (!isRedisAvailable)
+{
+    builder.Services.AddDistributedMemoryCache();
+    Console.WriteLine(">>> [LOCAL CACHE] Đang chạy với Bộ nhớ đệm RAM Local.");
+}
+
+
 // Đăng ký thêm IConnectionMultiplexer để dùng khi cần xóa cache theo pattern (KEYS/SCAN),
 // việc IDistributedCache không hỗ trợ trực tiếp (chỉ Get/Set/Remove theo đúng 1 key).
 builder.Services.AddSingleton<IConnectionMultiplexer>(sp =>
@@ -210,6 +249,7 @@ builder.Services.AddScoped<IProductCacheService, ProductCacheService>();
 // ===== SERVICE CACHE SERVICE (Redis) — module Dịch vụ / Combo / Tiêu đề =====
 builder.Services.AddScoped<IServiceCacheService, ServiceCacheService>();
 // ===== END SERVICE CACHE SERVICE =====
+builder.Services.AddHostedService<VoucherExpirationBackgroundService>();
 
 var app = builder.Build();
 

@@ -110,7 +110,7 @@ namespace MinhTamHair.KhanchHang.Controllers
         [HttpGet("get-my-vouchers/{maKH}")]
         public async Task<IActionResult> GetMyVouchers(string maKH, [FromQuery] decimal subTotal, [FromQuery] string? productIds)
         {
-            await VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, MinhTamHair.Services.TimeHelper.VnTimeHelper.Now());
+
             var kh = await _context.Khachhangs.Include(k => k.MaCodes).FirstOrDefaultAsync(k => k.MaKh == maKH);
 
             var now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
@@ -133,7 +133,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     }
                 }
             }
-            
+
             decimal subTotalSauKhiGiamRank = subTotal - tienGiamThanhVien;
 
             var myCodes = kh != null ? kh.MaCodes : new List<Voucher>();
@@ -189,7 +189,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             var parts = string.IsNullOrWhiteSpace(codes) ? new List<string>() : codes.Split(',').Select(VoucherCartLogic.NormalizeMaCode).Take(1).ToList();
 
             var kh = await _context.Khachhangs.Include(k => k.MaCodes).FirstOrDefaultAsync(k => k.MaKh == maKH);
-            
+
             string? maRank = kh?.MaRank;
             int? rankCap = null;
             decimal tienGiamThanhVien = 0m;
@@ -211,15 +211,16 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             decimal subTotalSauKhiGiamRank = subTotal - tienGiamThanhVien;
 
-            if (parts.Count == 0) 
+            if (parts.Count == 0)
             {
-                return Ok(new { 
-                    totalDiscount = tienGiamThanhVien, 
-                    finalAmount = subTotalSauKhiGiamRank, 
-                    memberDiscount = tienGiamThanhVien, 
+                return Ok(new
+                {
+                    totalDiscount = tienGiamThanhVien,
+                    finalAmount = subTotalSauKhiGiamRank,
+                    memberDiscount = tienGiamThanhVien,
                     voucherAmount = 0m,
                     memberRankPercent = phanTramGiamRank,
-                    codes = parts 
+                    codes = parts
                 });
             }
 
@@ -230,14 +231,15 @@ namespace MinhTamHair.KhanchHang.Controllers
             var (err, totalGiam, sau) = await VoucherCartLogic.ValidateStackedAsync(_context, parts, maKH, subTotalSauKhiGiamRank, cartIds, MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(), MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(), maRank, rankCap, maxVouchersAllowed: 1);
 
             if (err != null) return BadRequest(new { message = err });
-            
-            return Ok(new { 
-                totalDiscount = tienGiamThanhVien + totalGiam, 
-                finalAmount = sau, 
-                memberDiscount = tienGiamThanhVien, 
+
+            return Ok(new
+            {
+                totalDiscount = tienGiamThanhVien + totalGiam,
+                finalAmount = sau,
+                memberDiscount = tienGiamThanhVien,
                 voucherAmount = totalGiam,
                 memberRankPercent = phanTramGiamRank,
-                codes = parts 
+                codes = parts
             });
         }
 
@@ -257,7 +259,33 @@ namespace MinhTamHair.KhanchHang.Controllers
                 using var transaction = await _context.Database.BeginTransactionAsync();
                 try
                 {
+                    foreach (var p in req.Products)
+                    {
+                        if (string.IsNullOrEmpty(p.MaBienThe)) continue;
 
+                        var bientheCheck = await _context.BienTheSanphams
+                                                         .AsNoTracking()
+                                                         .FirstOrDefaultAsync(x => x.MaBienThe == p.MaBienThe);
+
+                        if (bientheCheck == null)
+                        {
+                            return BadRequest(new { success = false, message = $"Không tìm thấy sản phẩm có mã {p.MaBienThe}." });
+                        }
+
+                        int tonKho = bientheCheck.SoLuongTon ?? 0;
+
+                        // Nếu khách mua nhiều hơn số lượng trong kho -> Báo lỗi và hoàn tác giao dịch
+                        if (p.SoLuong > tonKho)
+                        {
+                            return BadRequest(new
+                            {
+                                success = false,
+                                errorCode = "PRODUCT_OUT_OF_STOCK",
+                                outOfStockProductId = p.MaBienThe,
+                                message = $"Sản phẩm '{bientheCheck.TenBienThe}' vượt quá số lượng tồn kho. Hiện chỉ còn {tonKho} sản phẩm, vui lòng cập nhật lại giỏ hàng."
+                            });
+                        }
+                    }
 
                     string maHd = "SP" + vnNow.ToString("ddHHmmss");
                     decimal subTotal = req.Products.Sum(p => p.GiaBan * p.SoLuong);
@@ -271,7 +299,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     bool laCod = string.Equals(safePayment, "cod", StringComparison.OrdinalIgnoreCase);
                     bool laOnline = string.Equals(safePayment, "vnpay", StringComparison.OrdinalIgnoreCase)
                                   || string.Equals(safePayment, "momo", StringComparison.OrdinalIgnoreCase);
-                    
+
                     // TÍNH LẠI PHẦN TRĂM GIẢM HẠNG THÀNH VIÊN
                     int? phanTramGiamRank = 0;
                     if (!string.IsNullOrWhiteSpace(safeKhachHang) && safeKhachHang != "GUEST")
@@ -367,11 +395,24 @@ namespace MinhTamHair.KhanchHang.Controllers
                         });
 
                         var bienthe = await _context.BienTheSanphams.FindAsync(p.MaBienThe);
-                        if (bienthe != null && bienthe.SoLuongTon >= p.SoLuong)
+                        if (bienthe != null)
                         {
+                            // 1. Dùng lệnh SQL ép Database tự trừ kho an toàn
+                            int rowsAffected = await _context.Database.ExecuteSqlInterpolatedAsync($"UPDATE BIENTHE_SANPHAM SET SoLuongTon = SoLuongTon - {p.SoLuong} WHERE MaBienThe = {p.MaBienThe} AND SoLuongTon >= {p.SoLuong}");
+
+                            // 2. Nếu Database từ chối trừ (vì kho không đủ)
+                            if (rowsAffected <= 0)
+                            {
+                                await transaction.RollbackAsync(); // Hủy toàn bộ giao dịch
+                                return BadRequest(new { success = false, message = $"Sản phẩm '{bienthe.TenBienThe}' vừa bị khách khác mua hết hoặc không đủ số lượng!" });
+                            }
+
+                            // 3. Nếu thành công, ghi lại lịch sử tồn kho như cũ
                             int tonTruoc = bienthe.SoLuongTon ?? 0;
-                            bienthe.SoLuongTon -= p.SoLuong;
-                            int tonSau = bienthe.SoLuongTon ?? 0;
+                            int tonSau = tonTruoc - p.SoLuong;
+
+                            // Cập nhật biến trong C# để lưu lịch sử
+                            // bienthe.SoLuongTon = tonSau; // B? qua d? ng?n EF Core ghi d ln Raw SQL 
 
                             _context.LichSuTonKhos.Add(new LichSuTonKho
                             {
@@ -514,3 +555,6 @@ namespace MinhTamHair.KhanchHang.Controllers
 
     }
 }
+
+
+
