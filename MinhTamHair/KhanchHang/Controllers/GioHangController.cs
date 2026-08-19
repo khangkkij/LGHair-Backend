@@ -87,6 +87,7 @@ namespace MinhTamHair.Controllers
                     // GIỮ LẠI CẢ DỊCH VỤ VÀ COMBO TỪ CACHE
                     var phanCacheDuocGiuLai = cart.Items.Where(x => x.Loai == "DICHVU" || x.Loai == "COMBO").ToList();
 
+                    // Trong hàm GetCart(), phần query phanBienTheDb
                     var phanBienTheDb = await _context.ChitietGiohangs
                         .Where(c => c.MaGhNavigation.MaKh == ctx.userId)
                         .Select(c => new GioHangItemDto
@@ -95,11 +96,11 @@ namespace MinhTamHair.Controllers
                             Loai = "BIENTHE",
                             Ten = c.MaBienTheNavigation.TenBienThe ?? "Sản phẩm",
                             Gia = c.MaBienTheNavigation.GiaBan ?? 0,
-                            // Sản phẩm hiện chưa có hệ thống Flash Sale riêng như dịch vụ,
-                            // nên GiaGoc = Gia (không hiển thị gạch ngang).
                             GiaGoc = c.MaBienTheNavigation.GiaBan ?? 0,
                             HinhAnh = c.MaBienTheNavigation.HinhAnhDaiDien,
-                            SoLuong = c.SoLuong ?? 0
+                            SoLuong = c.SoLuong ?? 0,
+                            // Bổ sung lấy số lượng tồn trực tiếp từ Database
+                            SoLuongTon = c.MaBienTheNavigation.SoLuongTon ?? 0
                         }).ToListAsync();
 
                     cart.Items = phanBienTheDb.Concat(phanCacheDuocGiuLai).ToList();
@@ -122,19 +123,35 @@ namespace MinhTamHair.Controllers
         {
             try
             {
+                // 1. Kiểm tra tồn kho trước khi xử lý giỏ hàng
+                var bt = await _context.BienTheSanphams.FirstOrDefaultAsync(x => x.MaBienThe == request.MaBienThe);
+                if (bt == null) return NotFound(new { message = "Không tìm thấy biến thể sản phẩm." });
+
+                int tonKho = bt.SoLuongTon ?? 0;
+
                 var ctx = GetCartContext();
                 var cachedData = await _cache.GetStringAsync(ctx.key);
                 var cart = string.IsNullOrEmpty(cachedData) ? new GioHangDto { CartOwner = ctx.ownerName } : JsonSerializer.Deserialize<GioHangDto>(cachedData)!;
 
                 var existingItem = cart.Items.FirstOrDefault(x => x.Id == request.MaBienThe && x.Loai == "BIENTHE");
+
                 if (existingItem != null)
                 {
+                    // 2. Bắt lỗi nếu Cộng dồn số lượng vượt quá tồn kho
+                    if (existingItem.SoLuong + request.SoLuong > tonKho)
+                    {
+                        return BadRequest(new { message = $"Số lượng vượt quá tồn kho. Hiện chỉ còn {tonKho} sản phẩm." });
+                    }
                     existingItem.SoLuong += request.SoLuong;
+                    existingItem.SoLuongTon = tonKho; // Cập nhật lại tồn kho mới nhất
                 }
                 else
                 {
-                    var bt = await _context.BienTheSanphams.FirstOrDefaultAsync(x => x.MaBienThe == request.MaBienThe);
-                    if (bt == null) return NotFound(new { message = "Không tìm thấy biến thể sản phẩm." });
+                    // 3. Bắt lỗi nếu Thêm mới mà vượt quá tồn kho
+                    if (request.SoLuong > tonKho)
+                    {
+                        return BadRequest(new { message = $"Số lượng vượt quá tồn kho. Hiện chỉ còn {tonKho} sản phẩm." });
+                    }
 
                     cart.Items.Add(new GioHangItemDto
                     {
@@ -142,11 +159,10 @@ namespace MinhTamHair.Controllers
                         Loai = "BIENTHE",
                         Ten = bt.TenBienThe ?? "Sản phẩm",
                         Gia = bt.GiaBan ?? 0,
-                        // Sản phẩm hiện chưa có hệ thống Flash Sale riêng như dịch vụ,
-                        // nên GiaGoc = Gia (không hiển thị gạch ngang).
                         GiaGoc = bt.GiaBan ?? 0,
                         HinhAnh = bt.HinhAnhDaiDien,
-                        SoLuong = request.SoLuong
+                        SoLuong = request.SoLuong,
+                        SoLuongTon = tonKho // Gán số lượng tồn cho item
                     });
                 }
 
@@ -476,6 +492,18 @@ namespace MinhTamHair.Controllers
         {
             try
             {
+                // 1. Nếu là cập nhật biến thể sản phẩm, check tồn kho trước
+                if (request.Loai == "BIENTHE")
+                {
+                    var bt = await _context.BienTheSanphams.FirstOrDefaultAsync(x => x.MaBienThe == request.Id);
+                    int tonKho = bt?.SoLuongTon ?? 0;
+
+                    if (request.SoLuong > tonKho)
+                    {
+                        return BadRequest(new { message = $"Số lượng yêu cầu vượt quá tồn kho. Hiện chỉ còn {tonKho} sản phẩm." });
+                    }
+                }
+
                 var ctx = GetCartContext();
                 var cachedData = await _cache.GetStringAsync(ctx.key);
                 if (string.IsNullOrEmpty(cachedData)) return NotFound(new { message = "Giỏ hàng trống." });
@@ -492,6 +520,12 @@ namespace MinhTamHair.Controllers
                 else
                 {
                     existingItem.SoLuong = request.SoLuong;
+                    // Cập nhật lại tồn kho mới nhất vào Cache nếu cần
+                    if (request.Loai == "BIENTHE")
+                    {
+                        var bt = await _context.BienTheSanphams.FirstOrDefaultAsync(x => x.MaBienThe == request.Id);
+                        existingItem.SoLuongTon = bt?.SoLuongTon ?? 0;
+                    }
                 }
 
                 await SaveCartToCacheAsync(ctx.key, cart);

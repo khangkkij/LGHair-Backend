@@ -1,13 +1,17 @@
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using MinhTamHair.Models;
 using System;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
+using System.Net.Http.Json;
+using System.Text.Json;
 using System.Threading.Tasks;
+using MinhTamHair.Services.UploadIMG;
 
 namespace MinhTamHair.Controllers
 {
@@ -36,22 +40,22 @@ namespace MinhTamHair.Controllers
     public class NhanVienController : ControllerBase
     {
         private readonly MinhTamHairContext _context;
-        private readonly IWebHostEnvironment _env;
+        private readonly IUploadIMG _uploadImg;
+        private readonly IConfiguration _configuration;
 
-        public NhanVienController(MinhTamHairContext context, IWebHostEnvironment env)
+        public NhanVienController(MinhTamHairContext context, IUploadIMG uploadImg, IConfiguration configuration)
         {
             _context = context;
-            _env = env;
+            _uploadImg = uploadImg;
+            _configuration = configuration;
         }
 
-        // --- API LẤY DANH SÁCH CHỨC VỤ VÀ LOẠI NV (ĐÃ FIX LỖI) ---
         [HttpGet("roles")]
         public async Task<IActionResult> GetRoles()
         {
             try
             {
                 var roles = await _context.Roles
-                    // Ép cứng tên biến trả về là maRole và tenChucVu (chữ thường) để khớp với Vue
                     .Select(r => new { maRole = r.MaRole, tenChucVu = r.TenChucVu })
                     .ToListAsync();
                 return Ok(roles);
@@ -68,7 +72,6 @@ namespace MinhTamHair.Controllers
             try
             {
                 var loaiNvs = await _context.Loainhanviens
-                    // Ép cứng tên biến trả về
                     .Select(l => new { maLoaiNv = l.MaLoaiNv, tenLoai = l.TenLoai })
                     .ToListAsync();
                 return Ok(loaiNvs);
@@ -78,17 +81,23 @@ namespace MinhTamHair.Controllers
                 return StatusCode(500, ex.Message);
             }
         }
-        // --------------------------------------------------------
 
         [HttpGet]
         public async Task<IActionResult> GetNhanViens([FromQuery] string? search, [FromQuery] int? trangThai, [FromQuery] string? gioiTinh)
         {
             try
             {
+                var currentMaNv = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
                 var query = _context.Nhanviens
                     .Include(nv => nv.MaRoleNavigation)
                     .Include(nv => nv.MaLoaiNvNavigation)
                     .AsQueryable();
+
+                if (!string.IsNullOrEmpty(currentMaNv))
+                {
+                    query = query.Where(nv => nv.MaNv != currentMaNv);
+                }
 
                 if (!string.IsNullOrEmpty(search))
                     query = query.Where(nv => nv.HoTenNv.Contains(search) || nv.MaNv.Contains(search) || nv.Sdt.Contains(search) || nv.Cccd.Contains(search));
@@ -133,22 +142,19 @@ namespace MinhTamHair.Controllers
         private async Task<string?> SaveImageAsync(IFormFile file)
         {
             if (file == null || file.Length == 0) return null;
-            var uploadsFolder = Path.Combine(_env.ContentRootPath, "UserUploads");
-            if (!Directory.Exists(uploadsFolder)) Directory.CreateDirectory(uploadsFolder);
-            var uniqueFileName = Guid.NewGuid().ToString() + "_" + file.FileName;
-            var filePath = Path.Combine(uploadsFolder, uniqueFileName);
-            using (var fileStream = new FileStream(filePath, FileMode.Create))
+            var uploadResult = await _uploadImg.AddIMG(file);
+            if (uploadResult?.Error != null || string.IsNullOrEmpty(uploadResult?.SecureUrl?.ToString()))
             {
-                await file.CopyToAsync(fileStream);
+                return null;
             }
-            return "/UserUploads/" + uniqueFileName;
+            return uploadResult.SecureUrl.ToString();
         }
 
         [HttpPost]
         public async Task<IActionResult> AddNhanVien([FromForm] NhanVienDto dto)
         {
-            if (dto.HinhAnhFile != null && dto.HinhAnhFile.Length > 2 * 1024 * 1024)
-                return BadRequest("Dung lượng ảnh đại diện không được vượt quá 2MB.");
+            if (dto.HinhAnhFile != null && dto.HinhAnhFile.Length > 5 * 1024 * 1024)
+                return BadRequest("Dung lượng ảnh đại diện không được vượt quá 5MB.");
             try
             {
                 if (await _context.Nhanviens.AnyAsync(x => x.MaNv == dto.MaNv))
@@ -190,9 +196,9 @@ namespace MinhTamHair.Controllers
         [HttpPut("{id}")]
         public async Task<IActionResult> UpdateNhanVien(string id, [FromForm] NhanVienDto dto)
         {
-            if (dto.HinhAnhFile != null && dto.HinhAnhFile.Length > 2 * 1024 * 1024)
-                return BadRequest("Dung lượng ảnh đại diện không được vượt quá 2MB.");
-            // Validate token identity matching the requested id
+            if (dto.HinhAnhFile != null && dto.HinhAnhFile.Length > 5 * 1024 * 1024)
+                return BadRequest("Dung lượng ảnh đại diện không được vượt quá 5MB.");
+
             var currentMaNv = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
             if (string.IsNullOrEmpty(currentMaNv) || !currentMaNv.Equals(id, StringComparison.OrdinalIgnoreCase))
             {
@@ -256,6 +262,7 @@ namespace MinhTamHair.Controllers
                     }
                     nv.MatKhau = BCrypt.Net.BCrypt.HashPassword(dto.MatKhau);
                 }
+
                 if (dto.HinhAnhFile != null) nv.HinhAnh = await SaveImageAsync(dto.HinhAnhFile);
 
                 await _context.SaveChangesAsync();
@@ -300,6 +307,84 @@ namespace MinhTamHair.Controllers
             catch (Exception ex)
             {
                 return StatusCode(500, "Lỗi server: " + ex.Message);
+            }
+        }
+
+        [HttpPost("scan-cccd")]
+        public async Task<IActionResult> ScanCccd(IFormFile image)
+        {
+            if (image == null || image.Length == 0)
+                return BadRequest("Vui lòng tải lên ảnh CCCD.");
+
+            string apiKey = _configuration["Gemini:ApiKey"] ?? "AQ.Ab8RN6JAPsZ0pNQtL1tBawiPxO133EesUg6PPbYQT2zO46wuEA";
+            if (string.IsNullOrEmpty(apiKey))
+                return StatusCode(500, "Chưa cấu hình API Key Gemini trên server.");
+
+            try
+            {
+                using var ms = new MemoryStream();
+                await image.CopyToAsync(ms);
+                byte[] imageBytes = ms.ToArray();
+                string base64Image = Convert.ToBase64String(imageBytes);
+                string mimeType = string.IsNullOrEmpty(image.ContentType) ? "image/jpeg" : image.ContentType;
+
+                var payload = new
+                {
+                    contents = new[]
+                    {
+                        new
+                        {
+                            parts = new object[]
+                            {
+                                new { text = "Hãy trích xuất thông tin từ thẻ Căn cước công dân Việt Nam trong ảnh này. Chỉ trả về dữ liệu bằng định dạng JSON chuẩn. Không giải thích thêm, không dùng định dạng markdown. Các key bắt buộc: soCccd, hoTen, namSinh (chỉ lấy năm), gioiTinh (Nam hoặc Nữ), diaChi." },
+                                new { inlineData = new { mimeType = mimeType, data = base64Image } }
+                            }
+                        }
+                    },
+                    generationConfig = new { responseMimeType = "application/json" }
+                };
+
+                using var httpClient = new HttpClient();
+                string cleanKey = apiKey.Trim();
+                var models = new[] { "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.7-flash" };
+                HttpResponseMessage? response = null;
+                string error = "";
+
+                foreach (var model in models)
+                {
+                    string url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={cleanKey}";
+                    try
+                    {
+                        response = await httpClient.PostAsJsonAsync(url, payload);
+                        if (response.IsSuccessStatusCode)
+                        {
+                            break;
+                        }
+                        error = await response.Content.ReadAsStringAsync();
+                    }
+                    catch
+                    {
+                        // thử model kế tiếp
+                    }
+                }
+
+                if (response == null || !response.IsSuccessStatusCode)
+                {
+                    return StatusCode(500, $"Lỗi từ Gemini AI: {error}");
+                }
+
+                var jsonResponse = await response.Content.ReadFromJsonAsync<JsonElement>();
+                string textResult = jsonResponse
+                    .GetProperty("candidates")[0]
+                    .GetProperty("content")
+                    .GetProperty("parts")[0]
+                    .GetProperty("text").GetString()!;
+
+                return Content(textResult, "application/json");
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, "Lỗi server khi quét AI: " + ex.Message);
             }
         }
     }

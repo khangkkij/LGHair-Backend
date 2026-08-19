@@ -11,6 +11,7 @@
         // Nếu không có khuyến mãi thì GiaGoc = Gia.
         public decimal GiaGoc { get; set; }
         public int SoLuong { get; set; }
+        public int SoLuongTon { get; set; }
     }
 
     public class GioHangDto
