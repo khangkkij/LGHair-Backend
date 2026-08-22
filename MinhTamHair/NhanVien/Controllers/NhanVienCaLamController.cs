@@ -71,7 +71,7 @@ namespace MinhTamHair.NhanVien.Controllers
 
 			foreach (var l in rawShifts)
 			{
-				if (l.TrangThai == 1 && l.CaLam != "Chưa xếp" && l.CaLam != "Nghỉ lễ")
+				if (l.TrangThai == 1 && l.CaLam != "Chưa xếp" && l.CaLam != "Nghỉ lễ" && l.CaLam != "Nghỉ phép")
 				{
 					bool isAbsent = false;
 					if (l.NgayLamViec < today)

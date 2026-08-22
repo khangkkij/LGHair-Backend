@@ -250,6 +250,7 @@ builder.Services.AddScoped<IProductCacheService, ProductCacheService>();
 builder.Services.AddScoped<IServiceCacheService, ServiceCacheService>();
 // ===== END SERVICE CACHE SERVICE =====
 builder.Services.AddHostedService<VoucherExpirationBackgroundService>();
+builder.Services.AddHostedService<AttendanceBackgroundService>();
 
 var app = builder.Build();
 
