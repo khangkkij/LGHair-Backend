@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
@@ -144,9 +144,9 @@ namespace MinhTamHair.Controllers
 
             // --- BƯỚC 4: TÍNH TOÁN CÁC CON SỐ TRÊN RAM ---
 
-            // Đếm tổng số ngày nhân viên có đi làm (Trạng thái == 1 hoặc == 3)
+            // Đếm tổng số ngày nhân viên có đi làm (Trạng thái == 2 [Có mặt], == 3 [Rời ca], hoặc == 6 [Muộn])
             int soNgayDiLam = lichLamViecRaw
-                .Count(l => Convert.ToInt32(l.TrangThai) == 1 || Convert.ToInt32(l.TrangThai) == 3);
+                .Count(l => l.TrangThai == 2 || l.TrangThai == 3 || l.TrangThai == 6);
 
             // Tìm ra tháng đang xét có tổng cộng bao nhiêu ngày
             int tongSoNgayTrongThang = DateTime.DaysInMonth(year, month);

@@ -62,6 +62,15 @@ namespace MinhTamHair.Admin.Models
         /// </summary>
         public decimal SoCaChuanQuyDoi { get; set; }
 
+        /// <summary>Số ca nghỉ phép (TrangThai = 4 hoặc CaLam = "Nghỉ phép") trong tháng</summary>
+        public int SoCaNghiPhep { get; set; }
+
+        /// <summary>Số ca nghỉ lễ (TrangThai = 7 hoặc CaLam = "Nghỉ lễ") trong tháng</summary>
+        public int SoCaNghiLe { get; set; }
+
+        /// <summary>Số ca vắng mặt (TrangThai = 5) trong tháng</summary>
+        public int SoCaVangMat { get; set; }
+
         /// <summary>
         /// Tổng tiền hoa hồng dịch vụ tích lũy trong tháng.
         /// Lấy từ: ChitietLichdat.TienHoaHongDv của các lịch đặt thuộc hóa đơn

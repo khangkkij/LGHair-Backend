@@ -69,29 +69,29 @@ namespace MinhTamHair.Admin.Services
             //
             // Điều kiện TrangThai: Tính lương cho ca có mặt (2) + rời sớm (3) + muộn (6)
             // Nhưng theo thực tế, chỉ TrangThai = 2 (Đã điểm danh) là ca hoàn thành chắc chắn
-            // Lấy danh sách ca đã điểm danh kèm tên ca để phân loại FT/PT
+            // Lấy danh sách ca làm trong tháng để phân loại và thống kê
             var caLamRaw = await _context.Lichlamviecs
                 .Where(l =>
                     l.NgayLamViec >= ngayDauDate &&     // Từ đầu tháng
                     l.NgayLamViec <= ngayCuoiDate &&    // Đến cuối tháng
-                    l.TrangThai == 2 &&                 // CHỈ tính ca đã điểm danh thành công
                     l.MaNv != null)                     // Có mã NV hợp lệ
-                .Select(l => new { l.MaNv, l.CaLam })  // Chỉ lấy 2 cột cần thiết
+                .Select(l => new { l.MaNv, l.CaLam, l.TrangThai })  // Lấy các cột cần thiết
                 .ToListAsync();
 
-            // Phân loại Fulltime / Part-time và tính công quy đổi (in-memory)
-            //   Part-time: tên ca chứa "Part-time" → hệ số 0.5 công
-            //   Fulltime : các ca còn lại            → hệ số 1.0 công
+            // Phân loại Fulltime / Part-time và tính công quy đổi cùng các loại ca nghỉ (in-memory)
             var soCaLamDict = caLamRaw
                 .GroupBy(x => x.MaNv!)
                 .ToDictionary(
                     g => g.Key,
                     g => new
                     {
-                        SoCaFT     = g.Count(x => !(x.CaLam ?? "").Contains("Part-time")),
-                        SoCaPT     = g.Count(x =>  (x.CaLam ?? "").Contains("Part-time")),
-                        SoCaQuyDoi = (decimal)g.Count(x => !(x.CaLam ?? "").Contains("Part-time")) * 1.0m
-                                   + (decimal)g.Count(x =>  (x.CaLam ?? "").Contains("Part-time")) * 0.5m
+                        SoCaFT         = g.Count(x => x.TrangThai == 2 && !(x.CaLam ?? "").Contains("Part-time")),
+                        SoCaPT         = g.Count(x => x.TrangThai == 2 &&  (x.CaLam ?? "").Contains("Part-time")),
+                        SoCaQuyDoi     = (decimal)g.Count(x => x.TrangThai == 2 && !(x.CaLam ?? "").Contains("Part-time")) * 1.0m
+                                       + (decimal)g.Count(x => x.TrangThai == 2 &&  (x.CaLam ?? "").Contains("Part-time")) * 0.5m,
+                        SoCaNghiPhep   = g.Count(x => x.TrangThai == 4 || x.CaLam == "Nghỉ phép"),
+                        SoCaNghiLe     = g.Count(x => x.TrangThai == 7 || x.CaLam == "Nghỉ lễ"),
+                        SoCaVangMat    = g.Count(x => x.TrangThai == 5)
                     });
                 // Kết quả: { "NV001": { SoCaFT=20, SoCaPT=4, SoCaQuyDoi=22.0 }, ... }
 
@@ -227,6 +227,9 @@ namespace MinhTamHair.Admin.Services
                     SoCaFulltime   = soCaFT,
                     SoCaParttime   = soCaPT,
                     SoCaChuanQuyDoi = soCaQuyDoi,
+                    SoCaNghiPhep   = caData?.SoCaNghiPhep ?? 0,
+                    SoCaNghiLe     = caData?.SoCaNghiLe ?? 0,
+                    SoCaVangMat    = caData?.SoCaVangMat ?? 0,
                     TongHoaHongDv = hoaHongDv,
                     TongHoaHongSp = hoaHongSp,
                     LuongTheoNgayCong = luongTheoNgayCong,
@@ -288,15 +291,17 @@ namespace MinhTamHair.Admin.Services
                 .Where(l =>
                     l.MaNv == employeeId &&
                     l.NgayLamViec >= ngayDauDate &&
-                    l.NgayLamViec <= ngayCuoiDate &&
-                    l.TrangThai == 2)   // Chỉ tính ca đã điểm danh
-                .Select(l => new { l.CaLam })
+                    l.NgayLamViec <= ngayCuoiDate)
+                .Select(l => new { l.CaLam, l.TrangThai })
                 .ToListAsync();
 
             // Part-time: tên ca chứa "Part-time" → 0.5 công; còn lại → 1.0 công
-            var soCaFTMy     = caLamRawMy.Count(x => !(x.CaLam ?? "").Contains("Part-time"));
-            var soCaPTMy     = caLamRawMy.Count(x =>  (x.CaLam ?? "").Contains("Part-time"));
-            var soCaQuyDoiMy = soCaFTMy * 1.0m + soCaPTMy * 0.5m;
+            var soCaFTMy        = caLamRawMy.Count(x => x.TrangThai == 2 && !(x.CaLam ?? "").Contains("Part-time"));
+            var soCaPTMy        = caLamRawMy.Count(x => x.TrangThai == 2 &&  (x.CaLam ?? "").Contains("Part-time"));
+            var soCaQuyDoiMy    = soCaFTMy * 1.0m + soCaPTMy * 0.5m;
+            var soCaNghiPhepMy  = caLamRawMy.Count(x => x.TrangThai == 4 || x.CaLam == "Nghỉ phép");
+            var soCaNghiLeMy    = caLamRawMy.Count(x => x.TrangThai == 7 || x.CaLam == "Nghỉ lễ");
+            var soCaVangMatMy   = caLamRawMy.Count(x => x.TrangThai == 5);
 
            
             var tongHoaHongDv = await _context.ChitietLichdats
@@ -351,6 +356,9 @@ namespace MinhTamHair.Admin.Services
                 SoCaFulltime    = soCaFTMy,
                 SoCaParttime    = soCaPTMy,
                 SoCaChuanQuyDoi = soCaQuyDoiMy,
+                SoCaNghiPhep    = soCaNghiPhepMy,
+                SoCaNghiLe      = soCaNghiLeMy,
+                SoCaVangMat     = soCaVangMatMy,
                 TongHoaHongDv = tongHoaHongDv,
                 TongHoaHongSp = tongHoaHongSp,
                 LuongTheoNgayCong = luongTheoNgayCong,

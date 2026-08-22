@@ -738,7 +738,15 @@ namespace MinhTamHair.KhanchHang.Controllers
                     .AsNoTracking()
                     .Include(l => l.MaNvNavigation)
                     .ThenInclude(nv => nv.MaLoaiNvNavigation)
-                    .Where(l => l.NgayLamViec == ngayHen && l.TrangThai != 0 && l.TrangThai != 5 && l.MaNvNavigation.TrangThai == 1)
+                    .Where(l => l.NgayLamViec == ngayHen && 
+                                l.TrangThai != 0 && 
+                                l.TrangThai != 4 && 
+                                l.TrangThai != 5 && 
+                                l.TrangThai != 7 && 
+                                l.CaLam != "Chưa xếp" &&
+                                l.CaLam != "Nghỉ phép" &&
+                                l.CaLam != "Nghỉ lễ" &&
+                                l.MaNvNavigation.TrangThai == 1)
                     .ToListAsync();
 
                 var cacLichBan = await _context.ChitietLichdats
