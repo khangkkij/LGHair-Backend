@@ -1,4 +1,4 @@
-﻿using System.Collections;
+using System.Collections;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -78,7 +78,7 @@ namespace MinhTamHair.Admin.Controllers
 
             foreach (var l in rawLichs)
             {
-                if (l.TrangThai == 1 && l.CaLam != "Chưa xếp" && l.CaLam != "Nghỉ lễ" && l.NgayLamViec != null)
+                if (l.TrangThai == 1 && l.CaLam != "Chưa xếp" && l.CaLam != "Nghỉ lễ" && l.CaLam != "Nghỉ phép" && l.NgayLamViec != null)
                 {
                     bool isAbsent = false;
                     if (l.NgayLamViec.Value < today)
@@ -228,7 +228,14 @@ namespace MinhTamHair.Admin.Controllers
                 return BadRequest(new { message = $"Không thể đổi thành '{request.CaLam}' vì nhân viên đã có lịch khách đặt nằm ngoài khung giờ này." });
             }
 
-            // 3. Tìm xem hôm nay đã có dòng dữ liệu (do tự động tạo hoặc có sẵn) chưa
+            // 3. Kiểm tra lý do nếu là Nghỉ phép
+            string lyDo = request.GhiChu ?? request.LyDo ?? "";
+            if (request.CaLam == "Nghỉ phép" && string.IsNullOrWhiteSpace(lyDo))
+            {
+                return BadRequest(new { message = "Vui lòng nhập lý do nghỉ phép." });
+            }
+
+            // 4. Tìm xem hôm nay đã có dòng dữ liệu (do tự động tạo hoặc có sẵn) chưa
             var lichHienTai = await _context.Lichlamviecs
                 .FirstOrDefaultAsync(l => l.MaNv == request.MaNv && l.NgayLamViec == ngaySua);
 
@@ -238,20 +245,35 @@ namespace MinhTamHair.Admin.Controllers
                 if (lichHienTai.TrangThai == 2)
                     return BadRequest(new { message = "Không thể sửa ca khi nhân viên đã điểm danh xong." });
 
+                int targetTrangThai = 1;
+                if (request.CaLam == "Chưa xếp") targetTrangThai = 0;
+                else if (request.CaLam == "Nghỉ phép") targetTrangThai = 4;
+                else if (request.CaLam == "Nghỉ lễ") targetTrangThai = 7;
+
                 // Cập nhật ca làm mới
                 lichHienTai.CaLam = request.CaLam;
-                lichHienTai.TrangThai = 1; // Khi đã xếp ca thì chuyển từ 0 (Chưa xếp) sang 1 (Chờ điểm danh)
+                lichHienTai.TrangThai = targetTrangThai;
+                if (!string.IsNullOrWhiteSpace(lyDo))
+                {
+                    lichHienTai.GhiChu = lyDo;
+                }
                 await _context.SaveChangesAsync();
                 return Ok(new { success = true, message = "Cập nhật ca làm thành công." });
             }
 
             // Nếu trường hợp hy hữu chưa có dòng dữ liệu thì mới tạo mới
+            int newTrangThai = 1;
+            if (request.CaLam == "Chưa xếp") newTrangThai = 0;
+            else if (request.CaLam == "Nghỉ phép") newTrangThai = 4;
+            else if (request.CaLam == "Nghỉ lễ") newTrangThai = 7;
+
             var newLich = new Lichlamviec
             {
                 MaNv = request.MaNv,
                 NgayLamViec = ngaySua,
                 CaLam = request.CaLam,
-                TrangThai = 1
+                TrangThai = newTrangThai,
+                GhiChu = !string.IsNullOrWhiteSpace(lyDo) ? lyDo : null
             };
             _context.Lichlamviecs.Add(newLich);
             await _context.SaveChangesAsync();
@@ -335,8 +357,8 @@ namespace MinhTamHair.Admin.Controllers
             var lich = await _context.Lichlamviecs.FindAsync(maLich);
             if (lich == null) return NotFound(new { message = "Không tìm thấy ca làm." });
 
-            // 1. Kiểm tra mã trạng thái điểm danh hợp lệ (Chỉ cho phép 2: Có mặt, 3: Rời ca, 5: Vắng mặt, 6: Muộn)
-            var validStatuses = new[] { 2, 3, 5, 6 };
+            // 1. Kiểm tra mã trạng thái điểm danh hợp lệ (2: Có mặt, 3: Rời ca, 4: Nghỉ phép, 5: Vắng mặt, 6: Muộn, 7: Nghỉ lễ)
+            var validStatuses = new[] { 2, 3, 4, 5, 6, 7 };
             if (!validStatuses.Contains(request.TrangThai))
             {
                 return BadRequest(new { message = "Trạng thái điểm danh không hợp lệ." });
@@ -355,6 +377,14 @@ namespace MinhTamHair.Admin.Controllers
             }
 
             lich.TrangThai = request.TrangThai;
+            if (request.TrangThai == 4)
+            {
+                lich.CaLam = "Nghỉ phép";
+            }
+            else if (request.TrangThai == 7)
+            {
+                lich.CaLam = "Nghỉ lễ";
+            }
             lich.GhiChu = request.GhiChu;
 
             await _context.SaveChangesAsync();
@@ -488,7 +518,7 @@ namespace MinhTamHair.Admin.Controllers
 
 				var mauCaLam = caLamGiaoDien
 					.GroupBy(l => l.MaNv)
-					.ToDictionary(g => g.Key!, g => g.FirstOrDefault(l => l.CaLam != "Chưa xếp" && l.CaLam != "Nghỉ lễ")?.CaLam ?? "Chưa xếp"); // Sửa fallback mặc định thành "Chưa xếp"
+					.ToDictionary(g => g.Key!, g => g.FirstOrDefault(l => l.CaLam != "Chưa xếp" && l.CaLam != "Nghỉ lễ" && l.CaLam != "Nghỉ phép")?.CaLam ?? "Chưa xếp"); // Sửa fallback mặc định thành "Chưa xếp"
 
 				// --- BƯỚC KIỂM TRA MỚI ---
 				// Lọc ra danh sách mã nhân viên đang bị "Chưa xếp" ca

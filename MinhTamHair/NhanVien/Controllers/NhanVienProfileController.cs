@@ -2,6 +2,8 @@
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
 using System.Text.RegularExpressions;
+using System.IO;
+using MinhTamHair.Services.UploadIMG; // 📌 Namespace upload Cloudinary
 
 namespace MinhTamHair.Controllers
 {
@@ -10,12 +12,12 @@ namespace MinhTamHair.Controllers
     public class NhanVienProfileController : ControllerBase
     {
         private readonly MinhTamHairContext _context;
-        private readonly IWebHostEnvironment _env; // Thêm môi trường để lưu file vật lý
+        private readonly IUploadIMG _uploadImg; // 📌 Inject Cloudinary Service
 
-        public NhanVienProfileController(MinhTamHairContext context, IWebHostEnvironment env)
+        public NhanVienProfileController(MinhTamHairContext context, IUploadIMG uploadImg)
         {
             _context = context;
-            _env = env;
+            _uploadImg = uploadImg;
         }
 
         // 1. API: LẤY THÔNG TIN HỒ SƠ
@@ -51,8 +53,7 @@ namespace MinhTamHair.Controllers
             return Ok(employee);
         }
 
-        // 2. API: CẬP NHẬT TỔNG HỢP (HỒ SƠ, TÊN ĐĂNG NHẬP, MẬT KHẨU, FILE ẢNH VẬT LÝ)
-        // Dùng [FromForm] thay vì [FromBody] để nhận được File dữ liệu đính kèm
+        // 2. API: CẬP NHẬT TỔNG HỢP (HỒ SƠ, TÊN ĐĂNG NHẬP, MẬT KHẨU, FILE ẢNH CLOUDINARY)
         [HttpPut("update-profile")]
         public async Task<IActionResult> UpdateProfile(
             [FromForm] string maNv,
@@ -65,11 +66,11 @@ namespace MinhTamHair.Controllers
             [FromForm] string? matKhauCu,
             IFormFile? hinhAnhFile)
         {
-            if (hinhAnhFile != null && hinhAnhFile.Length > 2 * 1024 * 1024)
+            if (hinhAnhFile != null && hinhAnhFile.Length > 5 * 1024 * 1024)
             {
-                return BadRequest(new { message = "Dung lượng ảnh đại diện không được vượt quá 2MB." });
+                return BadRequest(new { message = "Dung lượng ảnh đại diện không được vượt quá 5MB." });
             }
-            // Validate token identity matching the requested maNv
+
             var currentMaNv = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
             if (string.IsNullOrEmpty(currentMaNv) || !currentMaNv.Equals(maNv, StringComparison.OrdinalIgnoreCase))
             {
@@ -80,7 +81,7 @@ namespace MinhTamHair.Controllers
                 }
             }
 
-            // --- BƯỚC 1: VALIDATE DỮ LIỆU CƠ BẢN THỦ CÔNG ---
+            // --- BƯỚC 1: VALIDATE DỮ LIỆU CƠ BẢN ---
             if (string.IsNullOrWhiteSpace(maNv)) return BadRequest(new { message = "Mã nhân viên bắt buộc." });
             if (string.IsNullOrWhiteSpace(hoTenNv)) return BadRequest(new { message = "Họ tên không được để trống." });
             if (string.IsNullOrWhiteSpace(tenDangNhap)) return BadRequest(new { message = "Tên đăng nhập không được để trống." });
@@ -91,7 +92,7 @@ namespace MinhTamHair.Controllers
                 return BadRequest(new { message = "Số điện thoại không hợp lệ hoặc sai định dạng Việt Nam." });
             }
 
-            // --- BƯỚC 2: KIỂM TRA TRÙNG TÊN ĐĂNG NHẬP TRÊN HỆ THỐNG ---
+            // --- BƯỚC 2: KIỂM TRA TRÙNG TÊN ĐĂNG NHẬP ---
             bool isUsernameTaken = await _context.Nhanviens
                 .AnyAsync(nv => nv.TenDangNhap == tenDangNhap.Trim() && nv.MaNv != maNv);
             if (isUsernameTaken)
@@ -105,14 +106,13 @@ namespace MinhTamHair.Controllers
 
             try
             {
-                // Cập nhật thông tin chữ
                 employee.HoTenNv = hoTenNv.Trim();
                 employee.Sdt = sdt.Trim();
                 employee.DiaChi = diaChi.Trim();
                 employee.GioiTinh = gioiTinh;
                 employee.TenDangNhap = tenDangNhap.Trim();
 
-                // Nếu người dùng có gõ mật khẩu mới thì tiến hành cập nhật đổi mật khẩu
+                // Đổi mật khẩu nếu có nhập mật khẩu mới
                 if (!string.IsNullOrWhiteSpace(matKhauMoi))
                 {
                     if (!string.IsNullOrEmpty(employee.MatKhau))
@@ -140,35 +140,25 @@ namespace MinhTamHair.Controllers
                     employee.MatKhau = BCrypt.Net.BCrypt.HashPassword(matKhauMoi.Trim());
                 }
 
-                // --- BƯỚC 4: XỬ LÝ LƯU FILE ẢNH VẬT LÝ ---
+                // --- BƯỚC 4: TẢI ẢNH LÊN CLOUDINARY ---
                 if (hinhAnhFile != null && hinhAnhFile.Length > 0)
                 {
-                    // Đảm bảo định dạng tệp gửi lên là ảnh
-                    var allowedExtensions = new[] { ".jpg", ".jpeg", ".png", ".gif" };
+                    var allowedExtensions = new[] { ".jpg", ".jpeg", ".png", ".webp" };
                     var extension = Path.GetExtension(hinhAnhFile.FileName).ToLower();
                     if (!allowedExtensions.Contains(extension))
                     {
-                        return BadRequest(new { message = "Định dạng file không hợp lệ. Chỉ chấp nhận JPG, JPEG, PNG, GIF." });
+                        return BadRequest(new { message = "Định dạng file không hợp lệ. Chỉ chấp nhận JPG, JPEG, PNG, WEBP." });
                     }
 
-                    // Tạo tên file duy nhất tránh trùng lặp: avatar_nv01.png
-                    string folderPath = Path.Combine(_env.WebRootPath, "uploads", "avatars");
-                    if (!Directory.Exists(folderPath))
+                    // 📌 Tải ảnh trực tiếp lên Cloudinary bằng IUploadIMG
+                    var uploadResult = await _uploadImg.AddIMG(hinhAnhFile);
+                    if (uploadResult?.Error != null || string.IsNullOrEmpty(uploadResult?.SecureUrl?.ToString()))
                     {
-                        Directory.CreateDirectory(folderPath); // Tự động tạo thư mục nếu chưa có
+                        return StatusCode(500, new { message = "Lỗi khi tải ảnh lên Cloudinary: " + uploadResult?.Error?.Message });
                     }
 
-                    string fileName = $"avatar_{maNv}{extension}";
-                    string fullFilePath = Path.Combine(folderPath, fileName);
-
-                    // Ghi đè tệp vật lý vào ổ cứng máy chủ
-                    using (var stream = new FileStream(fullFilePath, FileMode.Create))
-                    {
-                        await hinhAnhFile.CopyToAsync(stream);
-                    }
-
-                    // Đường dẫn tương đối lưu vào Database để Frontend gọi hiển thị
-                    employee.HinhAnh = $"/uploads/avatars/{fileName}";
+                    // Lưu URL Cloudinary vào CSDL
+                    employee.HinhAnh = uploadResult.SecureUrl.ToString();
                 }
 
                 await _context.SaveChangesAsync();

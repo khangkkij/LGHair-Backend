@@ -18,6 +18,9 @@ namespace MinhTamHair.Admin.Models
 
 			[Required]
 			public string CaLam { get; set; } = null!; // VD: "Sáng", "Chiều", "Cả ngày"
+
+			public string? GhiChu { get; set; } // Lý do hoặc ghi chú cho ca làm / nghỉ phép
+			public string? LyDo { get; set; }
 		}
 
 		// DTO để trả về danh sách lịch làm việc cho Frontend vẽ Giao diện Lịch

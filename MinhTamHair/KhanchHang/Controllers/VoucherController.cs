@@ -47,7 +47,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 }
             }
 
-            await VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, MinhTamHair.Services.TimeHelper.VnTimeHelper.Now());
+
 
             var query = _context.Vouchers.AsQueryable();
 
@@ -113,25 +113,25 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             var usedCodeSet = usedCodes.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
-            await VoucherCartLogic.AutoDisableExpiredVouchersAsync(_context, now);
+
 
             var result = khachHang.MaCodes
                 .Where(v => (v.TrangThai == null || v.TrangThai == 1) && (!v.NgayKetThuc.HasValue || v.NgayKetThuc >= now))
                 .Select(v => new
-            {
-                maCode = v.MaCode,
-                moTa = v.MoTa,
-                phanTramGiam = v.PhanTramGiam,
-                soTienGiam = v.SoTienGiam,
-                giaTriToiThieu = v.GiaTriToiThieu,
-                ngayBatDau = v.NgayBatDau,
-                ngayKetThuc = v.NgayKetThuc,
-                soLuong = v.SoLuong,
-                soLuongDaDung = v.SoLuongDaDung,
-                trangThai = v.TrangThai,
-                isUsed = usedCodeSet.Contains(v.MaCode),
-                isExpired = v.NgayKetThuc.HasValue && v.NgayKetThuc < now
-            });
+                {
+                    maCode = v.MaCode,
+                    moTa = v.MoTa,
+                    phanTramGiam = v.PhanTramGiam,
+                    soTienGiam = v.SoTienGiam,
+                    giaTriToiThieu = v.GiaTriToiThieu,
+                    ngayBatDau = v.NgayBatDau,
+                    ngayKetThuc = v.NgayKetThuc,
+                    soLuong = v.SoLuong,
+                    soLuongDaDung = v.SoLuongDaDung,
+                    trangThai = v.TrangThai,
+                    isUsed = usedCodeSet.Contains(v.MaCode),
+                    isExpired = v.NgayKetThuc.HasValue && v.NgayKetThuc < now
+                });
 
             return Ok(result);
         }

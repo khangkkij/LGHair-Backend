@@ -4,8 +4,9 @@ using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
 using System.Security.Claims;
 using System.IO;
+using MinhTamHair.Services.UploadIMG; // 📌 Namespace chính xác trong project của bạn
 
-namespace MinhTamHair.Controllers
+namespace MinhTamHair.KhanchHang.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
@@ -13,12 +14,12 @@ namespace MinhTamHair.Controllers
     public class ProfileController : ControllerBase
     {
         private readonly MinhTamHairContext _context;
-        private readonly IWebHostEnvironment _env;
+        private readonly IUploadIMG _uploadImg; // 📌 Service Cloudinary chính xác
 
-        public ProfileController(MinhTamHairContext context, IWebHostEnvironment env)
+        public ProfileController(MinhTamHairContext context, IUploadIMG uploadImg)
         {
             _context = context;
-            _env = env;
+            _uploadImg = uploadImg;
         }
 
         // --- 1. LẤY THÔNG TIN PROFILE (TỰ ĐỘNG TÍNH ĐIỂM DỰA TRÊN TỔNG TIỀN) ---
@@ -34,13 +35,9 @@ namespace MinhTamHair.Controllers
 
             if (user == null) return NotFound(new { success = false, message = "Không tìm thấy người dùng." });
 
-            // ====================================================================
-            // 1. TÍNH TỔNG TIỀN ĐỂ XÉT HẠNG (Dùng TongTien để lấy giá trị dịch vụ 450k)
-            // Lưu ý: Đã đổi TienDaTra thành TongTien để không bị lỗi Model và cộng đủ điểm
-            // ====================================================================
+            // 1. TÍNH TỔNG TIỀN ĐỂ XÉT HẠNG
             var tongTienDaChi = await _context.HoaDons
                 .Where(h => h.MaKh == userId)
-                // Nếu muốn chỉ cộng điểm khi hóa đơn đã xong, bạn có thể thêm: && h.TrangThai == 1
                 .SumAsync(h => h.TongTien ?? 0);
 
             // 2. Quy đổi ra điểm (1 điểm = 10.000 VNĐ)
@@ -75,7 +72,6 @@ namespace MinhTamHair.Controllers
                     await _context.Entry(user).Reference(u => u.MaRankNavigation).LoadAsync();
                 }
             }
-            // ====================================================================
 
             return Ok(new
             {
@@ -88,7 +84,7 @@ namespace MinhTamHair.Controllers
                     hinhAnh = user.HinhAnh,
                     gioiTinh = user.GioiTinh,
                     diemTichLuy = user.DiemTichLuy,
-                    tongTienDaChi = tongTienDaChi, // Truyền biến này về để UI tính tiền lẻ
+                    tongTienDaChi = tongTienDaChi,
                     tenRank = user.MaRankNavigation?.TenRank ?? "Thành viên Mới"
                 }
             });
@@ -150,37 +146,42 @@ namespace MinhTamHair.Controllers
             return Ok(new { success = true, message = "Đổi mật khẩu thành công!" });
         }
 
-        // --- 3. UPLOAD ẢNH ĐẠI DIỆN VẬT LÝ ---
+        // --- 3. UPLOAD ẢNH ĐẠI DIỆN LÊN CLOUDINARY ---
         [HttpPost("upload-avatar")]
         public async Task<IActionResult> UploadAvatar(IFormFile file)
         {
             if (file == null || file.Length == 0)
                 return BadRequest(new { success = false, message = "Vui lòng chọn ảnh." });
 
-            var allowedExtensions = new[] { ".jpg", ".jpeg", ".png" };
+            var allowedExtensions = new[] { ".jpg", ".jpeg", ".png", ".webp" };
             var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
             if (!allowedExtensions.Contains(extension))
-                return BadRequest(new { success = false, message = "Chỉ chấp nhận file ảnh định dạng .jpg, .jpeg, .png." });
+                return BadRequest(new { success = false, message = "Chỉ chấp nhận file ảnh định dạng .jpg, .jpeg, .png, .webp." });
 
             var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
             var user = await _context.Khachhangs.FirstOrDefaultAsync(k => k.MaKh == userId);
             if (user == null) return NotFound(new { success = false, message = "Không tìm thấy người dùng." });
 
-            string uploadsFolder = Path.Combine(_env.ContentRootPath, "UserUploads", "avatars");
-            if (!Directory.Exists(uploadsFolder)) Directory.CreateDirectory(uploadsFolder);
-
-            string uniqueFileName = Guid.NewGuid().ToString() + "_" + file.FileName;
-            string filePath = Path.Combine(uploadsFolder, uniqueFileName);
-
-            using (var fileStream = new FileStream(filePath, FileMode.Create))
+            try
             {
-                await file.CopyToAsync(fileStream);
+                // 📌 Tải ảnh trực tiếp lên Cloudinary bằng IUploadIMG của dự án
+                var uploadResult = await _uploadImg.AddIMG(file);
+
+                if (uploadResult?.Error != null || string.IsNullOrEmpty(uploadResult?.SecureUrl?.ToString()))
+                {
+                    return StatusCode(500, new { success = false, message = "Lỗi khi tải ảnh lên Cloudinary: " + uploadResult?.Error?.Message });
+                }
+
+                // 📌 Lưu link Cloudinary vào CSDL
+                user.HinhAnh = uploadResult.SecureUrl.ToString();
+                await _context.SaveChangesAsync();
+
+                return Ok(new { success = true, imageUrl = user.HinhAnh, message = "Cập nhật ảnh đại diện thành công!" });
             }
-
-            user.HinhAnh = "/UserUploads/avatars/" + uniqueFileName;
-            await _context.SaveChangesAsync();
-
-            return Ok(new { success = true, imageUrl = user.HinhAnh, message = "Cập nhật ảnh thành công!" });
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = "Lỗi hệ thống: " + ex.Message });
+            }
         }
 
         // --- 4. LẤY DANH SÁCH HẠNG MỨC THÀNH VIÊN ---
