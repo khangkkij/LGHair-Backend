@@ -29,14 +29,13 @@ namespace MinhTamHair.KhanchHang.Controllers
         }
 
         // =========================================================================
-        // 1. LẤY DỮ LIỆU DỊCH VỤ & COMBO (ĐÃ TỐI ƯU HÓA TRUY VẤN SQL VÀ FLASHSALE)
+        // 1. LẤY DỮ LIỆU DỊCH VỤ & COMBO
         // =========================================================================
         [HttpGet("data-booking")]
         public async Task<IActionResult> GetAll()
         {
             var now = VnTimeHelper.Now();
 
-            // Truy vấn trực tiếp trên SQL Server với AsNoTracking, chỉ lấy các trường cần thiết
             var rawServices = await _context.Dichvus
                 .AsNoTracking()
                 .Where(s => s.TrangThai == 1)
@@ -49,7 +48,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                     icon = "fas fa-cut",
                     phanTramHoaHong = s.PhanTramHoaHong ?? 0,
                     hinhAnh = s.Hinhanhs.Select(h => h.DuongDan).FirstOrDefault(),
-                    // Lọc FlashSale còn hạn trực tiếp trên SQL
                     phanTramGiam = s.ChitietFlashsales
                         .Where(fs => fs.MaFlNavigation.TrangThai == 1 &&
                                      fs.MaFlNavigation.NgayBatDau <= now &&
@@ -59,7 +57,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                 })
                 .ToListAsync();
 
-            // Tính toán giá sau giảm
             var services = rawServices.Select(s =>
             {
                 decimal finalPrice = (decimal)s.originalPrice;
@@ -129,7 +126,6 @@ namespace MinhTamHair.KhanchHang.Controllers
         public async Task<IActionResult> GetMyVouchers(string maKH, [FromQuery] decimal subTotal,
             [FromQuery] DateTime? ngayGioHen, [FromQuery] string? serviceIds)
         {
-
             var kh = await _context.Khachhangs
                 .Include(k => k.MaCodes)
                 .FirstOrDefaultAsync(k => k.MaKh == maKH);
@@ -308,80 +304,12 @@ namespace MinhTamHair.KhanchHang.Controllers
             return Ok(new { totalDiscount = totalGiam, memberDiscount = memberDiscount, finalAmount = finalAmount, codes = parts });
         }
 
-        [HttpPost("create-payment")]
-        public async Task<IActionResult> CreatePayment([FromBody] PaymentInformationRequest model)
-        {
-            if (model.OrderDescription.ToLower().Contains("vnpay"))
-            {
-                var vnpay = new VnPayLibrary();
-                var vnp_TmnCode = _configuration["Vnpay:TmnCode"];
-                var vnp_HashSecret = _configuration["Vnpay:HashSecret"];
-                var vnp_Url = _configuration["Vnpay:BaseUrl"];
-                var vnp_ReturnUrl = _configuration["Vnpay:ReturnUrlDichVu"];
-
-                var vnpayNow = VnTimeHelper.Now();
-
-                vnpay.AddRequestData("vnp_Version", "2.1.0");
-                vnpay.AddRequestData("vnp_Command", "pay");
-                vnpay.AddRequestData("vnp_TmnCode", vnp_TmnCode);
-                vnpay.AddRequestData("vnp_Amount", ((long)(model.Amount * 100)).ToString());
-                vnpay.AddRequestData("vnp_CreateDate", vnpayNow.ToString("yyyyMMddHHmmss"));
-                vnpay.AddRequestData("vnp_ExpireDate", vnpayNow.AddMinutes(15).ToString("yyyyMMddHHmmss"));
-                vnpay.AddRequestData("vnp_CurrCode", "VND");
-                vnpay.AddRequestData("vnp_IpAddr", "127.0.0.1");
-                vnpay.AddRequestData("vnp_Locale", "vn");
-                vnpay.AddRequestData("vnp_OrderInfo", "Thanh toan lich hen " + vnpayNow.Ticks);
-                vnpay.AddRequestData("vnp_OrderType", "other");
-                vnpay.AddRequestData("vnp_ReturnUrl", vnp_ReturnUrl);
-                vnpay.AddRequestData("vnp_TxnRef", vnpayNow.ToString("yyyyMMddHHmmss"));
-
-                var paymentUrl = vnpay.CreateRequestUrl(vnp_Url, vnp_HashSecret);
-                return Ok(new { url = paymentUrl });
-            }
-
-            var partnerCode = _configuration["Momo:PartnerCode"];
-            var accessKey = _configuration["Momo:AccessKey"];
-            var secretKey = _configuration["Momo:SecretKey"];
-            var endpoint = _configuration["Momo:ApiEndpoint"];
-            var redirectUrl = _configuration["Momo:ReturnUrlDichVu"];
-            var ipnUrl = _configuration["Momo:NotifyUrl"];
-
-            string orderId = VnTimeHelper.Now().ToString("yyyyMMddHHmmss");
-            string requestId = Guid.NewGuid().ToString();
-            long amount = (long)model.Amount;
-            string orderInfo = "Thanh toan lich hen Minh Tam Hair";
-
-            string rawHash = $"accessKey={accessKey}&amount={amount}&extraData=&ipnUrl={ipnUrl}&orderId={orderId}&orderInfo={orderInfo}&partnerCode={partnerCode}&redirectUrl={redirectUrl}&requestId={requestId}&requestType=captureWallet";
-            string signature = SignHmacSHA256(rawHash, secretKey);
-
-            var requestData = new
-            {
-                partnerCode,
-                requestId,
-                amount,
-                orderId,
-                orderInfo,
-                redirectUrl,
-                ipnUrl,
-                lang = "vi",
-                extraData = "",
-                requestType = "captureWallet",
-                signature
-            };
-
-            using var client = new HttpClient();
-            var response = await client.PostAsJsonAsync(endpoint, requestData);
-            var result = await response.Content.ReadFromJsonAsync<MomoResponse>();
-
-            if (result != null && result.resultCode == 0) return Ok(new { url = result.payUrl });
-            return BadRequest(result?.message ?? "Lỗi MoMo");
-        }
 
         // =========================================================================
-        // 2. LƯU LỊCH ĐẶT VÀ THANH TOÁN (ĐÃ TỐI ƯU TRANSACTION & GỬI EMAIL NGẦM)
+        // 2. LƯU LỊCH ĐẶT VÀ THANH TOÁN (TỐI ƯU TRANSACTION & NHẬN DIỆN CHÍNH CHỦ)
         // =========================================================================
         [HttpPost("save-booking-final")]
-        public async Task<IActionResult> SaveBooking([FromBody] BookingRequest model, [FromQuery] string paymentMode, [FromQuery] string? maStylist)
+        public async Task<IActionResult> SaveBooking([FromBody] BookingRequest model, [FromQuery] string paymentMode, [FromQuery] string? maStylist, [FromQuery] string? paymentMethod = "COD")
         {
             var strategy = _context.Database.CreateExecutionStrategy();
 
@@ -393,6 +321,8 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                 string currentMaKh = model.MaKh;
                 decimal total = 0m;
+                decimal daThanhToanTruoc = 0m;
+
                 string emailGuiMail = model.Email;
                 string tenKhachGuiMail = model.HoTen ?? "Khách hàng";
 
@@ -564,16 +494,63 @@ namespace MinhTamHair.KhanchHang.Controllers
                         }
 
                         var localTime = model.NgayHen.ToUniversalTime().AddHours(7);
+                        var requestedDate = DateOnly.FromDateTime(localTime);
+                        var requestedStart = TimeOnly.FromDateTime(localTime);
+                        var requestedEnd = requestedStart.AddMinutes(tongPhut);
+
+                        // ---> XIN KHÓA (MUTEX) TỪ SQL SERVER ĐỂ XẾP HÀNG CONCURRENT REQUESTS <---
+                        string lockResource = string.IsNullOrEmpty(maStylist)
+                            ? $"Booking_Salon_{requestedDate.ToString("yyyyMMdd")}"
+                            : $"Booking_Stylist_{maStylist}_{requestedDate.ToString("yyyyMMdd")}";
+                        await _context.Database.ExecuteSqlInterpolatedAsync($"EXEC sp_getapplock @Resource = {lockResource}, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 5000");
+
+                        // ---> KHÓA SLOT THÔNG MINH: NHẬN DIỆN CHÍNH CHỦ, DỌN RÁC ĐƠN PENDING <---
+                        if (!string.IsNullOrEmpty(maStylist))
+                        {
+                            var conflictingBookings = await _context.Lichdats
+                                .Where(ld => ld.NgayHen == requestedDate
+                                          && (ld.TrangThai == 3 || ld.TrangThai == 1 || ld.TrangThai == 2)
+                                          && ld.GioBatDau < requestedEnd
+                                          && ld.GioKetThuc > requestedStart
+                                          && _context.ChitietLichdats.Any(ct => ct.MaLd == ld.MaLd && ct.MaNv == maStylist))
+                                .ToListAsync();
+
+                            if (conflictingBookings.Any())
+                            {
+                                var myStuckBooking = conflictingBookings.FirstOrDefault(b => b.MaKh == currentMaKh && b.TrangThai == 3);
+
+                                if (myStuckBooking != null)
+                                {
+                                    // Bắn thẳng về 0, giải phóng đường chạy
+                                    myStuckBooking.TrangThai = 0;
+                                    var oldInvoice = await _context.HoaDons.FirstOrDefaultAsync(h => h.MaLd == myStuckBooking.MaLd);
+                                    if (oldInvoice != null) oldInvoice.TrangThai = 0;
+                                    var oldPayment = await _context.Thanhtoans.FirstOrDefaultAsync(t => t.MaHd == myStuckBooking.MaLd);
+                                    if (oldPayment != null) oldPayment.TrangThai = 0;
+
+                                    await _context.SaveChangesAsync();
+                                }
+                                else
+                                {
+                                    // Thợ đã bị người khác book hoặc đã cọc thành công -> BLOCK!
+                                    await transaction.RollbackAsync();
+                                    return BadRequest(new { message = "Rất tiếc, thợ bạn chọn đang có khách giao dịch. Vui lòng chọn thợ hoặc giờ khác!" });
+                                }
+                            }
+                        }
+                        // ---> KẾT THÚC KHÓA SLOT THÔNG MINH <---
 
                         var lichDat = new Lichdat
                         {
                             MaLd = shortMaLd,
                             MaKh = currentMaKh,
-                            NgayHen = DateOnly.FromDateTime(localTime),
-                            GioBatDau = TimeOnly.FromDateTime(localTime),
-                            GioKetThuc = TimeOnly.FromDateTime(localTime).AddMinutes(tongPhut),
+                            NgayHen = requestedDate,
+                            GioBatDau = requestedStart,
+                            GioKetThuc = requestedEnd,
                             TongTienDuKien = total,
-                            TrangThai = trangThaiLichDat
+
+                            // Online là Pending(3), Offline là 1 (Cọc) hoặc 2 (100%)
+                            TrangThai = (paymentMethod?.ToLower() == "vnpay" || paymentMethod?.ToLower() == "momo") ? 3 : trangThaiLichDat
                         };
                         _context.Lichdats.Add(lichDat);
 
@@ -589,9 +566,11 @@ namespace MinhTamHair.KhanchHang.Controllers
                             ThanhTien = tongSauGiam,
                             TienDaTra = daThanhToan,
                             PhanTramGiamVip = phanTramGiamRank,
-                            TrangThai = daThanhToan >= tongSauGiam ? 2 : 1,
+                            // Online thì 0, COD/Tiền mặt thì 1 hoặc 2
+                            TrangThai = (paymentMethod?.ToLower() == "vnpay" || paymentMethod?.ToLower() == "momo") ? 0 : (daThanhToan >= tongSauGiam ? 2 : 1),
                             MaCode = maCodeNorm
                         };
+                        daThanhToanTruoc = daThanhToan;
                         _context.HoaDons.Add(hoaDon);
 
                         // 6. LƯU CHI TIẾT LỊCH ĐẶT
@@ -617,13 +596,13 @@ namespace MinhTamHair.KhanchHang.Controllers
                             _context.ChitietLichdats.Add(chiTiet);
                         }
 
-                        // 7. LƯU BẢNG THANH TOÁN
+                        // 7. LƯU BẢNG THANH TOÁN (Trạng thái = 0 chưa trả)
                         var tt = new Thanhtoan
                         {
                             MaHd = maHdTạm,
                             PhuongThuc = (paymentMode == "10") ? "Coc 10%" : "Full 100%",
                             SoTien = daThanhToan,
-                            TrangThai = 1
+                            TrangThai = (paymentMethod?.ToLower() == "vnpay" || paymentMethod?.ToLower() == "momo") ? 0 : 1
                         };
                         _context.Thanhtoans.Add(tt);
 
@@ -654,8 +633,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                         });
 
                         await _context.SaveChangesAsync();
-
-                        // 10. COMMIT TRANSACTION - KẾT THÚC VÀ GIẢI PHÓNG CONNECTION DB NGAY LẬP TỨC
                         await transaction.CommitAsync();
                     }
                     catch (Exception ex)
@@ -666,33 +643,84 @@ namespace MinhTamHair.KhanchHang.Controllers
                 } // Kết thúc using Transaction
 
                 // =========================================================
-                // BƯỚC 2: GỬI EMAIL QR CHẠY NGẦM (BÊN NGOÀI TRANSACTION)
+                // BƯỚC 2: KIỂM TRA LOẠI THANH TOÁN ĐỂ CHUYỂN HƯỚNG HOẶC GỬI EMAIL
                 // =========================================================
-                if (!string.IsNullOrEmpty(emailGuiMail))
-                {
-                    var ngayHenGui = model.NgayHen;
-                    var tongTienGui = total;
-                    var maLdGui = shortMaLd;
-                    var emailGui = emailGuiMail;
-                    var tenGui = tenKhachGuiMail;
+                bool isOnlinePayment = paymentMethod?.ToLower() == "vnpay" || paymentMethod?.ToLower() == "momo";
 
-                    _ = Task.Run(async () =>
+                if (isOnlinePayment && daThanhToanTruoc > 0)
+                {
+                    if (paymentMethod?.ToLower() == "vnpay")
                     {
-                        try
-                        {
-                            using var scope = _scopeFactory.CreateScope();
-                            var qrService = scope.ServiceProvider.GetRequiredService<IQrEmailService>();
-                            await qrService.SendBookingEmailAsync(emailGui, tenGui, maLdGui, ngayHenGui, tongTienGui);
-                            Console.WriteLine($"[EMAIL] Đã gửi mã QR thành công tới email: {emailGui}");
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[EMAIL ERROR] Lỗi gửi email cho lịch {maLdGui}: {ex.Message}");
-                        }
-                    });
+                        var vnpay = new VnPayLibrary();
+                        vnpay.AddRequestData("vnp_Version", "2.1.0");
+                        vnpay.AddRequestData("vnp_Command", "pay");
+                        vnpay.AddRequestData("vnp_TmnCode", _configuration["Vnpay:TmnCode"]);
+                        vnpay.AddRequestData("vnp_Amount", ((long)(daThanhToanTruoc * 100)).ToString());
+                        var vnpayNow = VnTimeHelper.Now();
+                        vnpay.AddRequestData("vnp_CreateDate", vnpayNow.ToString("yyyyMMddHHmmss"));
+                        vnpay.AddRequestData("vnp_ExpireDate", vnpayNow.AddMinutes(15).ToString("yyyyMMddHHmmss"));
+                        vnpay.AddRequestData("vnp_CurrCode", "VND");
+                        vnpay.AddRequestData("vnp_IpAddr", "127.0.0.1");
+                        vnpay.AddRequestData("vnp_Locale", "vn");
+                        vnpay.AddRequestData("vnp_OrderInfo", "Thanh toan lich hen " + shortMaLd);
+                        vnpay.AddRequestData("vnp_OrderType", "other");
+                        vnpay.AddRequestData("vnp_ReturnUrl", _configuration["Vnpay:ReturnUrlDichVu"]);
+                        vnpay.AddRequestData("vnp_TxnRef", shortMaLd + "_" + vnpayNow.ToString("HHmmss"));
+
+                        var paymentUrl = vnpay.CreateRequestUrl(_configuration["Vnpay:BaseUrl"], _configuration["Vnpay:HashSecret"]);
+                        return Ok(new { message = "Thành công", maLd = shortMaLd, url = paymentUrl });
+                    }
+                    else if (paymentMethod?.ToLower() == "momo")
+                    {
+                        var partnerCode = _configuration["Momo:PartnerCode"];
+                        var accessKey = _configuration["Momo:AccessKey"];
+                        var secretKey = _configuration["Momo:SecretKey"];
+                        var endpoint = _configuration["Momo:ApiEndpoint"];
+                        var redirectUrl = _configuration["Momo:ReturnUrlDichVu"];
+                        var ipnUrl = _configuration["Momo:NotifyUrl"];
+                        string orderId = shortMaLd + "_" + VnTimeHelper.Now().ToString("HHmmss");
+                        string requestId = Guid.NewGuid().ToString();
+                        long amount = (long)daThanhToanTruoc;
+                        string orderInfo = "Thanh toan lich hen Minh Tam Hair";
+                        string rawHash = $"accessKey={accessKey}&amount={amount}&extraData=&ipnUrl={ipnUrl}&orderId={orderId}&orderInfo={orderInfo}&partnerCode={partnerCode}&redirectUrl={redirectUrl}&requestId={requestId}&requestType=captureWallet";
+                        string signature = SignHmacSHA256(rawHash, secretKey);
+                        var requestData = new { partnerCode, requestId, amount, orderId, orderInfo, redirectUrl, ipnUrl, lang = "vi", extraData = "", requestType = "captureWallet", signature };
+
+                        using var client = new HttpClient();
+                        var response = await client.PostAsJsonAsync(endpoint, requestData);
+                        var result = await response.Content.ReadFromJsonAsync<MomoResponse>();
+                        if (result != null && result.resultCode == 0) return Ok(new { message = "Thành công", maLd = shortMaLd, url = result.payUrl });
+                    }
                 }
 
-                // Trả về phản hồi ngay lập tức cho client
+                // Tiền mặt COD thì nổ Email gửi khách luôn vì chốt liền
+                if (!isOnlinePayment || daThanhToanTruoc == 0)
+                {
+                    if (!string.IsNullOrEmpty(emailGuiMail))
+                    {
+                        var ngayHenGui = model.NgayHen;
+                        var tongTienGui = total;
+                        var maLdGui = shortMaLd;
+                        var emailGui = emailGuiMail;
+                        var tenGui = tenKhachGuiMail;
+
+                        _ = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                using var scope = _scopeFactory.CreateScope();
+                                var qrService = scope.ServiceProvider.GetRequiredService<IQrEmailService>();
+                                await qrService.SendBookingEmailAsync(emailGui, tenGui, maLdGui, ngayHenGui, tongTienGui);
+                                Console.WriteLine($"[EMAIL] Đã gửi mã QR thành công tới email: {emailGui}");
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"[EMAIL ERROR] Lỗi gửi email cho lịch {maLdGui}: {ex.Message}");
+                            }
+                        });
+                    }
+                }
+
                 return Ok(new { message = "Thành công", maLd = shortMaLd });
             });
         }
@@ -708,12 +736,88 @@ namespace MinhTamHair.KhanchHang.Controllers
             }
         }
 
+        // =========================================================================
+        // CALLBACK TỪ CỔNG THANH TOÁN (HỦY THÌ VỀ 0 HẾT, THÀNH CÔNG THÌ 1 HOẶC 2)
+        // =========================================================================
+        [HttpGet("payment-callback")]
+        public async Task<IActionResult> PaymentCallback(
+            [FromQuery] string? vnp_ResponseCode,
+            [FromQuery] string? vnp_TxnRef,
+            [FromQuery] string? resultCode,
+            [FromQuery] string? orderId)
+        {
+            try
+            {
+                // 00 của VNPay hoặc 0 của MoMo là Thành công
+                bool isSuccess = (vnp_ResponseCode == "00") || (resultCode == "0");
+                string maLd = (vnp_TxnRef ?? orderId)?.Split('_')[0] ?? "";
+
+                if (string.IsNullOrEmpty(maLd)) return BadRequest("Mã giao dịch không hợp lệ.");
+
+                var hoaDon = await _context.HoaDons.FirstOrDefaultAsync(h => h.MaLd == maLd);
+                var thanhToan = await _context.Thanhtoans.FirstOrDefaultAsync(t => t.MaHd == hoaDon.MaHd);
+                var lichDat = await _context.Lichdats.Include(l => l.MaKhNavigation).FirstOrDefaultAsync(l => l.MaLd == maLd);
+
+                if (hoaDon != null && thanhToan != null && lichDat != null)
+                {
+                    if (isSuccess)
+                    {
+                        // THÀNH CÔNG: Kiểm tra xem nãy khách chọn cọc 10% hay trả full 100%
+                        bool isCoc = thanhToan.PhuongThuc == "Coc 10%";
+
+                        // Set trạng thái theo đúng bảng phân loại
+                        lichDat.TrangThai = isCoc ? 1 : 2;
+                        hoaDon.TrangThai = isCoc ? 1 : 2;
+                        thanhToan.TrangThai = 1; // Bảng thanh toán thành công là 1
+
+                        // Gửi email QR
+                        var emailGui = lichDat.MaKhNavigation?.Email;
+                        var tenGui = lichDat.MaKhNavigation?.HoTen ?? "Khách hàng";
+                        var ngayHenGui = lichDat.NgayHen.HasValue ? lichDat.NgayHen.Value.ToDateTime(TimeOnly.MinValue) : VnTimeHelper.Now();
+                        var tongTienGui = thanhToan.SoTien ?? 0;
+
+                        if (!string.IsNullOrEmpty(emailGui))
+                        {
+                            _ = Task.Run(async () =>
+                            {
+                                try
+                                {
+                                    using var scope = _scopeFactory.CreateScope();
+                                    var qrService = scope.ServiceProvider.GetRequiredService<IQrEmailService>();
+                                    await qrService.SendBookingEmailAsync(emailGui, tenGui, maLd, ngayHenGui, tongTienGui);
+                                }
+                                catch (Exception ex)
+                                {
+                                    Console.WriteLine($"[EMAIL ERROR] {ex.Message}");
+                                }
+                            });
+                        }
+                    }
+                    else
+                    {
+                        // THẤT BẠI / KHÁCH HỦY: Trả tất cả về 0 -> GIẢI PHÓNG THỢ & SLOT NGAY LẬP TỨC
+                        lichDat.TrangThai = 0;
+                        hoaDon.TrangThai = 0;
+                        thanhToan.TrangThai = 0;
+                    }
+                    await _context.SaveChangesAsync();
+                }
+
+                return Ok(new { success = isSuccess, maLd = maLd });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest("Lỗi callback: " + ex.Message);
+            }
+        }
+
         public class CheckStylistRequest
         {
             public string NgayHen { get; set; }
             public string GioBatDau { get; set; }
             public int TongThoiGian { get; set; }
             public string MaKh { get; set; }
+            public string? Phone { get; set; }
         }
 
         [HttpPost("get-available-stylists")]
@@ -725,11 +829,29 @@ namespace MinhTamHair.KhanchHang.Controllers
                 TimeOnly start = TimeOnly.Parse(request.GioBatDau);
                 TimeOnly end = start.AddMinutes(request.TongThoiGian);
 
+                string reqMaKh = (request.MaKh ?? "").Trim();
+                string reqPhone = (request.Phone ?? "").Trim();
+
+                // Gom tất cả ID liên quan đến khách (Chống kẹt Slot cho người đang đặt lại)
+                var myCustomerIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (!string.IsNullOrEmpty(reqMaKh) && reqMaKh != "GUEST")
+                {
+                    myCustomerIds.Add(reqMaKh);
+                }
+                if (!string.IsNullOrEmpty(reqPhone))
+                {
+                    var khs = await _context.Khachhangs.AsNoTracking()
+                        .Where(k => k.Sdt == reqPhone)
+                        .Select(k => k.MaKh.Trim())
+                        .ToListAsync();
+                    foreach (var kId in khs) myCustomerIds.Add(kId);
+                }
+
                 var favoriteStylistIds = new List<string>();
-                if (!string.IsNullOrEmpty(request.MaKh) && request.MaKh != "GUEST")
+                if (!string.IsNullOrEmpty(reqMaKh) && reqMaKh != "GUEST")
                 {
                     favoriteStylistIds = await _context.Set<YeuThichNhanVien>()
-                        .Where(y => y.MaKH == request.MaKh)
+                        .Where(y => y.MaKH.Trim() == reqMaKh)
                         .Select(y => y.MaNV.Trim())
                         .ToListAsync();
                 }
@@ -738,25 +860,29 @@ namespace MinhTamHair.KhanchHang.Controllers
                     .AsNoTracking()
                     .Include(l => l.MaNvNavigation)
                     .ThenInclude(nv => nv.MaLoaiNvNavigation)
-                    .Where(l => l.NgayLamViec == ngayHen && 
-                                l.TrangThai != 0 && 
-                                l.TrangThai != 4 && 
-                                l.TrangThai != 5 && 
-                                l.TrangThai != 7 && 
+                    .Where(l => l.NgayLamViec == ngayHen &&
+                                l.TrangThai != 0 &&
+                                l.TrangThai != 4 &&
+                                l.TrangThai != 5 &&
+                                l.TrangThai != 7 &&
                                 l.CaLam != "Chưa xếp" &&
                                 l.CaLam != "Nghỉ phép" &&
                                 l.CaLam != "Nghỉ lễ" &&
                                 l.MaNvNavigation.TrangThai == 1)
                     .ToListAsync();
 
+                // CỰC KỲ GỌN: Chỉ check những lịch THÀNH CÔNG (1,2) hoặc ĐANG TREO (3). Bỏ qua 0 vì đó là Hủy.
                 var cacLichBan = await _context.ChitietLichdats
                     .AsNoTracking()
-                    .Where(ct => ct.MaLdNavigation.NgayHen == ngayHen && ct.MaLdNavigation.TrangThai != 0)
+                    .Where(ct => ct.MaLdNavigation.NgayHen == ngayHen
+                              && (ct.MaLdNavigation.TrangThai == 1 || ct.MaLdNavigation.TrangThai == 2 || ct.MaLdNavigation.TrangThai == 3))
                     .Select(ct => new
                     {
-                        MaNv = ct.MaNv,
+                        MaNv = (ct.MaNv ?? "").Trim(),
                         GioBatDau = ct.MaLdNavigation.GioBatDau,
-                        GioKetThuc = ct.MaLdNavigation.GioKetThuc
+                        GioKetThuc = ct.MaLdNavigation.GioKetThuc,
+                        TrangThai = ct.MaLdNavigation.TrangThai,
+                        MaKh = (ct.MaLdNavigation.MaKh ?? "").Trim()
                     })
                     .Distinct()
                     .ToListAsync();
@@ -766,31 +892,29 @@ namespace MinhTamHair.KhanchHang.Controllers
                 foreach (var lich in lichLamViecs)
                 {
                     var nv = lich.MaNvNavigation;
+                    string nvId = (nv.MaNv ?? "").Trim();
                     bool isAvailable = true;
                     var lichTrinhChiTiet = new List<string>();
 
                     bool dungCaLam = false;
-                    string ca = lich.CaLam ?? "";
+                    string ca = (lich.CaLam ?? "").Trim();
                     string gioLamThucTe = ca;
                     TimeOnly shiftStart = new TimeOnly(7, 0);
                     TimeOnly shiftEnd = new TimeOnly(20, 0);
 
-                    if (ca == "Ca sáng (7h-17h)" || ca == "Ca ngày" || ca == "Ca sáng") { gioLamThucTe = "07:00 - 17:00"; shiftStart = new TimeOnly(7, 0); shiftEnd = new TimeOnly(17, 0); }
-                    else if (ca == "Ca tối (13h-20h)" || ca == "Ca tối") { gioLamThucTe = "13:00 - 20:00"; shiftStart = new TimeOnly(13, 0); shiftEnd = new TimeOnly(20, 0); }
-                    else if (ca == "Cả ngày" || ca == "Full time") { gioLamThucTe = "07:00 - 20:00"; shiftStart = new TimeOnly(7, 0); shiftEnd = new TimeOnly(20, 0); }
-                    else if (ca == "Ca sáng (Part-time)") { gioLamThucTe = "07:00 - 11:00"; shiftStart = new TimeOnly(7, 0); shiftEnd = new TimeOnly(11, 0); }
-                    else if (ca == "Ca chiều (Part-time)") { gioLamThucTe = "13:00 - 17:00"; shiftStart = new TimeOnly(13, 0); shiftEnd = new TimeOnly(17, 0); }
-                    else if (ca == "Ca tối (Part-time)") { gioLamThucTe = "16:00 - 20:00"; shiftStart = new TimeOnly(16, 0); shiftEnd = new TimeOnly(20, 0); }
+                    if (ca.Contains("Ca sáng (7h-17h)") || ca.Contains("Ca ngày") || ca == "Ca sáng") { gioLamThucTe = "07:00 - 17:00"; shiftStart = new TimeOnly(7, 0); shiftEnd = new TimeOnly(17, 0); }
+                    else if (ca.Contains("Ca tối (13h-20h)") || ca == "Ca tối") { gioLamThucTe = "13:00 - 20:00"; shiftStart = new TimeOnly(13, 0); shiftEnd = new TimeOnly(20, 0); }
+                    else if (ca.Contains("Cả ngày") || ca.Contains("Full time")) { gioLamThucTe = "07:00 - 20:00"; shiftStart = new TimeOnly(7, 0); shiftEnd = new TimeOnly(20, 0); }
+                    else if (ca.Contains("Ca sáng (Part-time)")) { gioLamThucTe = "07:00 - 11:00"; shiftStart = new TimeOnly(7, 0); shiftEnd = new TimeOnly(11, 0); }
+                    else if (ca.Contains("Ca chiều (Part-time)")) { gioLamThucTe = "13:00 - 17:00"; shiftStart = new TimeOnly(13, 0); shiftEnd = new TimeOnly(17, 0); }
+                    else if (ca.Contains("Ca tối (Part-time)")) { gioLamThucTe = "16:00 - 20:00"; shiftStart = new TimeOnly(16, 0); shiftEnd = new TimeOnly(20, 0); }
 
-                    if ((gioLamThucTe == "07:00 - 17:00") && start >= new TimeOnly(7, 0) && end <= new TimeOnly(17, 0)) dungCaLam = true;
-                    else if ((gioLamThucTe == "13:00 - 20:00") && start >= new TimeOnly(13, 0) && end <= new TimeOnly(20, 0)) dungCaLam = true;
-                    else if ((gioLamThucTe == "07:00 - 20:00") && start >= new TimeOnly(7, 0) && end <= new TimeOnly(20, 0)) dungCaLam = true;
-                    else if ((gioLamThucTe == "07:00 - 11:00") && start >= new TimeOnly(7, 0) && end <= new TimeOnly(11, 0)) dungCaLam = true;
-                    else if ((gioLamThucTe == "13:00 - 17:00") && start >= new TimeOnly(13, 0) && end <= new TimeOnly(17, 0)) dungCaLam = true;
-                    else if ((gioLamThucTe == "16:00 - 20:00") && start >= new TimeOnly(16, 0) && end <= new TimeOnly(20, 0)) dungCaLam = true;
+                    if (start >= shiftStart && end <= shiftEnd) dungCaLam = true;
 
+                    // Giấu đi lịch Pending số 3 nếu đó là của chính chủ (Để tránh báo bận ngu)
                     var cacLichCuaTho = cacLichBan
-                        .Where(b => b.MaNv == nv.MaNv)
+                        .Where(b => b.MaNv.Equals(nvId, StringComparison.OrdinalIgnoreCase)
+                                 && !(b.TrangThai == 3 && myCustomerIds.Contains(b.MaKh)))
                         .OrderBy(b => b.GioBatDau)
                         .ToList();
 
@@ -809,10 +933,10 @@ namespace MinhTamHair.KhanchHang.Controllers
                             {
                                 if (currentTime < b.GioBatDau.Value)
                                 {
-                                    lichTrinhChiTiet.Add($"Lịch trống: {currentTime.ToString(@"hh\:mm")} - {b.GioBatDau.Value.ToString(@"hh\:mm")}");
+                                    lichTrinhChiTiet.Add($"Lịch trống: {currentTime.ToString(@"HH\:mm")} - {b.GioBatDau.Value.ToString(@"HH\:mm")}");
                                 }
 
-                                lichTrinhChiTiet.Add($"Có hẹn: {b.GioBatDau.Value.ToString(@"hh\:mm")} - {b.GioKetThuc.Value.ToString(@"hh\:mm")}");
+                                lichTrinhChiTiet.Add($"Có hẹn: {b.GioBatDau.Value.ToString(@"HH\:mm")} - {b.GioKetThuc.Value.ToString(@"HH\:mm")}");
 
                                 if (currentTime < b.GioKetThuc.Value)
                                 {
@@ -823,7 +947,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                         if (currentTime < shiftEnd)
                         {
-                            lichTrinhChiTiet.Add($"Lịch trống: {currentTime.ToString(@"hh\:mm")} - {shiftEnd.ToString(@"hh\:mm")}");
+                            lichTrinhChiTiet.Add($"Lịch trống: {currentTime.ToString(@"HH\:mm")} - {shiftEnd.ToString(@"HH\:mm")}");
                         }
 
                         bool isConflict = cacLichCuaTho.Any(b => b.GioBatDau < end && b.GioKetThuc > start);
@@ -832,13 +956,12 @@ namespace MinhTamHair.KhanchHang.Controllers
                             isAvailable = false;
                         }
                     }
-
                     var ratingVal = _context.DanhgiaDichvus.Where(dg => _context.HoaDons.Any(hd => dg.MaHd == hd.MaHd && _context.ChitietLichdats.Any(ct => ct.MaLd == hd.MaLd && ct.MaNv == nv.MaNv))).Average(dg => (double?)dg.SoSao);
-                    bool isFav = favoriteStylistIds.Contains(nv.MaNv.Trim());
+                    bool isFav = favoriteStylistIds.Contains(nvId);
 
                     result.Add(new
                     {
-                        id = nv.MaNv.Trim(),
+                        id = nvId,
                         name = nv.HoTenNv,
                         role = nv.MaLoaiNvNavigation?.TenLoai ?? "Stylist",
                         img = nv.HinhAnh ?? "/images/no-image.png",
