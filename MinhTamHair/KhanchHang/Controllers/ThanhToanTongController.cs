@@ -31,7 +31,6 @@ namespace MinhTamHair.KhanchHang.Controllers
             _cache = cache;
         }
 
-        // Khóa cache tạm lưu thông tin người mua (MST/tên công ty/địa chỉ xuất HĐ...) cho đơn thanh toán
         private static string PendingInvoiceCacheKey(string maHd) => $"pending_invoice_{maHd}";
 
         public class PendingInvoiceInfo
@@ -43,9 +42,6 @@ namespace MinhTamHair.KhanchHang.Controllers
             public string? EmailNhanHd { get; set; }
         }
 
-        // =========================================================================
-        // 1. TẢI DANH SÁCH DỊCH VỤ (ĐÃ TỐI ƯU HÓA TRUY VẤN VÀ TÍNH TOÁN FLASHSALE)
-        // =========================================================================
         [HttpGet("get-services")]
         public async Task<IActionResult> GetServices()
         {
@@ -53,7 +49,6 @@ namespace MinhTamHair.KhanchHang.Controllers
             {
                 var now = VnTimeHelper.Now();
 
-                // Lọc trực tiếp trên SQL, chỉ lấy các trường cần thiết với AsNoTracking
                 var rawServices = await _context.Dichvus
                     .AsNoTracking()
                     .Where(s => s.TrangThai == 1)
@@ -116,9 +111,6 @@ namespace MinhTamHair.KhanchHang.Controllers
             }
         }
 
-        // =========================================================================
-        // 2. TẢI DANH SÁCH SẢN PHẨM & BIẾN THỂ (CÓ LỌC)
-        // =========================================================================
         [HttpGet("get-products")]
         public async Task<IActionResult> GetProducts([FromQuery] string? keyword = "", [FromQuery] string? categoryId = "")
         {
@@ -161,9 +153,6 @@ namespace MinhTamHair.KhanchHang.Controllers
             }
         }
 
-        // =========================================================================
-        // 3. TẢI DANH SÁCH VOUCHER
-        // =========================================================================
         [HttpGet("get-my-vouchers/{maKH}")]
         public async Task<IActionResult> GetMyVouchers(string maKH, [FromQuery] decimal subTotal, [FromQuery] string? itemIds)
         {
@@ -245,6 +234,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             return Ok(result);
         }
 
+        // ĐÃ VÁ: Cập nhật hàm GetAvailableStylists giống bản chuẩn DatDichVu
         [HttpPost("get-available-stylists")]
         public async Task<IActionResult> GetAvailableStylists([FromBody] ThanhToanCheckStylistRequest request)
         {
@@ -254,11 +244,28 @@ namespace MinhTamHair.KhanchHang.Controllers
                 TimeOnly start = TimeOnly.Parse(request.GioBatDau);
                 TimeOnly end = start.AddMinutes(request.TongThoiGian);
 
+                string reqMaKh = (request.MaKh ?? "").Trim();
+                string reqPhone = (request.Phone ?? "").Trim();
+
+                var myCustomerIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (!string.IsNullOrEmpty(reqMaKh) && reqMaKh != "GUEST")
+                {
+                    myCustomerIds.Add(reqMaKh);
+                }
+                if (!string.IsNullOrEmpty(reqPhone))
+                {
+                    var khs = await _context.Khachhangs.AsNoTracking()
+                        .Where(k => k.Sdt == reqPhone)
+                        .Select(k => k.MaKh.Trim())
+                        .ToListAsync();
+                    foreach (var kId in khs) myCustomerIds.Add(kId);
+                }
+
                 var favoriteStylistIds = new List<string>();
-                if (!string.IsNullOrEmpty(request.MaKh) && request.MaKh != "GUEST")
+                if (!string.IsNullOrEmpty(reqMaKh) && reqMaKh != "GUEST")
                 {
                     favoriteStylistIds = await _context.Set<YeuThichNhanVien>()
-                        .Where(y => y.MaKH == request.MaKh)
+                        .Where(y => y.MaKH.Trim() == reqMaKh)
                         .Select(y => y.MaNV.Trim())
                         .ToListAsync();
                 }
@@ -267,18 +274,28 @@ namespace MinhTamHair.KhanchHang.Controllers
                     .AsNoTracking()
                     .Include(l => l.MaNvNavigation)
                     .ThenInclude(nv => nv.MaLoaiNvNavigation)
-                    .Where(l => l.NgayLamViec == ngayHen && l.TrangThai != 0 && l.TrangThai != 5 && l.MaNvNavigation.TrangThai == 1)
+                    .Where(l => l.NgayLamViec == ngayHen &&
+                                l.TrangThai != 0 &&
+                                l.TrangThai != 4 &&
+                                l.TrangThai != 5 &&
+                                l.TrangThai != 7 &&
+                                l.CaLam != "Chưa xếp" &&
+                                l.CaLam != "Nghỉ phép" &&
+                                l.CaLam != "Nghỉ lễ" &&
+                                l.MaNvNavigation.TrangThai == 1)
                     .ToListAsync();
 
                 var cacLichBan = await _context.ChitietLichdats
                     .AsNoTracking()
                     .Where(ct => ct.MaLdNavigation.NgayHen == ngayHen
-                                 && ct.MaLdNavigation.TrangThai != 0)
+                              && (ct.MaLdNavigation.TrangThai == 1 || ct.MaLdNavigation.TrangThai == 2 || ct.MaLdNavigation.TrangThai == 3))
                     .Select(ct => new
                     {
-                        MaNv = ct.MaNv,
+                        MaNv = (ct.MaNv ?? "").Trim(),
                         GioBatDau = ct.MaLdNavigation.GioBatDau,
-                        GioKetThuc = ct.MaLdNavigation.GioKetThuc
+                        GioKetThuc = ct.MaLdNavigation.GioKetThuc,
+                        TrangThai = ct.MaLdNavigation.TrangThai,
+                        MaKh = (ct.MaLdNavigation.MaKh ?? "").Trim()
                     })
                     .Distinct()
                     .ToListAsync();
@@ -288,32 +305,29 @@ namespace MinhTamHair.KhanchHang.Controllers
                 foreach (var lich in lichLamViecs)
                 {
                     var nv = lich.MaNvNavigation;
+                    string nvId = (nv.MaNv ?? "").Trim();
                     bool isAvailable = true;
                     string reason = "";
                     var lichTrinhChiTiet = new List<string>();
 
                     bool dungCaLam = false;
-                    string ca = lich.CaLam ?? "";
+                    string ca = (lich.CaLam ?? "").Trim();
                     string gioLamThucTe = ca;
                     TimeOnly shiftStart = new TimeOnly(7, 0);
                     TimeOnly shiftEnd = new TimeOnly(20, 0);
 
-                    if (ca == "Ca sáng (7h-17h)" || ca == "Ca ngày" || ca == "Ca sáng") { gioLamThucTe = "07:00 - 17:00"; shiftStart = new TimeOnly(7, 0); shiftEnd = new TimeOnly(17, 0); }
-                    else if (ca == "Ca tối (13h-20h)" || ca == "Ca tối") { gioLamThucTe = "13:00 - 20:00"; shiftStart = new TimeOnly(13, 0); shiftEnd = new TimeOnly(20, 0); }
-                    else if (ca == "Cả ngày" || ca == "Full time") { gioLamThucTe = "07:00 - 20:00"; shiftStart = new TimeOnly(7, 0); shiftEnd = new TimeOnly(20, 0); }
-                    else if (ca == "Ca sáng (Part-time)") { gioLamThucTe = "07:00 - 11:00"; shiftStart = new TimeOnly(7, 0); shiftEnd = new TimeOnly(11, 0); }
-                    else if (ca == "Ca chiều (Part-time)") { gioLamThucTe = "13:00 - 17:00"; shiftStart = new TimeOnly(13, 0); shiftEnd = new TimeOnly(17, 0); }
-                    else if (ca == "Ca tối (Part-time)") { gioLamThucTe = "16:00 - 20:00"; shiftStart = new TimeOnly(16, 0); shiftEnd = new TimeOnly(20, 0); }
+                    if (ca.Contains("Ca sáng (7h-17h)") || ca.Contains("Ca ngày") || ca == "Ca sáng") { gioLamThucTe = "07:00 - 17:00"; shiftStart = new TimeOnly(7, 0); shiftEnd = new TimeOnly(17, 0); }
+                    else if (ca.Contains("Ca tối (13h-20h)") || ca == "Ca tối") { gioLamThucTe = "13:00 - 20:00"; shiftStart = new TimeOnly(13, 0); shiftEnd = new TimeOnly(20, 0); }
+                    else if (ca.Contains("Cả ngày") || ca.Contains("Full time")) { gioLamThucTe = "07:00 - 20:00"; shiftStart = new TimeOnly(7, 0); shiftEnd = new TimeOnly(20, 0); }
+                    else if (ca.Contains("Ca sáng (Part-time)")) { gioLamThucTe = "07:00 - 11:00"; shiftStart = new TimeOnly(7, 0); shiftEnd = new TimeOnly(11, 0); }
+                    else if (ca.Contains("Ca chiều (Part-time)")) { gioLamThucTe = "13:00 - 17:00"; shiftStart = new TimeOnly(13, 0); shiftEnd = new TimeOnly(17, 0); }
+                    else if (ca.Contains("Ca tối (Part-time)")) { gioLamThucTe = "16:00 - 20:00"; shiftStart = new TimeOnly(16, 0); shiftEnd = new TimeOnly(20, 0); }
 
-                    if ((gioLamThucTe == "07:00 - 17:00") && start >= new TimeOnly(7, 0) && end <= new TimeOnly(17, 0)) dungCaLam = true;
-                    else if ((gioLamThucTe == "13:00 - 20:00") && start >= new TimeOnly(13, 0) && end <= new TimeOnly(20, 0)) dungCaLam = true;
-                    else if ((gioLamThucTe == "07:00 - 20:00") && start >= new TimeOnly(7, 0) && end <= new TimeOnly(20, 0)) dungCaLam = true;
-                    else if ((gioLamThucTe == "07:00 - 11:00") && start >= new TimeOnly(7, 0) && end <= new TimeOnly(11, 0)) dungCaLam = true;
-                    else if ((gioLamThucTe == "13:00 - 17:00") && start >= new TimeOnly(13, 0) && end <= new TimeOnly(17, 0)) dungCaLam = true;
-                    else if ((gioLamThucTe == "16:00 - 20:00") && start >= new TimeOnly(16, 0) && end <= new TimeOnly(20, 0)) dungCaLam = true;
+                    if (start >= shiftStart && end <= shiftEnd) dungCaLam = true;
 
                     var cacLichCuaTho = cacLichBan
-                        .Where(b => b.MaNv == nv.MaNv)
+                        .Where(b => b.MaNv.Equals(nvId, StringComparison.OrdinalIgnoreCase)
+                                 && !(b.TrangThai == 3 && myCustomerIds.Contains(b.MaKh)))
                         .OrderBy(b => b.GioBatDau)
                         .ToList();
 
@@ -333,10 +347,10 @@ namespace MinhTamHair.KhanchHang.Controllers
                             {
                                 if (currentTime < b.GioBatDau.Value)
                                 {
-                                    lichTrinhChiTiet.Add($"Lịch trống: {currentTime.ToString(@"hh\:mm")} - {b.GioBatDau.Value.ToString(@"hh\:mm")}");
+                                    lichTrinhChiTiet.Add($"Lịch trống: {currentTime.ToString(@"HH\:mm")} - {b.GioBatDau.Value.ToString(@"HH\:mm")}");
                                 }
 
-                                lichTrinhChiTiet.Add($"Có hẹn: {b.GioBatDau.Value.ToString(@"hh\:mm")} - {b.GioKetThuc.Value.ToString(@"hh\:mm")}");
+                                lichTrinhChiTiet.Add($"Có hẹn: {b.GioBatDau.Value.ToString(@"HH\:mm")} - {b.GioKetThuc.Value.ToString(@"HH\:mm")}");
 
                                 if (currentTime < b.GioKetThuc.Value)
                                 {
@@ -347,23 +361,23 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                         if (currentTime < shiftEnd)
                         {
-                            lichTrinhChiTiet.Add($"Lịch trống: {currentTime.ToString(@"hh\:mm")} - {shiftEnd.ToString(@"hh\:mm")}");
+                            lichTrinhChiTiet.Add($"Lịch trống: {currentTime.ToString(@"HH\:mm")} - {shiftEnd.ToString(@"HH\:mm")}");
                         }
 
                         var lichKhet = cacLichCuaTho.FirstOrDefault(b => b.GioBatDau < end && b.GioKetThuc > start);
                         if (lichKhet != null)
                         {
                             isAvailable = false;
-                            reason = $"Bận khách ({lichKhet.GioBatDau?.ToString(@"hh\:mm")} - {lichKhet.GioKetThuc?.ToString(@"hh\:mm")})";
+                            reason = $"Bận khách ({lichKhet.GioBatDau?.ToString(@"HH\:mm")} - {lichKhet.GioKetThuc?.ToString(@"HH\:mm")})";
                         }
                     }
 
                     var ratingVal = _context.DanhgiaDichvus.Where(dg => _context.HoaDons.Any(hd => dg.MaHd == hd.MaHd && _context.ChitietLichdats.Any(ct => ct.MaLd == hd.MaLd && ct.MaNv == nv.MaNv))).Average(dg => (double?)dg.SoSao);
-                    bool isFav = favoriteStylistIds.Contains(nv.MaNv.Trim());
+                    bool isFav = favoriteStylistIds.Contains(nvId);
 
                     result.Add(new
                     {
-                        id = nv.MaNv.Trim(),
+                        id = nvId,
                         name = nv.HoTenNv,
                         role = nv.MaLoaiNvNavigation?.TenLoai ?? "Stylist",
                         img = nv.HinhAnh ?? "/images/no-image.png",
@@ -447,9 +461,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             });
         }
 
-        // =========================================================================
-        // 4. LƯU TẤT CẢ VÀO CƠ SỞ DỮ LIỆU (ĐÃ TỐI ƯU TRANSACTION)
-        // =========================================================================
+        // ĐÃ VÁ: Lắp Mutex chống đụng độ và tự dọn đơn rác "chính chủ"
         [HttpPost("submit-checkout")]
         public async Task<IActionResult> SubmitCheckout([FromBody] CheckoutSummaryRequest req)
         {
@@ -464,7 +476,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                 {
                     string maHd = "TH" + VnTimeHelper.Now().ToString("HHmmssff");
 
-                    // KIỂM TRA TỒN KHO SẢN PHẨM TRƯỚC KHI TẠO ĐƠN
                     if (req.Products != null && req.Products.Any())
                     {
                         foreach (var p in req.Products)
@@ -477,45 +488,38 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                             if (bientheCheck == null)
                             {
-                                return BadRequest(new
-                                {
-                                    success = false,
-                                    errorCode = "PRODUCT_OUT_OF_STOCK",
-                                    outOfStockProductId = p.Id,
-                                    message = $"Không tìm thấy sản phẩm có mã {p.Id}."
-                                });
+                                return BadRequest(new { success = false, errorCode = "PRODUCT_OUT_OF_STOCK", outOfStockProductId = p.Id, message = $"Không tìm thấy sản phẩm có mã {p.Id}." });
                             }
 
                             int tonKho = bientheCheck.SoLuongTon ?? 0;
                             if (p.SoLuong > tonKho)
                             {
-                                return BadRequest(new
-                                {
-                                    success = false,
-                                    errorCode = "PRODUCT_OUT_OF_STOCK",
-                                    outOfStockProductId = p.Id,
-                                    message = $"Sản phẩm '{bientheCheck.TenBienThe}' vượt quá số lượng tồn kho. Hiện chỉ còn {tonKho} sản phẩm, vui lòng cập nhật lại giỏ hàng."
-                                });
+                                return BadRequest(new { success = false, errorCode = "PRODUCT_OUT_OF_STOCK", outOfStockProductId = p.Id, message = $"Sản phẩm '{bientheCheck.TenBienThe}' vượt quá số lượng tồn kho. Hiện chỉ còn {tonKho} sản phẩm, vui lòng cập nhật lại giỏ hàng." });
                             }
                         }
                     }
 
-                    // BƯỚC 1: TẠO KHÁCH HÀNG (Nếu chưa có)
                     string safeKhachHang = req.MaKh;
                     if (string.IsNullOrWhiteSpace(safeKhachHang) || safeKhachHang == "GUEST")
                     {
                         if (!string.IsNullOrEmpty(req.Phone))
                         {
                             var existingKhach = await _context.Khachhangs.FirstOrDefaultAsync(x => x.Sdt == req.Phone);
-                            if (existingKhach != null) { safeKhachHang = existingKhach.MaKh; }
+                            if (existingKhach != null) 
+                            { 
+                                safeKhachHang = existingKhach.MaKh; 
+                                
+                                // ĐÃ VÁ: Cập nhật email nếu khách cũ nhập email mới để có thể gửi mã QR
+                                if (!string.IsNullOrWhiteSpace(req.Email) && existingKhach.Email != req.Email)
+                                {
+                                    existingKhach.Email = req.Email;
+                                    await _context.SaveChangesAsync();
+                                }
+                            }
                             else
                             {
                                 string prefixSdt = req.Phone.Length >= 4 ? req.Phone.Substring(0, 4) : "0000";
                                 safeKhachHang = "KH" + prefixSdt + new Random().Next(100, 999).ToString();
-                                if (!string.IsNullOrWhiteSpace(req.Email) && existingKhach != null && existingKhach.Email != req.Email)
-                                {
-                                    existingKhach.Email = req.Email;
-                                }
                                 _context.Khachhangs.Add(new Khachhang
                                 {
                                     MaKh = safeKhachHang,
@@ -533,32 +537,75 @@ namespace MinhTamHair.KhanchHang.Controllers
                         else { safeKhachHang = null; }
                     }
 
-                    // BƯỚC 2: TẠO LỊCH ĐẶT & CHI TIẾT
+                    // TÍNH TOÁN CÁC CỜ PHƯƠNG THỨC THANH TOÁN TRƯỚC ĐỂ LƯU LỊCH ĐẶT CHUẨN XÁC
+                    bool coDichVu = req.Services != null && req.Services.Any();
+                    bool coSanPham = req.Products != null && req.Products.Any();
+                    string phuongThucDv = coDichVu ? (req.ServicePaymentMethod ?? "COD") : "COD";
+                    bool isOnlineService = coDichVu && (phuongThucDv.ToLower() == "vnpay" || phuongThucDv.ToLower() == "momo");
+                    int trangThaiLichDat = isOnlineService ? 3 : (req.PaymentMode == "10" ? 1 : 2);
+
                     string maLd = null;
                     Lichdat? lichDatMoi = null;
-                    if (req.Services != null && req.Services.Any())
+                    if (coDichVu)
                     {
                         maLd = VnTimeHelper.Now().ToString("yyHHmmssff");
                         int tongThoiGianPhut = req.Services.Sum(s => s.Duration);
                         decimal serviceSubTotalBanDau = req.Services.Sum(s => s.Price);
 
-                        var localTime = req.BookingDate.HasValue
-                            ? req.BookingDate.Value.ToUniversalTime().AddHours(7)
-                            : VnTimeHelper.Now();
+                        var localTime = req.BookingDate.HasValue ? req.BookingDate.Value.ToUniversalTime().AddHours(7) : VnTimeHelper.Now();
+                        var requestedDate = DateOnly.FromDateTime(localTime);
+                        var requestedStart = TimeOnly.FromDateTime(localTime);
+                        var requestedEnd = requestedStart.AddMinutes(tongThoiGianPhut);
 
-                        var gioBatDau = TimeOnly.FromDateTime(localTime);
-                        var gioKetThuc = gioBatDau.AddMinutes(tongThoiGianPhut);
+                        // ---> XIN KHÓA MUTEX <---
+                        string lockResource = string.IsNullOrEmpty(req.StylistId)
+                            ? $"Booking_Salon_{requestedDate.ToString("yyyyMMdd")}"
+                            : $"Booking_Stylist_{req.StylistId}_{requestedDate.ToString("yyyyMMdd")}";
+                        await _context.Database.ExecuteSqlInterpolatedAsync($"EXEC sp_getapplock @Resource = {lockResource}, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 5000");
 
-                        _context.Lichdats.Add(new Lichdat
+                        // ---> KHÓA SLOT & DỌN RÁC CHÍNH CHỦ <---
+                        if (!string.IsNullOrEmpty(req.StylistId))
+                        {
+                            var conflictingBookings = await _context.Lichdats
+                                .Where(ld => ld.NgayHen == requestedDate
+                                          && (ld.TrangThai == 3 || ld.TrangThai == 1 || ld.TrangThai == 2)
+                                          && ld.GioBatDau < requestedEnd
+                                          && ld.GioKetThuc > requestedStart
+                                          && _context.ChitietLichdats.Any(ct => ct.MaLd == ld.MaLd && ct.MaNv == req.StylistId))
+                                .ToListAsync();
+
+                            if (conflictingBookings.Any())
+                            {
+                                var myStuckBooking = conflictingBookings.FirstOrDefault(b => b.MaKh == safeKhachHang && b.TrangThai == 3);
+
+                                if (myStuckBooking != null)
+                                {
+                                    myStuckBooking.TrangThai = 0;
+                                    var oldInvoice = await _context.HoaDons.FirstOrDefaultAsync(h => h.MaLd == myStuckBooking.MaLd);
+                                    if (oldInvoice != null) oldInvoice.TrangThai = 0;
+                                    var oldPayment = await _context.Thanhtoans.FirstOrDefaultAsync(t => t.MaHd == myStuckBooking.MaLd);
+                                    if (oldPayment != null) oldPayment.TrangThai = 0;
+                                    await _context.SaveChangesAsync();
+                                }
+                                else
+                                {
+                                    await transaction.RollbackAsync();
+                                    return BadRequest(new { success = false, message = "Rất tiếc, thợ bạn chọn đang có khách giao dịch. Vui lòng chọn thợ hoặc giờ khác!" });
+                                }
+                            }
+                        }
+
+                        lichDatMoi = new Lichdat
                         {
                             MaLd = maLd,
                             MaKh = safeKhachHang,
-                            NgayHen = DateOnly.FromDateTime(localTime),
-                            GioBatDau = gioBatDau,
-                            GioKetThuc = gioKetThuc,
+                            NgayHen = requestedDate,
+                            GioBatDau = requestedStart,
+                            GioKetThuc = requestedEnd,
                             TongTienDuKien = serviceSubTotalBanDau,
-                            TrangThai = 0,
-                        });
+                            TrangThai = trangThaiLichDat // VÁ LỖI CỨNG MÃ 0 Ở ĐÂY
+                        };
+                        _context.Lichdats.Add(lichDatMoi);
                         await _context.SaveChangesAsync();
 
                         foreach (var sv in req.Services)
@@ -607,9 +654,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                         lichDatMoi.TongTienDuKien = serviceAfterVoucher;
                     }
 
-                    bool coDichVu = req.Services != null && req.Services.Any();
-                    bool coSanPham = req.Products != null && req.Products.Any();
-
                     decimal servicePayment = 0;
                     if (coDichVu)
                     {
@@ -624,16 +668,13 @@ namespace MinhTamHair.KhanchHang.Controllers
                         productPayment = productAfterVoucher + req.ShippingFee;
                     }
 
-                    string phuongThucDv = coDichVu ? (req.ServicePaymentMethod ?? "COD") : "COD";
                     string phuongThucSp = coSanPham ? (req.ProductPaymentMethod ?? "COD") : "COD";
 
-                    bool dvLaOnline = coDichVu && servicePayment > 0 &&
-                        (phuongThucDv.ToLower() == "vnpay" || phuongThucDv.ToLower() == "momo");
                     bool spLaOnline = coSanPham && productPayment > 0 &&
                         (phuongThucSp.ToLower() == "vnpay" || phuongThucSp.ToLower() == "momo");
 
-                    bool isOnlinePayment = dvLaOnline || spLaOnline;
-                    string phuongThuc = dvLaOnline ? phuongThucDv : (spLaOnline ? phuongThucSp : (coDichVu ? phuongThucDv : phuongThucSp));
+                    bool isOnlinePayment = isOnlineService || spLaOnline;
+                    string phuongThuc = isOnlineService ? phuongThucDv : (spLaOnline ? phuongThucSp : (coDichVu ? phuongThucDv : phuongThucSp));
 
                     int? phanTramGiamRank = 0;
                     if (!string.IsNullOrWhiteSpace(safeKhachHang) && safeKhachHang != "GUEST")
@@ -649,7 +690,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                         }
                     }
 
-                    // BƯỚC 3: TẠO HÓA ĐƠN
                     string? maCodeChinh = req.VoucherIds != null && req.VoucherIds.Any(v => !string.IsNullOrWhiteSpace(v))
                         ? req.VoucherIds.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))
                         : null;
@@ -670,7 +710,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                     _context.HoaDons.Add(hoaDon);
                     await _context.SaveChangesAsync();
 
-                    // BƯỚC 4: TẠO CHI TIẾT SẢN PHẨM & GIAO HÀNG
                     string maHddtSpPhatHanh = null;
                     if (req.Products != null && req.Products.Any())
                     {
@@ -692,13 +731,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                                 if (rowsAffected <= 0)
                                 {
                                     await transaction.RollbackAsync();
-                                    return BadRequest(new
-                                    {
-                                        success = false,
-                                        errorCode = "PRODUCT_OUT_OF_STOCK",
-                                        outOfStockProductId = p.Id,
-                                        message = $"Sản phẩm '{bienthe.TenBienThe}' vừa bị khách khác mua hết hoặc không đủ số lượng trong kho!"
-                                    });
+                                    return BadRequest(new { success = false, errorCode = "PRODUCT_OUT_OF_STOCK", outOfStockProductId = p.Id, message = $"Sản phẩm '{bienthe.TenBienThe}' vừa bị khách khác mua hết hoặc không đủ số lượng trong kho!" });
                                 }
 
                                 int tonTruoc = bienthe.SoLuongTon ?? 0;
@@ -734,7 +767,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                         }
                     }
 
-                    // LƯU BẢN GHI THANH TOÁN
                     _context.Thanhtoans.Add(new Thanhtoan
                     {
                         MaHd = maHd,
@@ -751,7 +783,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                         }
                     }
 
-                    // BƯỚC 5: XUẤT HÓA ĐƠN ĐIỆN TỬ (ĐƯA VÀO TRONG TRANSACTION ĐỂ TOÀN VẸN DỮ LIỆU)
                     {
                         bool laDoanhNghiep = req.InvoiceInfo?.LaDoanhNghiep ?? false;
                         string tenNguoiMua = laDoanhNghiep ? req.InvoiceInfo?.TenCongTy : (req.CustomerName ?? "Khach hang");
@@ -812,7 +843,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                     await _context.SaveChangesAsync();
                     await transaction.CommitAsync();
 
-                    // PHÁT HÀNH HÓA ĐƠN ĐIỆN TỬ NGẦM (BÊN NGOÀI TRANSACTION)
                     if (!string.IsNullOrEmpty(maHddtSpPhatHanh))
                     {
                         _ = Task.Run(async () =>
@@ -830,7 +860,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                         });
                     }
 
-                    // BƯỚC 6: TẠO LINK VNPAY HOẶC MOMO
                     string paymentUrl = null;
                     if (req.PaidAmount > 0)
                     {
@@ -897,11 +926,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                             }
                             else
                             {
-                                return BadRequest(new
-                                {
-                                    success = false,
-                                    message = "Lỗi tạo link MoMo: " + (result?.message ?? "Không xác định")
-                                });
+                                return BadRequest(new { success = false, message = "Lỗi tạo link MoMo: " + (result?.message ?? "Không xác định") });
                             }
                         }
                     }
@@ -918,9 +943,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             });
         }
 
-        // =========================================================================
-        // 5. CẬP NHẬT TRẠNG THÁI & LẤY CHI TIẾT BIÊN LAI (ĐÃ TỐI ƯU GỬI EMAIL NGẦM)
-        // =========================================================================
+        // ĐÃ VÁ: Bắt tín hiệu khách hủy để nhả slot ngay lập tức
         [HttpGet("get-receipt")]
         public async Task<IActionResult> GetReceipt(
             [FromQuery] string maHd,
@@ -938,7 +961,6 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                 if (hoaDon == null) return NotFound(new { success = false, message = "Không tìm thấy hóa đơn" });
 
-                // 1. CẬP NHẬT TRẠNG THÁI NẾU THANH TOÁN ONLINE THÀNH CÔNG (VNPay hoặc MoMo)
                 bool isPaymentSuccess = (vnp_ResponseCode == "00") || (resultCode == "0");
                 bool vuaXacNhanThanhCong = isPaymentSuccess && hoaDon.TrangThai == 0;
 
@@ -1023,8 +1045,20 @@ namespace MinhTamHair.KhanchHang.Controllers
                         }
                     }
                 }
+                else if (!isPaymentSuccess && hoaDon.TrangThai == 0) // LƯỚI BẢO VỆ DỌN RÁC KHÁCH HỦY
+                {
+                    hoaDon.TrangThai = 0;
+                    var thanhToan = hoaDon.Thanhtoans.FirstOrDefault();
+                    if (thanhToan != null) thanhToan.TrangThai = 0;
 
-                // 2. NẾU HÓA ĐƠN ĐÃ THANH TOÁN VÀ LỊCH ĐẶT CHƯA XÁC NHẬN -> XÁC NHẬN VÀ KÍCH HOẠT GỬI MAIL
+                    if (!string.IsNullOrEmpty(hoaDon.MaLd))
+                    {
+                        var lichDat = await _context.Lichdats.FirstOrDefaultAsync(l => l.MaLd == hoaDon.MaLd);
+                        if (lichDat != null) lichDat.TrangThai = 0;
+                    }
+                    await _context.SaveChangesAsync();
+                }
+
                 bool shouldSendEmail = false;
                 if ((hoaDon.TrangThai == 1 || hoaDon.TrangThai == 2) && !string.IsNullOrEmpty(hoaDon.MaLd))
                 {
@@ -1037,7 +1071,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                     }
                 }
 
-                // 3. THỰC HIỆN GỬI EMAIL QR BẰNG TASK.RUN CHẠY NGẦM
                 var delivery = hoaDon.ThongtinGiaohangs.FirstOrDefault();
                 if (shouldSendEmail)
                 {
@@ -1066,7 +1099,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                             string maLdGui = hoaDon.MaLd;
                             decimal thanhTienGui = hoaDon.ThanhTien ?? 0m;
 
-                            // Bắn tác vụ gửi email chạy nền
                             _ = Task.Run(async () =>
                             {
                                 try
@@ -1089,7 +1121,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                     }
                 }
 
-                // 4. GOM DỮ LIỆU ĐỂ TRẢ VỀ FRONTEND (DÙNG ASNOTRACKING CHO NHANH)
                 var khachHangInfo = await _context.Khachhangs.AsNoTracking().FirstOrDefaultAsync(k => k.MaKh == hoaDon.MaKh);
 
                 object bookingInfo = null;
@@ -1218,6 +1249,7 @@ namespace MinhTamHair.KhanchHang.Controllers
         public string? Email { get; set; }
     }
 
+    // ĐÃ VÁ: Bổ sung trường Phone để đồng bộ logic quét "Chính chủ"
     [System.ComponentModel.DataAnnotations.Schema.NotMapped]
     public class ThanhToanCheckStylistRequest
     {
@@ -1225,5 +1257,6 @@ namespace MinhTamHair.KhanchHang.Controllers
         public string GioBatDau { get; set; }
         public int TongThoiGian { get; set; }
         public string MaKh { get; set; }
+        public string? Phone { get; set; }
     }
 }
