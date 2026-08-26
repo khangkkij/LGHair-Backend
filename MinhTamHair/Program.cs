@@ -11,6 +11,7 @@ using MinhTamHair.Models;
 using MinhTamHair.SanPham.Controllers;
 using MinhTamHair.Services;
 using MinhTamHair.Services.Chat;
+using MinhTamHair.Services.Cleanup;
 using MinhTamHair.Services.Gemini;
 using MinhTamHair.Services.LightX;
 using MinhTamHair.Services.UploadIMG;
@@ -274,6 +275,8 @@ builder.Services.AddScoped<IServiceCacheService, ServiceCacheService>();
 // ===== END SERVICE CACHE SERVICE =====
 builder.Services.AddHostedService<VoucherExpirationBackgroundService>();
 builder.Services.AddHostedService<AttendanceBackgroundService>();
+//=== cleanup booking service
+builder.Services.AddHostedService<BookingCleanupService>();
 
 var app = builder.Build();
 
