@@ -1,7 +1,8 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using MinhTamHair.Models;
-using MinhTamHair.Services;
+using MinhTamHair.SanPham.Controllers;
 
 namespace MinhTamHair.Controllers;
 
@@ -11,14 +12,23 @@ public class SanPhamController : ControllerBase
 {
     private readonly MinhTamHairContext _context;
     private readonly IProductCacheService _cache;
+    private readonly IMemoryCache _memoryCache;
 
     // TTL 10 phút cho toàn bộ cache đọc sản phẩm — đổi ở đây thay vì rải khắp file.
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(10);
 
-    public SanPhamController(MinhTamHairContext context, IProductCacheService cache)
+    // "Sản phẩm bán chạy" tính từ lịch sử toàn bộ đơn hàng, không cần realtime (chỉ đổi
+    // khi có đơn mới), nên cache riêng lâu hơn hẳn (1 giờ) bằng IMemoryCache in-process —
+    // tránh phải join + group by toàn bộ ChitietHoadonSps lại mỗi lần Filter/theo-danh-muc
+    // cache-miss (đây là truy vấn nặng nhất trong controller vì quét cả lịch sử đơn hàng).
+    private const string HotProductIdsCacheKey = "sp:hot-product-ids";
+    private static readonly TimeSpan HotProductIdsCacheTtl = TimeSpan.FromHours(1);
+
+    public SanPhamController(MinhTamHairContext context, IProductCacheService cache, IMemoryCache memoryCache)
     {
         _context = context;
         _cache = cache;
+        _memoryCache = memoryCache;
     }
 
     // =========================================================
@@ -26,6 +36,9 @@ public class SanPhamController : ControllerBase
     // =========================================================
     private async Task<HashSet<string>> GetHotProductIdsAsync()
     {
+        if (_memoryCache.TryGetValue(HotProductIdsCacheKey, out HashSet<string>? cached) && cached != null)
+            return cached;
+
         var hotProductIds = (await _context.ChitietHoadonSps
             .AsNoTracking()
             .Join(
@@ -48,13 +61,15 @@ public class SanPhamController : ControllerBase
             .Select(x => x.MaSanPham)
             .ToHashSet();
 
+        _memoryCache.Set(HotProductIdsCacheKey, hotProductIds, HotProductIdsCacheTtl);
         return hotProductIds;
     }
 
     [HttpGet("init")]
     public async Task<IActionResult> GetInit()
     {
-        var json = await _cache.GetOrCreateJsonAsync("sp:init", async () =>
+        var ver = await _cache.GetCurrentVersionAsync();
+        var json = await _cache.GetOrCreateJsonAsync($"sp:v{ver}:init", async () =>
         {
             var danhMuc = await _context.DanhMucSPs
                 .AsNoTracking()
@@ -92,7 +107,10 @@ public class SanPhamController : ControllerBase
         [FromQuery] int pageSize = 9)
     {
         // Key gộp mọi tham số ảnh hưởng tới kết quả — mỗi tổ hợp search/lọc/trang là 1 cache riêng.
-        var cacheKey = $"sp:filter:{search}:{danhMuc}:{thuongHieu}:{priceRange}:{page}:{pageSize}";
+        // Nhúng version vào key: sau mỗi lần CRUD sản phẩm, version tăng lên -> mọi tổ hợp filter
+        // cũ (dù chưa hết TTL) đều bị bỏ qua, request tiếp theo sẽ build lại dữ liệu mới.
+        var ver = await _cache.GetCurrentVersionAsync();
+        var cacheKey = $"sp:v{ver}:filter:{search}:{danhMuc}:{thuongHieu}:{priceRange}:{page}:{pageSize}";
 
         var json = await _cache.GetOrCreateJsonAsync(cacheKey, async () =>
             await BuildFilterResultAsync(search, danhMuc, thuongHieu, priceRange, page, pageSize), CacheTtl);
@@ -150,7 +168,9 @@ public class SanPhamController : ControllerBase
         // phẩm thuộc TRANG ĐANG XEM mới được kéo đầy đủ biến thể/đánh giá về, các trang
         // chưa bấm tới hoàn toàn không được truy vấn.
         var paged = await query
-            .OrderBy(sp => sp.MaSp)
+            // Sản phẩm tạo SAU hiển thị TRƯỚC (mới nhất lên đầu) — mã sản phẩm tăng dần
+            // theo thứ tự tạo (SP43 tạo sau SP42), nên sắp giảm dần theo mã là đúng.
+            .OrderByDescending(sp => sp.MaSp)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .Include(sp => sp.MaDanhMucTheNavigation)
@@ -233,13 +253,28 @@ public class SanPhamController : ControllerBase
     [HttpGet("danh-muc-feed")]
     public async Task<IActionResult> GetDanhMucFeed()
     {
-        var json = await _cache.GetOrCreateJsonAsync("sp:danhmucfeed", async () =>
+        var ver = await _cache.GetCurrentVersionAsync();
+        var json = await _cache.GetOrCreateJsonAsync($"sp:v{ver}:danhmucfeed", async () =>
         {
             var data = await BuildDanhMucFeedAsync();
             return new { data };
         }, CacheTtl);
 
         return Content(json, "application/json");
+    }
+
+    // Đọc số thứ tự hiển thị từ tên banner đầu tiên (hậu tố "-<số>" ở cuối tên).
+    // Không có hậu tố hợp lệ -> null (chưa set số thứ tự).
+    private static int? ParseSttFromTenBanner(string? tenBanner)
+    {
+        if (string.IsNullOrWhiteSpace(tenBanner)) return null;
+        var lastDash = tenBanner.LastIndexOf('-');
+        if (lastDash > 0 && lastDash < tenBanner.Length - 1
+            && int.TryParse(tenBanner[(lastDash + 1)..], out var stt))
+        {
+            return stt;
+        }
+        return null;
     }
 
     private async Task<object?> BuildDanhMucFeedAsync()
@@ -260,11 +295,9 @@ public class SanPhamController : ControllerBase
             .Select(dm => new { dm.MaDMSP, dm.TenDanhMuc, dm.HinhAnh })
             .ToListAsync();
 
-        var danhMucVoiBanner = danhMucs.Select(dm => new
+        var danhMucVoiBanner = danhMucs.Select(dm =>
         {
-            dm.MaDMSP,
-            dm.TenDanhMuc,
-            Banners = allBanners
+            var banners = allBanners
                 .Where(b => b.MaDMSP.StartsWith(dm.MaDMSP + "-", StringComparison.OrdinalIgnoreCase))
                 .Select(b => new
                 {
@@ -272,7 +305,22 @@ public class SanPhamController : ControllerBase
                     tieuDe = b.TenDanhMuc,
                     hinhAnh = b.HinhAnh,
                 })
-                .ToList(),
+                .ToList();
+
+            // Số thứ tự hiển thị của danh mục được mã hóa trong TÊN của banner — MỌI banner
+            // cùng 1 danh mục đều mang CÙNG MỘT TÊN (xem UpdateThuTu/AddBanner bên
+            // QuanLyDanhMucSPController) — nên lấy banner BẤT KỲ (FirstOrDefault trong danh
+            // sách "banners" đã lọc theo đúng danh mục này ở trên) là đủ để đọc đúng STT; xóa
+            // banner nào cũng không làm mất STT miễn danh mục còn ít nhất 1 banner.
+            var bannerBatKy = banners.FirstOrDefault();
+
+            return new
+            {
+                dm.MaDMSP,
+                dm.TenDanhMuc,
+                Banners = banners,
+                ThuTu = bannerBatKy != null ? ParseSttFromTenBanner(bannerBatKy.tieuDe) : null,
+            };
         }).ToList();
 
         // 🔥 GHÉP DANH MỤC KHÔNG-BANNER VÀO DANH MỤC-BANNER GẦN NHẤT
@@ -299,10 +347,21 @@ public class SanPhamController : ControllerBase
             }
         }
 
+        // 🔥 SẮP XẾP THEO SỐ THỨ TỰ HIỂN THỊ
+        // Danh mục có banner: sắp theo ThuTu đọc từ tên banner đầu tiên (chưa đặt số thì
+        // coi như "chưa set", xếp sau các danh mục đã có số, giữ thứ tự alphabet cũ giữa
+        // các danh mục cùng chưa-set hoặc cùng số). Danh mục không-banner luôn xếp sau
+        // toàn bộ danh mục có banner (chúng chỉ "ở ké" hiển thị, không đứng khối riêng).
+        var coBannerDaSapXep = coBanner
+            .OrderBy(dm => dm.ThuTu.HasValue ? 0 : 1)
+            .ThenBy(dm => dm.ThuTu ?? int.MaxValue)
+            .ThenBy(dm => dm.TenDanhMuc)
+            .ToList();
+
         // Nếu không có danh mục nào có banner (hiếm khi xảy ra) thì đành giữ nguyên,
         // mỗi danh mục vẫn là 1 khối riêng như trước (không có gì để ghép vào cả).
         var result = coBanner.Count > 0
-            ? coBanner.Select(dm => new
+            ? coBannerDaSapXep.Select(dm => new
             {
                 maDanhMuc = dm.MaDMSP,
                 tenDanhMuc = dm.TenDanhMuc,
@@ -346,7 +405,8 @@ public class SanPhamController : ControllerBase
         if (maDanhMucList.Count == 0)
             return BadRequest(new { message = "Thiếu mã danh mục." });
 
-        var cacheKey = $"sp:theodanhmuc:{string.Join(',', maDanhMucList.OrderBy(x => x))}:{page}:{pageSize}";
+        var ver = await _cache.GetCurrentVersionAsync();
+        var cacheKey = $"sp:v{ver}:theodanhmuc:{string.Join(',', maDanhMucList.OrderBy(x => x))}:{page}:{pageSize}";
 
         var json = await _cache.GetOrCreateJsonAsync(cacheKey, async () =>
             await BuildSanPhamTheoDanhMucAsync(maDanhMucList, page, pageSize), CacheTtl);
@@ -365,7 +425,8 @@ public class SanPhamController : ControllerBase
         var totalPages = (int)Math.Ceiling(total / (double)pageSize);
 
         var paged = await query
-            .OrderBy(sp => sp.MaSp)
+            // Sản phẩm tạo SAU hiển thị TRƯỚC (mới nhất lên đầu) — đồng bộ với BuildFilterResultAsync.
+            .OrderByDescending(sp => sp.MaSp)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .Include(sp => sp.MaDanhMucTheNavigation)
@@ -429,7 +490,8 @@ public class SanPhamController : ControllerBase
         // "Không tìm thấy" KHÔNG được cache — nếu cache lỗi 404 sẽ chặn sản phẩm mới tạo
         // trong 10 phút kế tiếp dù DB đã có, nên IProductCacheService tự bỏ qua việc cache null
         // (xem NullMarker trong ProductCacheService) và trả "__NULL__" cho trường hợp này.
-        var cacheKey = $"sp:detail:{id}";
+        var ver = await _cache.GetCurrentVersionAsync();
+        var cacheKey = $"sp:v{ver}:detail:{id}";
         var json = await _cache.GetOrCreateJsonAsync(cacheKey, async () =>
             await BuildSanPhamDetailAsync(id), CacheTtl);
 

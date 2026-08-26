@@ -1,7 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
-using MinhTamHair.Services;
+using MinhTamHair.SanPham.Controllers;
 using MinhTamHair.Services.UploadIMG;
 
 namespace MinhTamHair.Controllers;
@@ -241,6 +241,9 @@ public class QuanLySanPhamController : ControllerBase
                     TenSp = dto.TenSp?.Trim(),
                     MaDanhMuc = dto.MaDanhMuc,
                     MaTh = string.IsNullOrWhiteSpace(dto.MaTh) ? null : dto.MaTh,
+                    MoTa = dto.MoTa?.Trim(),
+                    ThanhPhan = dto.ThanhPhan?.Trim(),
+                    HuongDanSuDung = dto.HuongDanSuDung?.Trim(),
                     HinhAnhDaiDien = imgPath,
                     TrangThai = dto.TrangThai ?? 1,
                 };
@@ -261,7 +264,12 @@ public class QuanLySanPhamController : ControllerBase
 
                 // Giá bán & tồn kho ban đầu — lưu vào 1 biến thể mặc định, tạo ngay trong cùng transaction
                 var maBtMoi = await SinhMaTuDongAsync("BT", 2);
-                var btImgPath = await SaveImageAsync(dto.BienTheFile, "bienthe");
+
+                // Ảnh biến thể: nếu người dùng có upload ảnh riêng cho biến thể thì dùng ảnh đó,
+                // dù đây là biến thể "Mặc định" (không nhập Màu/Dung tích) hay biến thể có nhập
+                // Màu/Dung tích riêng — cả 2 trường hợp đều xử lý giống nhau. Nếu không upload,
+                // fallback lấy luôn ảnh đại diện của sản phẩm vừa tạo ở trên, tránh để trống ảnh.
+                var btImgPath = await SaveImageAsync(dto.BienTheFile, "bienthe") ?? sp.HinhAnhDaiDien;
 
                 var bt = new BienTheSanpham
                 {
@@ -336,6 +344,9 @@ public class QuanLySanPhamController : ControllerBase
         sp.TenSp = dto.TenSp?.Trim() ?? sp.TenSp;
         sp.MaDanhMuc = dto.MaDanhMuc ?? sp.MaDanhMuc;
         sp.MaTh = string.IsNullOrWhiteSpace(dto.MaTh) ? null : dto.MaTh;
+        sp.MoTa = dto.MoTa?.Trim() ?? sp.MoTa;
+        sp.ThanhPhan = dto.ThanhPhan?.Trim() ?? sp.ThanhPhan;
+        sp.HuongDanSuDung = dto.HuongDanSuDung?.Trim() ?? sp.HuongDanSuDung;
         sp.TrangThai = dto.TrangThai ?? sp.TrangThai;
 
         if (dto.File != null && dto.File.Length > 0)
@@ -360,6 +371,13 @@ public class QuanLySanPhamController : ControllerBase
         return Ok(new { message = "Cập nhật thành công." });
     }
 
+    // Xóa sản phẩm phải dọn sạch TOÀN BỘ dữ liệu con theo đúng thứ tự (từ lá lên gốc) trong
+    // 1 transaction, KHÔNG trông cậy vào cascade delete của SQL Server: FK
+    // "BienTheSanpham.MaSanPham -> SanPham.MaSp" và "LichSuTonKho.MaBienThe ->
+    // BienTheSanpham.MaBienThe" trong DB thực tế đang ở chế độ SET NULL (không phải CASCADE),
+    // vì cả 2 cột FK đều nullable — nên trước đây "_context.SanPhams.Remove(sp)" xóa được
+    // sản phẩm "thành công" nhưng để lại BienTheSanpham/LichSuTonKho/HinhanhBT mồ côi
+    // (MaSanPham/MaBienThe bị SQL tự set NULL) thay vì báo lỗi hoặc dọn theo.
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(string id)
     {
@@ -385,24 +403,60 @@ public class QuanLySanPhamController : ControllerBase
                 message = "Sản phẩm đã phát sinh dữ liệu, không thể xóa."
             });
         }
-        if (sp == null) return NotFound(new { message = "Không tìm thấy sản phẩm." });
 
-        foreach (var bt in sp.BienTheSanphams)
+        // Dùng CreateExecutionStrategy() vì DbContext đã bật EnableRetryOnFailure ở Program.cs
+        // (đồng bộ cách làm với action Create ở trên).
+        var strategy = _context.Database.CreateExecutionStrategy();
+
+        return await strategy.ExecuteAsync(async () =>
         {
-            await DeleteImageFile(bt.HinhAnhDaiDien);
-            foreach (var hbt in bt.HinhanhBTs)
-                await DeleteImageFile(hbt.DuongDan);
-        }
+            await using var transaction = await _context.Database.BeginTransactionAsync();
+            try
+            {
+                // Xóa file ảnh vật lý (Cloudinary) trước khi xóa bản ghi trong DB.
+                foreach (var bt in sp.BienTheSanphams)
+                {
+                    await DeleteImageFile(bt.HinhAnhDaiDien);
+                    foreach (var hbt in bt.HinhanhBTs)
+                        await DeleteImageFile(hbt.DuongDan);
+                }
+                foreach (var h in sp.Hinhanhsps)
+                    await DeleteImageFile(h.DuongDan);
+                await DeleteImageFile(sp.HinhAnhDaiDien);
 
-        foreach (var h in sp.Hinhanhsps)
-            await DeleteImageFile(h.DuongDan);
+                // Xóa TƯỜNG MINH từ lá lên gốc — không để SQL tự SET NULL rồi bỏ rơi bản ghi con:
+                // 1) Lịch sử tồn kho của mọi biến thể thuộc sản phẩm này
+                var lichSuTonKho = await _context.LichSuTonKhos
+                    .Where(l => maBienThes.Contains(l.MaBienThe))
+                    .ToListAsync();
+                _context.LichSuTonKhos.RemoveRange(lichSuTonKho);
 
-        await DeleteImageFile(sp.HinhAnhDaiDien);
+                // 2) Ảnh gallery của từng biến thể
+                var hinhAnhBT = sp.BienTheSanphams.SelectMany(bt => bt.HinhanhBTs).ToList();
+                _context.HinhanhBTs.RemoveRange(hinhAnhBT);
 
-        _context.SanPhams.Remove(sp);
-        await _context.SaveChangesAsync();
-        await _cache.InvalidateAllProductCacheAsync();
-        return Ok(new { message = "Đã xóa sản phẩm." });
+                // 3) Bản thân các biến thể
+                _context.BienTheSanphams.RemoveRange(sp.BienTheSanphams);
+
+                // 4) Ảnh gallery của sản phẩm
+                _context.Hinhanhsps.RemoveRange(sp.Hinhanhsps);
+
+                // 5) Cuối cùng mới xóa sản phẩm
+                _context.SanPhams.Remove(sp);
+
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
+
+            // Xóa cache SAU khi transaction commit thành công — tránh xóa cache rồi lại rollback.
+            await _cache.InvalidateAllProductCacheAsync();
+            return Ok(new { message = "Đã xóa sản phẩm." });
+        });
     }
 
     [HttpPatch("{id}/trangthai")]
@@ -493,7 +547,17 @@ public class QuanLySanPhamController : ControllerBase
     {
         var maBtMoi = await SinhMaTuDongAsync("BT", 2);
 
+        // Ảnh biến thể: ưu tiên ảnh người dùng upload riêng. Nếu không có — dù biến thể này
+        // để "Mặc định" hay người dùng có nhập Màu/Dung tích riêng — đều fallback lấy ảnh đại
+        // diện của sản phẩm cha, tránh để trống ảnh biến thể.
         var imgPath = await SaveImageAsync(dto.File, "bienthe");
+        if (imgPath == null)
+        {
+            imgPath = await _context.SanPhams
+                .Where(s => s.MaSp == dto.MaSanPham)
+                .Select(s => s.HinhAnhDaiDien)
+                .FirstOrDefaultAsync();
+        }
 
         var bt = new BienTheSanpham
         {
@@ -631,6 +695,15 @@ public class QuanLySanPhamController : ControllerBase
         _context.HinhanhBTs.RemoveRange(bt.HinhanhBTs);
 
         await DeleteImageFile(bt.HinhAnhDaiDien);
+
+        // Xóa TƯỜNG MINH lịch sử tồn kho của biến thể trước — FK "LichSuTonKho.MaBienThe ->
+        // BienTheSanpham.MaBienThe" trong DB là SET NULL (không cascade), nên nếu bỏ qua bước
+        // này, các dòng LichSuTonKho sẽ bị SQL tự set NULL và trở thành rác mồ côi thay vì
+        // được dọn theo biến thể (cùng lỗi như action Delete sản phẩm ở trên).
+        var lichSuTonKho = await _context.LichSuTonKhos
+            .Where(l => l.MaBienThe == maBienThe)
+            .ToListAsync();
+        _context.LichSuTonKhos.RemoveRange(lichSuTonKho);
 
         _context.BienTheSanphams.Remove(bt);
 
@@ -897,6 +970,9 @@ public class CreateSanPhamDto
     public string? TenSp { get; set; }
     public string? MaDanhMuc { get; set; }
     public string? MaTh { get; set; }
+    public string? MoTa { get; set; }
+    public string? ThanhPhan { get; set; }
+    public string? HuongDanSuDung { get; set; }
     public int? TrangThai { get; set; }
     public IFormFile? File { get; set; }
     public List<IFormFile>? GalleryFiles { get; set; }
@@ -917,6 +993,9 @@ public class UpdateSanPhamDto
     public string? TenSp { get; set; }
     public string? MaDanhMuc { get; set; }
     public string? MaTh { get; set; }
+    public string? MoTa { get; set; }
+    public string? ThanhPhan { get; set; }
+    public string? HuongDanSuDung { get; set; }
     public int? TrangThai { get; set; }
     public IFormFile? File { get; set; }
     public List<IFormFile>? GalleryFiles { get; set; }

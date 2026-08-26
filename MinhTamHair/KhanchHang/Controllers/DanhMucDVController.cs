@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
+using MinhTamHair.Services;
 
 namespace MinhTamHair.Controllers;
 
@@ -40,11 +41,19 @@ public class DanhMucDVController : ControllerBase
 {
     private readonly MinhTamHairContext _ctx;
     private readonly IWebHostEnvironment _env;
+    private readonly IServiceCacheService _cache;
 
-    public DanhMucDVController(MinhTamHairContext ctx, IWebHostEnvironment env)
+    // Danh mục dịch vụ đổi rất ít (chỉ khi admin thêm/sửa/xoá danh mục), nên cache
+    // dài hơn hẳn dữ liệu dịch vụ/combo — 30 phút. Đây là API mà trang Dmdichvu.vue
+    // gọi ngay lúc mount (fetchCategoryGrid), nên cache giúp trang load nhanh hơn
+    // đáng kể cho những lượt truy cập tiếp theo trong TTL.
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(30);
+
+    public DanhMucDVController(MinhTamHairContext ctx, IWebHostEnvironment env, IServiceCacheService cache)
     {
         _ctx = ctx;
         _env = env;
+        _cache = cache;
     }
 
     // -------------------------------------------------------
@@ -54,21 +63,30 @@ public class DanhMucDVController : ControllerBase
     [HttpGet("danh-sach")]
     public async Task<IActionResult> GetDanhSach()
     {
-        var list = await _ctx.DanhMucs
-            .Where(d => d.TrangThai != 0)
-            .Select(d => new DanhMucDVDto
-            {
-                MaDM = d.MaDm,
-                TenDanhMuc = d.TenDanhMuc,
-                HinhAnh = d.HinhAnh,
-                NgayTao = d.NgayTao,
-                TrangThai = d.TrangThai,
-                SoDichVu = d.Dichvus.Count(dv => dv.TrangThai == 1)
-            })
-            .OrderBy(d => d.MaDM)
-            .ToListAsync();
+        // Dùng chung version với module Dịch vụ/Combo (sv:cache-version) vì danh mục này
+        // hiển thị lồng trong response "categories" của DanhSachDichVuController.GetAll —
+        // CRUD danh mục ở DanhMucController cũng gọi InvalidateAllServiceCacheAsync().
+        var ver = await _cache.GetCurrentVersionAsync();
+        var json = await _cache.GetOrCreateJsonAsync($"sv:v{ver}:dm-dv:danh-sach", async () =>
+        {
+            var list = await _ctx.DanhMucs
+                .Where(d => d.TrangThai != 0)
+                .Select(d => new DanhMucDVDto
+                {
+                    MaDM = d.MaDm,
+                    TenDanhMuc = d.TenDanhMuc,
+                    HinhAnh = d.HinhAnh,
+                    NgayTao = d.NgayTao,
+                    TrangThai = d.TrangThai,
+                    SoDichVu = d.Dichvus.Count(dv => dv.TrangThai == 1)
+                })
+                .OrderBy(d => d.MaDM)
+                .ToListAsync();
 
-        return Ok(list);
+            return list;
+        }, CacheTtl);
+
+        return Content(json, "application/json");
     }
 
     // -------------------------------------------------------
