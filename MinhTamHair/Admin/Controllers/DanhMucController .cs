@@ -1,9 +1,8 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Caching.Distributed;
 using MinhTamHair.Models;
-using Microsoft.Extensions.Caching.Distributed;
+using MinhTamHair.Services;
 using System.Text.Json;
 using MinhTamHair.Services.UploadIMG;
 namespace MinhTamHair.Controllers
@@ -13,16 +12,16 @@ namespace MinhTamHair.Controllers
     public class DanhMucController : ControllerBase
     {
         private readonly MinhTamHairContext _context;
-        private readonly IDistributedCache _cache;
         private readonly IWebHostEnvironment _env;
         private readonly IUploadDVSP _uploadImg;
+        private readonly IServiceCacheService _cache;
 
-        public DanhMucController(MinhTamHairContext context, IDistributedCache cache, IWebHostEnvironment env, IUploadDVSP uploadImg)
+        public DanhMucController(MinhTamHairContext context, IWebHostEnvironment env, IUploadDVSP uploadImg, IServiceCacheService cache)
         {
             _context = context;
-            _cache = cache;
             _env = env;
             _uploadImg = uploadImg;
+            _cache = cache;
         }
 
         private static readonly string[] AllowedExt = { ".jpg", ".jpeg", ".png", ".webp", ".gif" };
@@ -197,6 +196,7 @@ namespace MinhTamHair.Controllers
 
             _context.DanhMucs.Add(entity);
             await _context.SaveChangesAsync();
+            await _cache.InvalidateAllServiceCacheAsync();
 
             return Ok(new { message = "Thêm danh mục thành công.", maDM = entity.MaDm });
         }
@@ -238,6 +238,7 @@ namespace MinhTamHair.Controllers
             }
 
             await _context.SaveChangesAsync();
+            await _cache.InvalidateAllServiceCacheAsync();
             return Ok(new { message = "Cập nhật danh mục thành công." });
         }
 
@@ -262,6 +263,7 @@ namespace MinhTamHair.Controllers
 
             _context.DanhMucs.Remove(entity);
             await _context.SaveChangesAsync();
+            await _cache.InvalidateAllServiceCacheAsync();
 
             return Ok(new { message = "Xóa danh mục thành công." });
         }
@@ -280,6 +282,7 @@ namespace MinhTamHair.Controllers
             }
 
             await _context.SaveChangesAsync();
+            await _cache.InvalidateAllServiceCacheAsync();
             return Ok(new { message = "Cập nhật trạng thái thành công." });
         }
 

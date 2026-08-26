@@ -8,6 +8,7 @@ using Microsoft.Extensions.FileProviders;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using MinhTamHair.Models;
+using MinhTamHair.SanPham.Controllers;
 using MinhTamHair.Services;
 using MinhTamHair.Services.Chat;
 using MinhTamHair.Services.Gemini;
@@ -74,34 +75,47 @@ builder.Services.AddCors(options =>
 //var redisConnectionString = builder.Configuration.GetValue<string>("Redis");
 //builder.Services.AddStackExchangeRedisCache(options =>
 //{
-    //options.Configuration = redisConnectionString;
-    //options.InstanceName = "MinhTamHair:";
+//options.Configuration = redisConnectionString;
+//options.InstanceName = "MinhTamHair:";
 //});
 
 // --- Tự động phát hiện & Kiểm tra kết nối Redis ---
 var redisConnectionString = builder.Configuration.GetValue<string>("Redis");
 bool isRedisAvailable = false;
+ConnectionMultiplexer? sharedRedisMultiplexer = null;
 
 if (!string.IsNullOrWhiteSpace(redisConnectionString))
 {
     try
     {
-        // Ping thử Redis trong tối đa 1.5 giây
+        // Cấu hình timeout ngắn + KHÔNG abort khi mất kết nối tạm thời, để multiplexer
+        // tự retry nền thay vì mỗi lệnh Redis phải chờ full retry chain (điều này là
+        // nguyên nhân chính gây delay 15-30s trên mọi request khi Upstash chập chờn).
         var redisOptions = StackExchange.Redis.ConfigurationOptions.Parse(redisConnectionString);
-        redisOptions.ConnectTimeout = 1500; // 1.5s
-        redisOptions.AbortOnConnectFail = true;
+        redisOptions.ConnectTimeout = 3000;      // 3s để connect
+        redisOptions.SyncTimeout = 3000;         // 3s cho mỗi lệnh đồng bộ (Get/Set...)
+        redisOptions.AsyncTimeout = 3000;        // 3s cho mỗi lệnh bất đồng bộ
+        redisOptions.ConnectRetry = 1;           // chỉ thử connect lại 1 lần, không lặp nhiều vòng
+        redisOptions.AbortOnConnectFail = false; // KHÔNG throw ngay, để multiplexer tự reconnect nền
+        redisOptions.ReconnectRetryPolicy = new StackExchange.Redis.LinearRetry(1000);
 
-        using var testConnection = StackExchange.Redis.ConnectionMultiplexer.Connect(redisOptions);
-        if (testConnection.IsConnected)
+        // Tạo và DÙNG CHUNG một multiplexer duy nhất, thay vì tạo 1 cái để test rồi
+        // dispose, sau đó tạo thêm 1 cái khác (không timeout) cho DI — đó là lỗi khiến
+        // request bị block chờ connect/retry ở singleton factory phía dưới.
+        // AbortOnConnectFail=false nên .Connect() không throw ngay cả khi Upstash đang
+        // không phản hồi lúc khởi động — multiplexer vẫn được tạo và tự nối lại nền sau.
+        sharedRedisMultiplexer = StackExchange.Redis.ConnectionMultiplexer.Connect(redisOptions);
+        isRedisAvailable = sharedRedisMultiplexer.IsConnected;
+
+        builder.Services.AddStackExchangeRedisCache(options =>
         {
-            isRedisAvailable = true;
-            builder.Services.AddStackExchangeRedisCache(options =>
-            {
-                options.Configuration = redisConnectionString;
-                options.InstanceName = "LGHair:";
-            });
-            Console.WriteLine(">>> [REDIS CACHE] Đã kết nối Redis Cloud thành công!");
-        }
+            options.ConnectionMultiplexerFactory = () => Task.FromResult<IConnectionMultiplexer>(sharedRedisMultiplexer);
+            options.InstanceName = "LGHair:";
+        });
+
+        Console.WriteLine(isRedisAvailable
+            ? ">>> [REDIS CACHE] Đã kết nối Redis Cloud thành công!"
+            : ">>> [CACHE WARNING] Redis chưa kết nối được lúc khởi động, sẽ tự retry nền.");
     }
     catch (Exception ex)
     {
@@ -109,17 +123,26 @@ if (!string.IsNullOrWhiteSpace(redisConnectionString))
     }
 }
 
-if (!isRedisAvailable)
+if (sharedRedisMultiplexer == null)
 {
+    // Không có connection string hoặc parse/connect lỗi ngay từ đầu (config sai, không
+    // phải do mạng chập chờn) — chỉ trường hợp này mới thật sự fallback về Memory Cache.
     builder.Services.AddDistributedMemoryCache();
     Console.WriteLine(">>> [LOCAL CACHE] Đang chạy với Bộ nhớ đệm RAM Local.");
 }
 
-
 // Đăng ký thêm IConnectionMultiplexer để dùng khi cần xóa cache theo pattern (KEYS/SCAN),
 // việc IDistributedCache không hỗ trợ trực tiếp (chỉ Get/Set/Remove theo đúng 1 key).
-builder.Services.AddSingleton<IConnectionMultiplexer>(sp =>
-    ConnectionMultiplexer.Connect(redisConnectionString));
+// Dùng lại đúng multiplexer đã tạo ở trên (nếu có) — KHÔNG tạo kết nối thứ hai không
+// timeout, tránh mỗi lần resolve service bị treo chờ connect/retry.
+// Luôn đăng ký (kể cả khi IsConnected=false lúc khởi động) vì ServiceCacheService /
+// ProductCacheService inject IConnectionMultiplexer bắt buộc trong constructor —
+// không đăng ký sẽ làm toàn bộ request tới các controller dùng 2 service này crash
+// ngay ở bước DI resolve, kể cả các action không hề đụng tới cache (như GetByDichVu).
+if (sharedRedisMultiplexer != null)
+{
+    builder.Services.AddSingleton<IConnectionMultiplexer>(sharedRedisMultiplexer);
+}
 // --- 4. Cấu hình Authentication (JWT + Cookie ) ---
 builder.Services.AddAuthentication(options =>
 {
