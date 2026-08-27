@@ -41,6 +41,9 @@ public partial class MinhTamHairContext : DbContext
 
     public virtual DbSet<HoaDon> HoaDons { get; set; }
 
+    public virtual DbSet<YeuCauHoanHang> YeuCauHoanHangs { get; set; } = null!;
+
+
     public virtual DbSet<Khachhang> Khachhangs { get; set; }
 
     public virtual DbSet<Kifutoc> Kifutocs { get; set; }

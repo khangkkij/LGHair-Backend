@@ -39,7 +39,7 @@ namespace MinhTamHair.Admin.Controllers
             var data = await _context.Lichdats
                 .AsNoTracking()
                 .Include(ld => ld.MaKhNavigation)
-                .Where(ld => ld.NgayHen == targetDateOnly && ld.TrangThai == 3) // Chỉ lấy khách Đang phục vụ trong ngày được chọn
+                .Where(ld => ld.NgayHen == targetDateOnly && ld.TrangThai == 3)
                 .OrderByDescending(ld => ld.GioBatDau)
                 .Select(ld => new
                 {
@@ -58,7 +58,7 @@ namespace MinhTamHair.Admin.Controllers
             return Ok(data);
         }
 
-        // 2. Lấy chi tiết đơn hàng để tính tiền
+        // 2. Lấy chi tiết đơn hàng để Check-out tại quầy
         [HttpGet("get-checkout-detail/{maLd}")]
         public async Task<IActionResult> GetCheckoutDetail(string maLd)
         {
@@ -114,12 +114,11 @@ namespace MinhTamHair.Admin.Controllers
             return Ok(result);
         }
 
-        // 3. Cập nhật Giỏ hàng phút chót (Mua thêm sản phẩm / Bớt dịch vụ)
+        // 3. Cập nhật Giỏ hàng (Mua thêm sản phẩm / Bớt sản phẩm hoàn kho / Thêm bớt dịch vụ)
         [HttpPost("update-order")]
         public async Task<IActionResult> UpdateOrder([FromBody] UpdateCheckoutRequest request)
         {
             var strategy = _context.Database.CreateExecutionStrategy();
-
             return await strategy.ExecuteAsync<IActionResult>(async () =>
             {
                 using var transaction = await _context.Database.BeginTransactionAsync();
@@ -137,24 +136,27 @@ namespace MinhTamHair.Admin.Controllers
                     _context.ChitietLichdats.RemoveRange(oldServices);
 
                     decimal tongDichVu = 0;
-                    foreach (var item in request.Services)
+                    if (request.Services != null)
                     {
-                        tongDichVu += item.Gia;
-                        _context.ChitietLichdats.Add(new ChitietLichdat
+                        foreach (var item in request.Services)
                         {
-                            MaLd = request.MaLd,
-                            MaNv = request.MaStylist,
-                            GiaLucDat = item.Gia,
-                            MaDv = item.Id.StartsWith("DV") ? item.Id : null,
-                            MaCb = item.Id.StartsWith("CB") ? item.Id : null
-                        });
+                            tongDichVu += item.Gia;
+                            _context.ChitietLichdats.Add(new ChitietLichdat
+                            {
+                                MaLd = request.MaLd,
+                                MaNv = !string.IsNullOrEmpty(request.MaStylist) ? request.MaStylist : null,
+                                GiaLucDat = item.Gia,
+                                MaDv = item.Id.StartsWith("DV") ? item.Id : null,
+                                MaCb = item.Id.StartsWith("CB") ? item.Id : null
+                            });
+                        }
                     }
 
                     // ============ B. XỬ LÝ SẢN PHẨM & ĐỒNG BỘ TỒN KHO ============
                     var maHds = hoaDons.Select(h => h.MaHd).ToList();
                     var oldProducts = await _context.ChitietHoadonSps.Where(ct => maHds.Contains(ct.MaHd)).ToListAsync();
 
-                    // 1. Hoàn trả tồn kho cho các sản phẩm cũ
+                    // 1. Hoàn trả tồn kho cho các sản phẩm cũ trước
                     foreach (var oldP in oldProducts)
                     {
                         var bt = await _context.BienTheSanphams.FindAsync(oldP.MaBienThe);
@@ -171,21 +173,20 @@ namespace MinhTamHair.Admin.Controllers
                                 TonTruoc = tonTruoc,
                                 TonSau = bt.SoLuongTon.Value,
                                 MaChungTu = hoaDon.MaHd,
-                                GhiChu = "Cập nhật giỏ hàng Check-out",
+                                GhiChu = "Cập nhật số lượng tại quầy",
                                 ThoiGian = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now()
                             });
                         }
                     }
                     _context.ChitietHoadonSps.RemoveRange(oldProducts);
-                    await _context.SaveChangesAsync(); // Cập nhật kho tạm trước khi trừ món mới
+                    await _context.SaveChangesAsync(); // Cập nhật kho tạm thời
 
-                    // ============ B. XỬ LÝ SẢN PHẨM ============
+                    // 2. Trừ tồn kho theo số lượng thực tế mới (Khách lấy bao nhiêu trừ bấy nhiêu)
                     decimal tongSanPham = 0;
-                    if (request.Products != null && request.Products.Any())
+                    if (request.Products != null && request.Products.Any(p => p.SoLuong > 0))
                     {
                         if (hoaDonSp == null)
                         {
-                            // Tạo hóa đơn sản phẩm mới nếu chưa có
                             string maHdSp = "SP" + MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().ToString("ddHHmmss");
                             hoaDonSp = new HoaDon
                             {
@@ -201,18 +202,16 @@ namespace MinhTamHair.Admin.Controllers
                             _context.HoaDons.Add(hoaDonSp);
                         }
 
-                        // 2. Thêm sản phẩm và trừ tồn kho
-                        foreach (var p in request.Products)
+                        foreach (var p in request.Products.Where(p => p.SoLuong > 0))
                         {
                             var bt = await _context.BienTheSanphams.FindAsync(p.Id);
-                            if (bt == null || bt.SoLuongTon < p.SoLuong)
+                            if (bt == null || (bt.SoLuongTon ?? 0) < p.SoLuong)
                                 throw new Exception($"Sản phẩm {p.Id} không đủ tồn kho.");
 
                             tongSanPham += p.Gia * p.SoLuong;
                             var tonTruoc = bt.SoLuongTon ?? 0;
                             bt.SoLuongTon -= p.SoLuong;
 
-                            // Lưu vào mã hóa đơn SẢN PHẨM (hoaDonSp.MaHd)
                             _context.ChitietHoadonSps.Add(new ChitietHoadonSp
                             {
                                 MaHd = hoaDonSp.MaHd,
@@ -230,52 +229,36 @@ namespace MinhTamHair.Admin.Controllers
                                 TonTruoc = tonTruoc,
                                 TonSau = bt.SoLuongTon.Value,
                                 MaChungTu = hoaDonSp.MaHd,
-                                GhiChu = "Khách mua thêm tại quầy",
+                                GhiChu = "Bán sản phẩm tại quầy",
                                 ThoiGian = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now()
                             });
                         }
 
-                        // Chốt tiền cho hóa đơn sản phẩm
                         hoaDonSp.TongTien = tongSanPham;
                         hoaDonSp.ThanhTien = tongSanPham;
                     }
                     else if (hoaDonSp != null)
                     {
-                        // Nếu không có sản phẩm nào nhưng đã từng có hóa đơn SP, reset tiền về 0
                         hoaDonSp.TongTien = 0;
                         hoaDonSp.ThanhTien = 0;
                     }
 
-                    // ============ C. CHỐT TỔNG TIỀN VÀ TÍNH LẠI VOUCHER ============
+                    // ============ C. TÍNH LẠI TỔNG TIỀN VÀ VOUCHER ============
                     decimal tongTienMoi = tongDichVu;
                     hoaDon.TongTien = tongTienMoi;
-
-                    // Tổng tiền dự kiến của lịch đặt thì vẫn có thể lưu tổng của cả 2 để dễ quản lý
                     ld.TongTienDuKien = tongDichVu + tongSanPham;
 
-                    decimal thanhTienMoi;
+                    decimal thanhTienMoi = tongTienMoi;
                     if (!string.IsNullOrEmpty(hoaDon.MaCode))
                     {
                         var vc = await _context.Vouchers.FirstOrDefaultAsync(v => v.MaCode == hoaDon.MaCode);
                         if (vc != null)
                         {
                             if (vc.SoTienGiam.HasValue && vc.SoTienGiam > 0)
-                                thanhTienMoi = tongTienMoi - vc.SoTienGiam.Value;
+                                thanhTienMoi = Math.Max(0, tongTienMoi - vc.SoTienGiam.Value);
                             else if (vc.PhanTramGiam.HasValue && vc.PhanTramGiam > 0)
-                                thanhTienMoi = tongTienMoi - (tongTienMoi * vc.PhanTramGiam.Value / 100m);
-                            else
-                                thanhTienMoi = tongTienMoi;
-
-                            if (thanhTienMoi < 0) thanhTienMoi = 0;
+                                thanhTienMoi = Math.Max(0, tongTienMoi - (tongTienMoi * vc.PhanTramGiam.Value / 100m));
                         }
-                        else
-                        {
-                            thanhTienMoi = tongTienMoi;
-                        }
-                    }
-                    else
-                    {
-                        thanhTienMoi = tongTienMoi;
                     }
 
                     decimal phiShipHienTai = await _context.ThongtinGiaohangs
@@ -297,21 +280,26 @@ namespace MinhTamHair.Admin.Controllers
             });
         }
 
+        // 4. Xác nhận Thanh toán tại quầy & Đóng đơn
         [HttpPost("confirm-payment")]
         public async Task<IActionResult> ConfirmPayment([FromBody] ConfirmCheckoutPaymentRequest req)
         {
             var ld = await _context.Lichdats.FirstOrDefaultAsync(x => x.MaLd == req.MaLd);
             var hoaDons = await _context.HoaDons.Where(hd => hd.MaLd == req.MaLd).ToListAsync();
 
-            if (ld == null || !hoaDons.Any()) return NotFound("Không tìm thấy dữ liệu.");
+            if (ld == null || !hoaDons.Any()) return NotFound("Không tìm thấy dữ liệu hóa đơn.");
 
             var mainHoaDon = hoaDons.FirstOrDefault(h => !h.MaHd.StartsWith("SP")) ?? hoaDons.First();
 
             foreach (var h in hoaDons)
             {
-                h.MaNv = req.MaStylist;
+                if (!string.IsNullOrEmpty(req.MaStylist))
+                {
+                    h.MaNv = req.MaStylist;
+                }
             }
 
+            // Thu số tiền còn lại tại quầy (nếu có)
             if (req.AmountToPay > 0)
             {
                 if (req.PaymentMethod.ToLower() == "tienmat")
@@ -323,8 +311,6 @@ namespace MinhTamHair.Admin.Controllers
                         SoTien = req.AmountToPay,
                         TrangThai = 1
                     });
-
-                    // Phân bổ tiền đã trả vào mainHoaDon (hoặc chia đều nếu muốn, ở đây dồn vào main)
                     mainHoaDon.TienDaTra = (mainHoaDon.TienDaTra ?? 0) + req.AmountToPay;
                 }
                 else // Online Payment (VNPay / MoMo)
@@ -336,16 +322,19 @@ namespace MinhTamHair.Admin.Controllers
                     return Ok(new { payUrl = await CreateMoMoLink(mainHoaDon.MaHd, (long)req.AmountToPay) });
                 }
             }
-            ld.TrangThai = 4;
+
+            // Đóng lượt phục vụ và hóa đơn
+            ld.TrangThai = 4; // 4: Đã hoàn thành phục vụ
             foreach (var h in hoaDons)
             {
-                // Khi thanh toán xong tại quầy, hóa đơn cả dịch vụ và sản phẩm đều đã hoàn thành/nhận ngay
-                h.TrangThai = 3;
+                h.TrangThai = 3; // 3: Hóa đơn đã hoàn tất
             }
-            await _context.SaveChangesAsync();
 
+            await _context.SaveChangesAsync();
             return Ok(new { message = "Thanh toán thành công, đơn hàng đã hoàn tất!" });
         }
+
+        // 5. Lấy danh sách toàn bộ sản phẩm khả dụng trong kho để bán tại quầy
         [HttpGet("get-all-products")]
         public async Task<IActionResult> GetAllProducts()
         {
@@ -371,7 +360,6 @@ namespace MinhTamHair.Admin.Controllers
             }
         }
 
-
         // ================= CÁC HÀM HỖ TRỢ THANH TOÁN =================
         private string CreateVNPayLink(string maHd, double amount)
         {
@@ -386,8 +374,6 @@ namespace MinhTamHair.Admin.Controllers
             vnpay.AddRequestData("vnp_Locale", "vn");
             vnpay.AddRequestData("vnp_OrderInfo", "Thanh toan CheckOut: " + maHd);
             vnpay.AddRequestData("vnp_OrderType", "other");
-
-            // Cấu hình URL trả về sau khi quét VNPay tại quầy
             vnpay.AddRequestData("vnp_ReturnUrl", _configuration["Vnpay:ReturnUrlCheckIn"]);
             vnpay.AddRequestData("vnp_TxnRef", maHd + "_" + MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().Ticks);
 
