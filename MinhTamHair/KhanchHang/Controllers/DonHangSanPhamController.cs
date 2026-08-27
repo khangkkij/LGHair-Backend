@@ -43,7 +43,7 @@ namespace MinhTamHair.KhachHang.Controllers
 
                             Status = hd.TrangThai == 0 ? "cancelled" :
                                      hd.TrangThai == 1 ? "pending" :
-                                     hd.TrangThai == 2 ? "shipping" : "completed"
+                                     hd.TrangThai == 2 ? "shipping" : hd.TrangThai == 3 ? "completed" : hd.TrangThai == 4 ? "returning" : hd.TrangThai == 5 ? "returned" : hd.TrangThai == 6 ? "refunded" : "completed"
                         };
 
             var history = await query.ToListAsync();
@@ -73,7 +73,7 @@ namespace MinhTamHair.KhachHang.Controllers
                     diaChiGiao = deliveryInfo != null ? deliveryInfo.DiaChiNhan : "Chưa cập nhật",
                     trangThai = hd.TrangThai == 0 ? "cancelled" :
                                  hd.TrangThai == 1 ? "pending" :
-                                 hd.TrangThai == 2 ? "shipping" : "completed",
+                                 hd.TrangThai == 2 ? "shipping" : hd.TrangThai == 3 ? "completed" : hd.TrangThai == 4 ? "returning" : hd.TrangThai == 5 ? "returned" : hd.TrangThai == 6 ? "refunded" : "completed",
 
                     tongTienHang = hd.TongTien ?? 0m,
                     phiVanChuyen = deliveryInfo != null ? (deliveryInfo.PhiShip ?? 0m) : 0m,
