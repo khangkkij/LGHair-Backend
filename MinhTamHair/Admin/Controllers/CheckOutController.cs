@@ -127,7 +127,10 @@ namespace MinhTamHair.Admin.Controllers
                     var ld = await _context.Lichdats.FirstOrDefaultAsync(x => x.MaLd == request.MaLd);
                     var hoaDons = await _context.HoaDons.Where(h => h.MaLd == request.MaLd).ToListAsync();
                     var hoaDon = hoaDons.FirstOrDefault(h => !h.MaHd.StartsWith("SP")) ?? hoaDons.FirstOrDefault();
-                    var hoaDonSp = hoaDons.FirstOrDefault(h => h.MaHd.StartsWith("SP"));
+                    // SỬA #1: KHÔNG dùng/tạo hóa đơn "SP..." tách riêng nữa. EInvoiceService.PhatHanhHoaDonAsync
+                    // đọc ChitietHoadonSp theo đúng MaHd của CHÍNH hóa đơn đang xuất (không theo MaLd), nên nếu
+                    // sản phẩm nằm ở 1 HoaDon "SP..." khác thì hóa đơn điện tử gộp (tied vào hoaDon dịch vụ)
+                    // sẽ không bao giờ thấy được sản phẩm đó -> mất trắng khỏi hóa đơn điện tử.
 
                     if (ld == null || hoaDon == null) return NotFound("Lỗi dữ liệu đơn hàng.");
 
@@ -182,26 +185,11 @@ namespace MinhTamHair.Admin.Controllers
                     await _context.SaveChangesAsync(); // Cập nhật kho tạm thời
 
                     // 2. Trừ tồn kho theo số lượng thực tế mới (Khách lấy bao nhiêu trừ bấy nhiêu)
+                    // SỬA #2: bỏ toàn bộ đoạn tạo/dùng "hoaDonSp" - ghi ChitietHoadonSp thẳng vào
+                    // hoaDon (hóa đơn dịch vụ chính) để đồng bộ với MaHd mà HoaDonDienTu gộp đang trỏ tới.
                     decimal tongSanPham = 0;
                     if (request.Products != null && request.Products.Any(p => p.SoLuong > 0))
                     {
-                        if (hoaDonSp == null)
-                        {
-                            string maHdSp = "SP" + MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().ToString("ddHHmmss");
-                            hoaDonSp = new HoaDon
-                            {
-                                MaHd = maHdSp,
-                                MaLd = request.MaLd,
-                                MaKh = ld.MaKh,
-                                NgayTao = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(),
-                                TongTien = 0,
-                                ThanhTien = 0,
-                                TienDaTra = 0,
-                                TrangThai = 3
-                            };
-                            _context.HoaDons.Add(hoaDonSp);
-                        }
-
                         foreach (var p in request.Products.Where(p => p.SoLuong > 0))
                         {
                             var bt = await _context.BienTheSanphams.FindAsync(p.Id);
@@ -214,7 +202,7 @@ namespace MinhTamHair.Admin.Controllers
 
                             _context.ChitietHoadonSps.Add(new ChitietHoadonSp
                             {
-                                MaHd = hoaDonSp.MaHd,
+                                MaHd = hoaDon.MaHd, // SỬA: trước đây là hoaDonSp.MaHd (hóa đơn "SP..." tách riêng)
                                 MaBienThe = p.Id,
                                 SoLuong = p.SoLuong,
                                 DonGiaLucBan = p.Gia,
@@ -228,23 +216,17 @@ namespace MinhTamHair.Admin.Controllers
                                 SoLuongThayDoi = -p.SoLuong,
                                 TonTruoc = tonTruoc,
                                 TonSau = bt.SoLuongTon.Value,
-                                MaChungTu = hoaDonSp.MaHd,
+                                MaChungTu = hoaDon.MaHd, // SỬA: trước đây là hoaDonSp.MaHd
                                 GhiChu = "Bán sản phẩm tại quầy",
                                 ThoiGian = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now()
                             });
                         }
-
-                        hoaDonSp.TongTien = tongSanPham;
-                        hoaDonSp.ThanhTien = tongSanPham;
-                    }
-                    else if (hoaDonSp != null)
-                    {
-                        hoaDonSp.TongTien = 0;
-                        hoaDonSp.ThanhTien = 0;
                     }
 
                     // ============ C. TÍNH LẠI TỔNG TIỀN VÀ VOUCHER ============
-                    decimal tongTienMoi = tongDichVu;
+                    // SỬA #3: TongTien phải gồm CẢ dịch vụ lẫn sản phẩm (trước đây chỉ mỗi tongDichVu,
+                    // vì sản phẩm đã bị tách sang hoaDonSp riêng - giờ gộp lại chung 1 hóa đơn nên phải cộng đủ).
+                    decimal tongTienMoi = tongDichVu + tongSanPham;
                     hoaDon.TongTien = tongTienMoi;
                     ld.TongTienDuKien = tongDichVu + tongSanPham;
 
@@ -325,12 +307,41 @@ namespace MinhTamHair.Admin.Controllers
 
             // Đóng lượt phục vụ và hóa đơn
             ld.TrangThai = 4; // 4: Đã hoàn thành phục vụ
+            // SỬA #4: sau khi gộp #1-#3 ở trên, danh sách hoaDons giờ thường chỉ còn đúng 1 hóa đơn dịch vụ
+            // (không còn hóa đơn "SP..." tách riêng được tạo mới nữa). Set TrangThai = 3 ("Hoàn thành") rồi
+            // BẮN HÓA ĐƠN ĐIỆN TỬ NGAY TẠI ĐÂY luôn - checkout là điểm kết thúc thật sự của giao dịch tại
+            // quầy (không như đơn ship COD còn phải chờ xác nhận giao hàng), và nhân viên đã xác nhận số
+            // tiền qua hộp thoại Swal trước khi gọi API này rồi nên xuất luôn là an toàn.
+            var maHdCanXuatHddt = new List<string>();
             foreach (var h in hoaDons)
             {
                 h.TrangThai = 3; // 3: Hóa đơn đã hoàn tất
+                maHdCanXuatHddt.Add(h.MaHd);
             }
 
             await _context.SaveChangesAsync();
+
+            foreach (var maHd in maHdCanXuatHddt)
+            {
+                var hddtChoXuat = await _context.HoaDonDienTus
+                    .Where(x => x.MaHd == maHd && x.TrangThai == 3)
+                    .OrderByDescending(x => x.MaHddt)
+                    .FirstOrDefaultAsync();
+
+                if (hddtChoXuat != null)
+                {
+                    hddtChoXuat.TrangThai = 0; // Sẵn sàng xuất
+                    await _context.SaveChangesAsync();
+                    var maHddt = hddtChoXuat.MaHddt;
+                    _ = Task.Run(async () =>
+                    {
+                        using var scope = _scopeFactory.CreateScope();
+                        var eInvoiceService = scope.ServiceProvider.GetRequiredService<IEInvoiceService>();
+                        await eInvoiceService.PhatHanhHoaDonAsync(maHddt);
+                    });
+                }
+            }
+
             return Ok(new { message = "Thanh toán thành công, đơn hàng đã hoàn tất!" });
         }
 
