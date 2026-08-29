@@ -760,47 +760,50 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                 if (hoaDon != null && thanhToan != null && lichDat != null)
                 {
-                    if (isSuccess)
+                    // CHẶN ĐỨNG: Chỉ xử lý giao dịch nếu đơn thực sự đang ở trạng thái Chờ thanh toán
+                    if (hoaDon.TrangThai == 0 && lichDat.TrangThai == 3)
                     {
-                        // THÀNH CÔNG: Kiểm tra xem nãy khách chọn cọc 10% hay trả full 100%
-                        bool isCoc = thanhToan.PhuongThuc == "Coc 10%";
-
-                        // Set trạng thái theo đúng bảng phân loại
-                        lichDat.TrangThai = isCoc ? 1 : 2;
-                        hoaDon.TrangThai = isCoc ? 1 : 2;
-                        thanhToan.TrangThai = 1; // Bảng thanh toán thành công là 1
-
-                        // Gửi email QR
-                        var emailGui = lichDat.MaKhNavigation?.Email;
-                        var tenGui = lichDat.MaKhNavigation?.HoTen ?? "Khách hàng";
-                        var ngayHenGui = lichDat.NgayHen.HasValue ? lichDat.NgayHen.Value.ToDateTime(TimeOnly.MinValue) : VnTimeHelper.Now();
-                        var tongTienGui = thanhToan.SoTien ?? 0;
-
-                        if (!string.IsNullOrEmpty(emailGui))
+                        if (isSuccess)
                         {
-                            _ = Task.Run(async () =>
+                            // THÀNH CÔNG: Chốt trạng thái 1 (Cọc) hoặc 2 (Full)
+                            bool isCoc = thanhToan.PhuongThuc == "Coc 10%";
+                            lichDat.TrangThai = isCoc ? 1 : 2;
+                            hoaDon.TrangThai = isCoc ? 1 : 2;
+                            thanhToan.TrangThai = 1;
+
+                            // Lấy thông tin gửi Email
+                            var emailGui = lichDat.MaKhNavigation?.Email;
+                            var tenGui = lichDat.MaKhNavigation?.HoTen ?? "Khách hàng";
+                            var ngayHenGui = lichDat.NgayHen.HasValue ? lichDat.NgayHen.Value.ToDateTime(TimeOnly.MinValue) : VnTimeHelper.Now();
+                            var tongTienGui = thanhToan.SoTien ?? 0;
+
+                            if (!string.IsNullOrEmpty(emailGui))
                             {
-                                try
+                                _ = Task.Run(async () =>
                                 {
-                                    using var scope = _scopeFactory.CreateScope();
-                                    var qrService = scope.ServiceProvider.GetRequiredService<IQrEmailService>();
-                                    await qrService.SendBookingEmailAsync(emailGui, tenGui, maLd, ngayHenGui, tongTienGui);
-                                }
-                                catch (Exception ex)
-                                {
-                                    Console.WriteLine($"[EMAIL ERROR] {ex.Message}");
-                                }
-                            });
+                                    try
+                                    {
+                                        using var scope = _scopeFactory.CreateScope();
+                                        var qrService = scope.ServiceProvider.GetRequiredService<IQrEmailService>();
+                                        await qrService.SendBookingEmailAsync(emailGui, tenGui, maLd, ngayHenGui, tongTienGui);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Console.WriteLine($"[EMAIL ERROR] {ex.Message}");
+                                    }
+                                });
+                            }
                         }
+                        else
+                        {
+                            // THẤT BẠI / KHÁCH HỦY: Trả về 0 để giải phóng thợ
+                            lichDat.TrangThai = 0;
+                            hoaDon.TrangThai = 0;
+                            thanhToan.TrangThai = 0;
+                        }
+                        await _context.SaveChangesAsync();
                     }
-                    else
-                    {
-                        // THẤT BẠI / KHÁCH HỦY: Trả tất cả về 0 -> GIẢI PHÓNG THỢ & SLOT NGAY LẬP TỨC
-                        lichDat.TrangThai = 0;
-                        hoaDon.TrangThai = 0;
-                        thanhToan.TrangThai = 0;
-                    }
-                    await _context.SaveChangesAsync();
+                
                 }
 
                 return Ok(new { success = isSuccess, maLd = maLd });

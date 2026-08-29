@@ -943,7 +943,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             });
         }
 
-        // ĐÃ VÁ: Bắt tín hiệu khách hủy để nhả slot ngay lập tức
+        // ĐÃ VÁ: Bắt tín hiệu khách hủy để nhả slot ngay lập tức + Fix nuốt đơn
         [HttpGet("get-receipt")]
         public async Task<IActionResult> GetReceipt(
             [FromQuery] string maHd,
@@ -1063,9 +1063,11 @@ namespace MinhTamHair.KhanchHang.Controllers
                 if ((hoaDon.TrangThai == 1 || hoaDon.TrangThai == 2) && !string.IsNullOrEmpty(hoaDon.MaLd))
                 {
                     var lichDat = await _context.Lichdats.FirstOrDefaultAsync(l => l.MaLd == hoaDon.MaLd);
-                    if (lichDat != null && lichDat.TrangThai == 0)
+
+
+                    if (lichDat != null && (lichDat.TrangThai == 3 || lichDat.TrangThai == 0))
                     {
-                        lichDat.TrangThai = 1;
+                        lichDat.TrangThai = hoaDon.TrangThai; // Đồng bộ theo hóa đơn (1 hoặc 2)
                         await _context.SaveChangesAsync();
                         shouldSendEmail = true;
                     }
