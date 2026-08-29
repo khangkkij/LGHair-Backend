@@ -163,14 +163,20 @@ public class SanPhamController : ControllerBase
         var total = await query.CountAsync();
         var totalPages = (int)Math.Ceiling(total / (double)pageSize);
 
+        // Top 3 sản phẩm bán nhiều nhất TRONG TỪNG DANH MỤC — lấy TRƯỚC khi Skip/Take vì
+        // cần đưa vào ORDER BY để phân trang theo đúng thứ tự Hot-lên-đầu.
+        var hotProductIds = await GetHotProductIdsAsync();
+
         // Cần ORDER BY tường minh thì Skip/Take mới cho kết quả ổn định giữa các lần gọi.
         // CHỈ TỪ ĐÂY mới Include + Skip/Take + ToListAsync — nghĩa là chỉ đúng những sản
         // phẩm thuộc TRANG ĐANG XEM mới được kéo đầy đủ biến thể/đánh giá về, các trang
         // chưa bấm tới hoàn toàn không được truy vấn.
         var paged = await query
-            // Sản phẩm tạo SAU hiển thị TRƯỚC (mới nhất lên đầu) — mã sản phẩm tăng dần
-            // theo thứ tự tạo (SP43 tạo sau SP42), nên sắp giảm dần theo mã là đúng.
-            .OrderByDescending(sp => sp.MaSp)
+            // Hot lên đầu trước tiên; trong từng nhóm (Hot / không-Hot) sản phẩm tạo SAU
+            // vẫn hiển thị TRƯỚC như cũ (mã sản phẩm tăng dần theo thứ tự tạo, nên sắp
+            // giảm dần theo mã là đúng).
+            .OrderByDescending(sp => hotProductIds.Contains(sp.MaSp))
+            .ThenByDescending(sp => sp.MaSp)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .Include(sp => sp.MaDanhMucTheNavigation)
@@ -180,9 +186,6 @@ public class SanPhamController : ControllerBase
             .Include(sp => sp.Hinhanhsps)
             .AsSplitQuery()
             .ToListAsync();
-
-        // Top 3 sản phẩm bán nhiều nhất TRONG TỪNG DANH MỤC
-        var hotProductIds = await GetHotProductIdsAsync();
 
         var result = paged.Select(sp =>
         {
@@ -424,9 +427,15 @@ public class SanPhamController : ControllerBase
         var total = await query.CountAsync();
         var totalPages = (int)Math.Ceiling(total / (double)pageSize);
 
+        // Lấy TRƯỚC khi Skip/Take vì cần đưa vào ORDER BY để phân trang theo đúng thứ tự
+        // Hot-lên-đầu.
+        var hotProductIds = await GetHotProductIdsAsync();
+
         var paged = await query
-            // Sản phẩm tạo SAU hiển thị TRƯỚC (mới nhất lên đầu) — đồng bộ với BuildFilterResultAsync.
-            .OrderByDescending(sp => sp.MaSp)
+            // Hot lên đầu trước tiên; trong từng nhóm (Hot / không-Hot) sản phẩm tạo SAU
+            // vẫn hiển thị TRƯỚC như cũ — đồng bộ với BuildFilterResultAsync.
+            .OrderByDescending(sp => hotProductIds.Contains(sp.MaSp))
+            .ThenByDescending(sp => sp.MaSp)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .Include(sp => sp.MaDanhMucTheNavigation)
@@ -436,8 +445,6 @@ public class SanPhamController : ControllerBase
             .Include(sp => sp.Hinhanhsps)
             .AsSplitQuery()
             .ToListAsync();
-
-        var hotProductIds = await GetHotProductIdsAsync();
 
         var result = paged.Select(sp =>
         {
