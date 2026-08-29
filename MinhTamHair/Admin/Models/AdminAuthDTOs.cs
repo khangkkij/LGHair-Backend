@@ -1,4 +1,4 @@
-﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations;
 
 namespace MinhTamHair.Admin.Models
 {
@@ -10,6 +10,11 @@ namespace MinhTamHair.Admin.Models
 
 		[Required(ErrorMessage = "Vui lòng nhập mật khẩu.")]
 		public string Password { get; set; } = null!;
+	}
+
+	public class AdminRefreshTokenRequest
+	{
+		public string? RefreshToken { get; set; }
 	}
 
 }
