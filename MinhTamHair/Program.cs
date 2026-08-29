@@ -5,6 +5,8 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using MinhTamHair.Models;
@@ -61,6 +63,8 @@ builder.Services.AddCors(options =>
                   "http://localhost:5174",   // Admin app HTTP
                   "https://localhost:5173",  // Customer app HTTPS (basicSsl)
                   "https://localhost:5174",  // Admin app HTTPS (basicSsl)
+                  "http://localhost:4173",  // Customer app HTTP
+                  "https://localhost:4173",  // Customer app HTTPS (basicSsl)
                   "https://lghair-admin.netlify.app",
                   "https://lghair.netlify.app",
                   "https://lghair-customer.netlify.app")
@@ -141,33 +145,89 @@ builder.Services.AddAuthentication(options =>
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]))
     };
 
-    options.Events = new JwtBearerEvents
-    {
-        OnMessageReceived = context =>
+        options.Events = new JwtBearerEvents
         {
-            // 1. Ưu tiên Header Authorization do Vue gửi (Bearer Token)
-            var authHeader = context.Request.Headers["Authorization"].FirstOrDefault();
-            if (!string.IsNullOrEmpty(authHeader) && authHeader.StartsWith("Bearer "))
+            OnMessageReceived = context =>
             {
-                // Nếu Frontend đã gửi kèm Token chuẩn qua Header, kệ cho C# tự đọc
+                // 1. Ưu tiên Header Authorization do Vue gửi (Bearer Token)
+                var authHeader = context.Request.Headers["Authorization"].FirstOrDefault();
+                if (!string.IsNullOrEmpty(authHeader) && authHeader.StartsWith("Bearer "))
+                {
+                    // Nếu Frontend đã gửi kèm Token chuẩn qua Header, kệ cho C# tự đọc
+                    return Task.CompletedTask;
+                }
+
+                // 2. Nếu không có Header (ví dụ gọi từ Swagger, load ảnh...), tìm trong Cookie
+                var token = context.Request.Cookies["adminAccessToken"];
+                if (string.IsNullOrEmpty(token))
+                {
+                    token = context.Request.Cookies["accessToken"];
+                }
+
+                // 3. Đưa Token cho C# đọc
+                if (!string.IsNullOrEmpty(token))
+                {
+                    context.Token = token;
+                }
                 return Task.CompletedTask;
-            }
-
-            // 2. Nếu không có Header (ví dụ gọi từ Swagger, load ảnh...), tìm trong Cookie
-            var token = context.Request.Cookies["adminAccessToken"];
-            if (string.IsNullOrEmpty(token))
+            },
+            OnTokenValidated = async context =>
             {
-                token = context.Request.Cookies["accessToken"];
-            }
+                var userId = context.Principal?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+                          ?? context.Principal?.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value;
 
-            // 3. Đưa Token cho C# đọc
-            if (!string.IsNullOrEmpty(token))
-            {
-                context.Token = token;
+                if (!string.IsNullOrEmpty(userId))
+                {
+                    // 1. Kiểm tra trong Memory Cache trước (tốc độ cao)
+                    var memCache = context.HttpContext.RequestServices.GetService<Microsoft.Extensions.Caching.Memory.IMemoryCache>();
+                    long? revokedUnix = null;
+
+                    if (memCache != null && memCache.TryGetValue($"UserRevokedAt_{userId}", out long cachedRevoked))
+                    {
+                        revokedUnix = cachedRevoked;
+                    }
+                    else
+                    {
+                        // 2. Kiểm tra trong Distributed / Redis Cache
+                        var distCache = context.HttpContext.RequestServices.GetService<Microsoft.Extensions.Caching.Distributed.IDistributedCache>();
+                        if (distCache != null)
+                        {
+                            var revokedStr = await distCache.GetStringAsync($"UserRevokedAt_{userId}");
+                            if (!string.IsNullOrEmpty(revokedStr) && long.TryParse(revokedStr, out long distRevoked))
+                            {
+                                revokedUnix = distRevoked;
+                                memCache?.Set($"UserRevokedAt_{userId}", distRevoked, TimeSpan.FromMinutes(10));
+                            }
+                        }
+                    }
+
+                    if (revokedUnix.HasValue)
+                    {
+                        // Lấy thời điểm token được cấp phát (iat)
+                        var iatClaim = context.Principal?.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Iat)?.Value
+                                    ?? context.Principal?.FindFirst("iat")?.Value;
+
+                        if (long.TryParse(iatClaim, out long iatUnix))
+                        {
+                            if (iatUnix <= revokedUnix.Value)
+                            {
+                                context.Fail("Phiên đăng nhập (JWT Token) đã bị thu hồi do người dùng đăng xuất trên mọi thiết bị.");
+                                return;
+                            }
+                        }
+                        else
+                        {
+                            var validFrom = context.SecurityToken?.ValidFrom;
+                            if (validFrom.HasValue && validFrom.Value.ToUniversalTime() <= DateTimeOffset.FromUnixTimeSeconds(revokedUnix.Value).UtcDateTime)
+                            {
+                                context.Fail("Phiên đăng nhập (JWT Token) đã bị thu hồi do người dùng đăng xuất trên mọi thiết bị.");
+                                return;
+                            }
+                        }
+                    }
+                }
             }
-            return Task.CompletedTask;
-        }
-    };
+        };
 });
 builder.Services.AddSwaggerGen(c =>
 {
