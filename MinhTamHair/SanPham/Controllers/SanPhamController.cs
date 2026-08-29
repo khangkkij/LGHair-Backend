@@ -542,6 +542,8 @@ public class SanPhamController : ControllerBase
         var danhGia = sp.DanhgiaSanphams
             .Where(dg => dg.TrangThai == 1).ToList();
 
+        var hotProductIds = await GetHotProductIdsAsync();
+
         var goiY = await _context.SanPhams
             .AsNoTracking()
             .Where(s => s.MaDanhMuc == sp.MaDanhMuc && s.MaSp != id && s.TrangThai == 1)
@@ -560,6 +562,9 @@ public class SanPhamController : ControllerBase
                 GiaDen = s.BienTheSanphams
                     .Where(bt => bt.TrangThai == 1)
                     .Max(bt => (decimal?)bt.GiaBan),
+                SoLuongTon = s.BienTheSanphams
+                    .Where(bt => bt.TrangThai == 1)
+                    .Sum(bt => bt.SoLuongTon ?? 0),
                 ThuongHieu = s.Thuonghieu == null ? null : new
                 {
                     s.Thuonghieu.MaTh,
@@ -567,6 +572,23 @@ public class SanPhamController : ControllerBase
                 },
             })
             .ToListAsync();
+
+        // IsHot tính bằng ID (hotProductIds là HashSet/List truy vấn sẵn), ghép ở phía
+        // client-side (in-memory) sau khi ToListAsync vì EF không dịch được .Contains()
+        // trên collection đã materialized thành SQL cho property anonymous type mới.
+        var goiYVoiHot = goiY.Select(s => new
+        {
+            s.MaSp,
+            s.TenSp,
+            s.MoTa,
+            s.HinhAnhDaiDien,
+            s.GiaTu,
+            s.GiaDen,
+            s.SoLuongTon,
+            IsHot = hotProductIds.Contains(s.MaSp),
+            s.ThuongHieu,
+        }).ToList();
+
 
         var result = new
         {
@@ -618,7 +640,7 @@ public class SanPhamController : ControllerBase
                 : (double?)null,
             SoLuongDanhGia = danhGia.Count,
 
-            SuggestedProducts = goiY,
+            SuggestedProducts = goiYVoiHot,
         };
 
         return result;
