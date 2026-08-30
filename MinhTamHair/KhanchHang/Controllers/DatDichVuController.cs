@@ -781,12 +781,29 @@ namespace MinhTamHair.KhanchHang.Controllers
                                 hoaDon.TrangThai = isCoc ? 1 : 2;
                                 thanhToan.TrangThai = 1;
 
-                                // (Đoạn code Gửi Email giữ nguyên của ông...)
-                                var emailGui = lichDat.MaKhNavigation?.Email;
-                                var tenGui = lichDat.MaKhNavigation?.HoTen ?? "Khách hàng";
+                                // Gửi email xác nhận kèm mã QR check-in
+                                var hddt = await _context.HoaDonDienTus.FirstOrDefaultAsync(h => h.MaHd == hoaDon.MaHd);
+                                var emailGui = !string.IsNullOrEmpty(lichDat.MaKhNavigation?.Email) ? lichDat.MaKhNavigation.Email : hddt?.EmailNhanHd;
+                                var tenGui = !string.IsNullOrEmpty(lichDat.MaKhNavigation?.HoTen) ? lichDat.MaKhNavigation.HoTen : (hddt?.TenNguoiMua ?? "Khách hàng");
                                 var ngayHenGui = lichDat.NgayHen.HasValue ? lichDat.NgayHen.Value.ToDateTime(TimeOnly.MinValue) : VnTimeHelper.Now();
                                 var tongTienGui = thanhToan.SoTien ?? 0;
-                                if (!string.IsNullOrEmpty(emailGui)) { /* Task Send QR Email */ }
+                                if (!string.IsNullOrEmpty(emailGui))
+                                {
+                                    _ = Task.Run(async () =>
+                                    {
+                                        try
+                                        {
+                                            using var scope = _scopeFactory.CreateScope();
+                                            var qrService = scope.ServiceProvider.GetRequiredService<IQrEmailService>();
+                                            await qrService.SendBookingEmailAsync(emailGui, tenGui, maLd, ngayHenGui, tongTienGui);
+                                            Console.WriteLine($"[EMAIL] Đã gửi mã QR thành công tới email: {emailGui} cho lịch {maLd}");
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            Console.WriteLine($"[EMAIL ERROR] Lỗi gửi email cho lịch {maLd}: {ex.Message}");
+                                        }
+                                    });
+                                }
                             }
                             else
                             {
@@ -824,8 +841,9 @@ namespace MinhTamHair.KhanchHang.Controllers
             try
             {
                 DateOnly ngayHen = DateOnly.Parse(request.NgayHen);
-                TimeOnly start = TimeOnly.Parse(request.GioBatDau);
-                TimeOnly end = start.AddMinutes(request.TongThoiGian);
+                bool hasSelectedTime = !string.IsNullOrEmpty(request.GioBatDau) && request.GioBatDau != "NONE" && request.GioBatDau != "null" && request.GioBatDau != "Chọn giờ";
+                TimeOnly start = hasSelectedTime ? TimeOnly.Parse(request.GioBatDau) : new TimeOnly(8, 0);
+                TimeOnly end = start.AddMinutes(request.TongThoiGian > 0 ? request.TongThoiGian : 30);
 
                 string reqMaKh = (request.MaKh ?? "").Trim();
                 string reqPhone = (request.Phone ?? "").Trim();
@@ -859,10 +877,16 @@ namespace MinhTamHair.KhanchHang.Controllers
                         .ToListAsync();
                 }
 
+                // 1. TẢI TẤT CẢ NHÂN VIÊN ĐANG HOẠT ĐỘNG CỦA SALON
+                var allStylists = await _context.Nhanviens
+                    .AsNoTracking()
+                    .Include(nv => nv.MaLoaiNvNavigation)
+                    .Where(nv => nv.TrangThai == 1)
+                    .ToListAsync();
+
+                // 2. TẢI DANH SÁCH CA LÀM TRONG NGÀY ĐƯỢC CHỌN
                 var lichLamViecs = await _context.Lichlamviecs
                     .AsNoTracking()
-                    .Include(l => l.MaNvNavigation)
-                    .ThenInclude(nv => nv.MaLoaiNvNavigation)
                     .Where(l => l.NgayLamViec == ngayHen &&
                                 l.TrangThai != 0 &&
                                 l.TrangThai != 4 &&
@@ -870,11 +894,10 @@ namespace MinhTamHair.KhanchHang.Controllers
                                 l.TrangThai != 7 &&
                                 l.CaLam != "Chưa xếp" &&
                                 l.CaLam != "Nghỉ phép" &&
-                                l.CaLam != "Nghỉ lễ" &&
-                                l.MaNvNavigation.TrangThai == 1)
+                                l.CaLam != "Nghỉ lễ")
                     .ToListAsync();
 
-                // CỰC KỲ GỌN: Chỉ check những lịch THÀNH CÔNG (1,2) hoặc ĐANG TREO (4). Bỏ qua 0 vì đó là Hủy.
+                // 3. CỰC KỲ GỌN: Chỉ check những lịch THÀNH CÔNG (1,2) hoặc ĐANG TREO (4). Bỏ qua 0 vì đó là Hủy.
                 var cacLichBan = await _context.ChitietLichdats
                     .AsNoTracking()
                     .Where(ct => ct.MaLdNavigation.NgayHen == ngayHen
@@ -893,44 +916,35 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                 var result = new List<object>();
 
-                foreach (var lich in lichLamViecs)
+                foreach (var nv in allStylists)
                 {
-                    var nv = lich.MaNvNavigation;
                     string nvId = (nv.MaNv ?? "").Trim();
+                    var lich = lichLamViecs.FirstOrDefault(l => (l.MaNv ?? "").Trim().Equals(nvId, StringComparison.OrdinalIgnoreCase));
+
                     bool isAvailable = true;
                     var lichTrinhChiTiet = new List<string>();
+                    string ca = (lich?.CaLam ?? "").Trim();
 
-                    bool dungCaLam = false;
-                    string ca = (lich.CaLam ?? "").Trim();
-                    string gioLamThucTe = ca;
-                    TimeOnly shiftStart = new TimeOnly(7, 0);
-                    TimeOnly shiftEnd = new TimeOnly(20, 0);
-
-                    if (ca.Contains("Ca sáng (7h-17h)") || ca.Contains("Ca ngày") || ca == "Ca sáng") { gioLamThucTe = "07:00 - 17:00"; shiftStart = new TimeOnly(7, 0); shiftEnd = new TimeOnly(17, 0); }
-                    else if (ca.Contains("Ca tối (13h-20h)") || ca == "Ca tối") { gioLamThucTe = "13:00 - 20:00"; shiftStart = new TimeOnly(13, 0); shiftEnd = new TimeOnly(20, 0); }
-                    else if (ca.Contains("Cả ngày") || ca.Contains("Full time")) { gioLamThucTe = "07:00 - 20:00"; shiftStart = new TimeOnly(7, 0); shiftEnd = new TimeOnly(20, 0); }
-                    else if (ca.Contains("Ca sáng (Part-time)")) { gioLamThucTe = "07:00 - 11:00"; shiftStart = new TimeOnly(7, 0); shiftEnd = new TimeOnly(11, 0); }
-                    else if (ca.Contains("Ca chiều (Part-time)")) { gioLamThucTe = "13:00 - 17:00"; shiftStart = new TimeOnly(13, 0); shiftEnd = new TimeOnly(17, 0); }
-                    else if (ca.Contains("Ca tối (Part-time)")) { gioLamThucTe = "16:00 - 20:00"; shiftStart = new TimeOnly(16, 0); shiftEnd = new TimeOnly(20, 0); }
-
-                    if (start >= shiftStart && end <= shiftEnd) dungCaLam = true;
-
-                    // Giấu đi lịch Pending số 4 nếu đó là của chính chủ (Để tránh báo bận ngu)
-                    var cacLichCuaTho = cacLichBan
-                        .Where(b => b.MaNv.Equals(nvId, StringComparison.OrdinalIgnoreCase)
-                                 && !((b.TrangThai == 1 || b.TrangThai == 2) && myUnpaidBookingIds.Contains(b.MaLd)))
-                        .OrderBy(b => b.GioBatDau)
-                        .ToList();
-
-                    if (!dungCaLam)
+                    if (lich != null)
                     {
-                        isAvailable = false;
-                        lichTrinhChiTiet.Add($"Trái ca (Làm {gioLamThucTe})");
-                    }
-                    else
-                    {
+                        string gioLamThucTe = ca;
+                        TimeOnly shiftStart = new TimeOnly(7, 0);
+                        TimeOnly shiftEnd = new TimeOnly(20, 0);
+
+                        if (ca.Contains("Ca sáng (7h-17h)") || ca.Contains("Ca ngày") || ca == "Ca sáng") { gioLamThucTe = "07:00 - 17:00"; shiftStart = new TimeOnly(7, 0); shiftEnd = new TimeOnly(17, 0); }
+                        else if (ca.Contains("Ca tối (13h-20h)") || ca == "Ca tối") { gioLamThucTe = "13:00 - 20:00"; shiftStart = new TimeOnly(13, 0); shiftEnd = new TimeOnly(20, 0); }
+                        else if (ca.Contains("Cả ngày") || ca.Contains("Full time")) { gioLamThucTe = "07:00 - 20:00"; shiftStart = new TimeOnly(7, 0); shiftEnd = new TimeOnly(20, 0); }
+                        else if (ca.Contains("Ca sáng (Part-time)")) { gioLamThucTe = "07:00 - 11:00"; shiftStart = new TimeOnly(7, 0); shiftEnd = new TimeOnly(11, 0); }
+                        else if (ca.Contains("Ca chiều (Part-time)")) { gioLamThucTe = "13:00 - 17:00"; shiftStart = new TimeOnly(13, 0); shiftEnd = new TimeOnly(17, 0); }
+                        else if (ca.Contains("Ca tối (Part-time)")) { gioLamThucTe = "16:00 - 20:00"; shiftStart = new TimeOnly(16, 0); shiftEnd = new TimeOnly(20, 0); }
+
+                        var cacLichCuaTho = cacLichBan
+                            .Where(b => b.MaNv.Equals(nvId, StringComparison.OrdinalIgnoreCase)
+                                     && !((b.TrangThai == 1 || b.TrangThai == 2) && myUnpaidBookingIds.Contains(b.MaLd)))
+                            .OrderBy(b => b.GioBatDau)
+                            .ToList();
+
                         TimeOnly currentTime = shiftStart;
-
                         foreach (var b in cacLichCuaTho)
                         {
                             if (b.GioBatDau.HasValue && b.GioKetThuc.HasValue)
@@ -954,12 +968,47 @@ namespace MinhTamHair.KhanchHang.Controllers
                             lichTrinhChiTiet.Add($"Lịch trống: {currentTime.ToString(@"HH\:mm")} - {shiftEnd.ToString(@"HH\:mm")}");
                         }
 
-                        bool isConflict = cacLichCuaTho.Any(b => b.GioBatDau < end && b.GioKetThuc > start);
-                        if (isConflict)
+                        if (hasSelectedTime)
                         {
-                            isAvailable = false;
+                            bool dungCaLam = (start >= shiftStart && end <= shiftEnd);
+                            if (!dungCaLam)
+                            {
+                                isAvailable = false;
+                                lichTrinhChiTiet.Insert(0, $"Trái ca (Làm {gioLamThucTe})");
+                            }
+                            else
+                            {
+                                bool isConflict = cacLichCuaTho.Any(b => b.GioBatDau < end && b.GioKetThuc > start);
+                                if (isConflict)
+                                {
+                                    isAvailable = false;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            // KHI CHƯA CHỌN GIỜ: Mặc định tất cả thợ có ca đều RẢNH / SẴN SÀNG!
+                            isAvailable = true;
                         }
                     }
+                    else
+                    {
+                        // Thợ không có ca làm cụ thể trong ngày này
+                        if (hasSelectedTime)
+                        {
+                            isAvailable = false;
+                            ca = "Nghỉ ca hôm nay";
+                            lichTrinhChiTiet.Add("Không có ca làm hôm nay");
+                        }
+                        else
+                        {
+                            // Khi chưa chọn giờ: Vẫn hiện sẵn sàng
+                            isAvailable = true;
+                            ca = "Lịch linh hoạt";
+                            lichTrinhChiTiet.Add("Ca làm linh hoạt");
+                        }
+                    }
+
                     var ratingVal = _context.DanhgiaDichvus.Where(dg => _context.HoaDons.Any(hd => dg.MaHd == hd.MaHd && _context.ChitietLichdats.Any(ct => ct.MaLd == hd.MaLd && ct.MaNv == nv.MaNv))).Average(dg => (double?)dg.SoSao);
                     bool isFav = favoriteStylistIds.Contains(nvId);
 
@@ -971,14 +1020,16 @@ namespace MinhTamHair.KhanchHang.Controllers
                         img = nv.HinhAnh ?? "/images/no-image.png",
                         rating = ratingVal != null ? Math.Round(ratingVal.Value, 1) : 5.0,
                         isAvailable = isAvailable,
+                        hasShift = lich != null,
                         lichTrinh = lichTrinhChiTiet,
-                        caLam = lich.CaLam,
+                        caLam = ca,
                         isFavorite = isFav
                     });
                 }
 
                 var finalResult = result
                     .OrderByDescending(r => (bool)((dynamic)r).isAvailable)
+                    .ThenByDescending(r => (bool)((dynamic)r).hasShift)
                     .ThenByDescending(r => (bool)((dynamic)r).isFavorite)
                     .ToList();
 
@@ -986,8 +1037,116 @@ namespace MinhTamHair.KhanchHang.Controllers
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { message = "Lỗi Backend: " + ex.Message });
+                return BadRequest("Lỗi kiểm tra thợ: " + ex.Message);
             }
         }
     }
+
+        [HttpGet("get-receipt")]
+        public async Task<IActionResult> GetReceipt(
+            [FromQuery] string? maLd,
+            [FromQuery] string? maHd,
+            [FromQuery] string? vnp_ResponseCode = null,
+            [FromQuery] string? resultCode = null,
+            [FromQuery] string? vnp_TxnRef = null,
+            [FromQuery] string? orderId = null)
+        {
+            string rawKey = !string.IsNullOrEmpty(vnp_TxnRef) ? vnp_TxnRef : (!string.IsNullOrEmpty(orderId) ? orderId : (!string.IsNullOrEmpty(maLd) ? maLd : maHd ?? ""));
+            string realId = rawKey.Split('_')[0].Trim();
+
+            if (string.IsNullOrEmpty(realId))
+                return BadRequest(new { success = false, message = "Thiếu mã lịch đặt / mã hóa đơn." });
+
+            try
+            {
+                var hoaDon = await _context.HoaDons
+                    .Include(h => h.Thanhtoans)
+                    .FirstOrDefaultAsync(h => h.MaLd == realId || h.MaHd == realId);
+
+                if (hoaDon == null)
+                    return NotFound(new { success = false, message = "Không tìm thấy hóa đơn." });
+
+                var lichDat = await _context.Lichdats
+                    .Include(l => l.MaKhNavigation)
+                    .Include(l => l.MaNvNavigation)
+                    .FirstOrDefaultAsync(l => l.MaLd == hoaDon.MaLd);
+
+                bool hasPaymentStatus = !string.IsNullOrEmpty(vnp_ResponseCode) || !string.IsNullOrEmpty(resultCode);
+                bool isPaymentSuccess = (vnp_ResponseCode == "00") || (resultCode == "0");
+                var thanhToan = hoaDon.Thanhtoans.FirstOrDefault();
+
+                if (hasPaymentStatus && hoaDon.TrangThai == 0)
+                {
+                    if (isPaymentSuccess)
+                    {
+                        bool isCoc = thanhToan?.PhuongThuc == "Coc 10%";
+                        if (lichDat != null) lichDat.TrangThai = isCoc ? 1 : 2;
+                        hoaDon.TrangThai = isCoc ? 1 : 2;
+                        if (thanhToan != null) thanhToan.TrangThai = 1;
+                        await _context.SaveChangesAsync();
+                    }
+                }
+
+                var khachHangInfo = lichDat?.MaKhNavigation ?? await _context.Khachhangs.FindAsync(hoaDon.MaKh);
+
+                var chitietDvs = await _context.ChitietLichdats
+                    .Where(c => c.MaLd == hoaDon.MaLd)
+                    .ToListAsync();
+
+                var servicesList = new List<object>();
+                foreach (var ct in chitietDvs)
+                {
+                    if (ct.MaDv != null && ct.MaDv.StartsWith("CB"))
+                    {
+                        var cb = await _context.Combos.FindAsync(ct.MaDv);
+                        servicesList.Add(new
+                        {
+                            id = ct.MaDv,
+                            name = cb?.TenCombo ?? "Combo làm tóc",
+                            price = ct.DonGia,
+                            stylist = lichDat?.MaNvNavigation?.HoTen ?? "Stylist LG Hair"
+                        });
+                    }
+                    else
+                    {
+                        var dv = await _context.Dichvus.FindAsync(ct.MaDv);
+                        servicesList.Add(new
+                        {
+                            id = ct.MaDv,
+                            name = dv?.TenDv ?? "Dịch vụ tóc",
+                            price = ct.DonGia,
+                            stylist = lichDat?.MaNvNavigation?.HoTen ?? "Stylist LG Hair"
+                        });
+                    }
+                }
+
+                var receipt = new
+                {
+                    maHd = hoaDon.MaHd,
+                    maLd = hoaDon.MaLd,
+                    ngayTao = hoaDon.NgayTao?.ToString("dd/MM/yyyy HH:mm"),
+                    khachHang = khachHangInfo?.HoTen ?? "Khách hàng",
+                    sdt = khachHangInfo?.Sdt ?? "",
+                    tongTien = hoaDon.TongTien,
+                    thanhTien = hoaDon.ThanhTien,
+                    tienDaTra = hoaDon.TienDaTra,
+                    phuongThucThanhToan = thanhToan?.PhuongThuc ?? (hoaDon.TienDaTra > 0 ? "VNPay" : "Tại quầy"),
+                    trangThai = (hoaDon.TrangThai == 1 || hoaDon.TrangThai == 2) ? "Đã thanh toán" : "Chờ thanh toán",
+                    booking = lichDat != null ? new
+                    {
+                        gioBatDau = lichDat.GioBatDau?.ToString(@"hh:mm") ?? "",
+                        ngayHen = lichDat.NgayHen.ToString("dd/MM/yyyy"),
+                        stylist = lichDat.MaNvNavigation?.HoTen ?? "Stylist LG Hair",
+                        services = servicesList
+                    } : null
+                };
+
+                return Ok(new { success = true, data = receipt });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { success = false, message = ex.Message });
+            }
+        }
+
 }

@@ -554,7 +554,97 @@ namespace MinhTamHair.KhanchHang.Controllers
         }
 
     }
+
+        [HttpGet("get-receipt")]
+        public async Task<IActionResult> GetReceipt(
+            [FromQuery] string orderId,
+            [FromQuery] string? vnp_ResponseCode = null,
+            [FromQuery] string? resultCode = null,
+            [FromQuery] string? vnp_TxnRef = null)
+        {
+            string rawKey = !string.IsNullOrEmpty(vnp_TxnRef) ? vnp_TxnRef : orderId;
+            string realMaHd = rawKey?.Split('_')[0] ?? "";
+
+            if (string.IsNullOrEmpty(realMaHd))
+                return BadRequest(new { success = false, message = "Thiếu mã đơn hàng." });
+
+            try
+            {
+                var hoaDon = await _context.HoaDons
+                    .Include(h => h.ThongtinGiaohangs)
+                    .Include(h => h.Thanhtoans)
+                    .FirstOrDefaultAsync(h => h.MaHd == realMaHd);
+
+                if (hoaDon == null)
+                    return NotFound(new { success = false, message = "Không tìm thấy đơn hàng." });
+
+                bool isPaymentSuccess = (vnp_ResponseCode == "00") || (resultCode == "0");
+                var thanhToan = hoaDon.Thanhtoans.FirstOrDefault();
+                if (isPaymentSuccess && thanhToan != null && thanhToan.TrangThai != 1)
+                {
+                    thanhToan.TrangThai = 1;
+                    hoaDon.TrangThai = (hoaDon.TienDaTra ?? 0) >= (hoaDon.ThanhTien ?? 0) ? 2 : 1;
+                    await _context.SaveChangesAsync();
+                }
+
+                var khachHangInfo = await _context.Khachhangs.FindAsync(hoaDon.MaKh);
+                var delivery = hoaDon.ThongtinGiaohangs.FirstOrDefault();
+
+                var chitietSps = await _context.ChitietHoadonSps
+                    .Where(c => c.MaHd == realMaHd)
+                    .ToListAsync();
+
+                var productsList = new List<object>();
+                foreach (var ct in chitietSps)
+                {
+                    var bt = await _context.BienTheSanphams.FindAsync(ct.MaBienThe);
+                    var sp = bt != null ? await _context.SanPhams.FindAsync(bt.MaSanPham) : null;
+                    productsList.Add(new 
+                    { 
+                        id = ct.MaBienThe,
+                        name = sp?.TenSp ?? "Sản phẩm", 
+                        variant = bt?.TenBienThe ?? "Mặc định",
+                        qty = ct.SoLuong, 
+                        price = ct.DonGiaLucBan, 
+                        total = ct.ThanhTien,
+                        img = sp?.HinhAnh
+                    });
+                }
+
+                var receipt = new
+                {
+                    maHd = hoaDon.MaHd,
+                    ngayTao = hoaDon.NgayTao?.ToString("dd/MM/yyyy HH:mm"),
+                    khachHang = khachHangInfo?.HoTen ?? delivery?.TenNguoiNhan ?? "Khách hàng",
+                    sdt = khachHangInfo?.Sdt ?? delivery?.SdtNhan ?? "",
+                    tongTien = hoaDon.TongTien,
+                    thanhTien = hoaDon.ThanhTien,
+                    tienDaTra = hoaDon.TienDaTra,
+                    phuongThucThanhToan = thanhToan?.PhuongThuc ?? (hoaDon.TienDaTra > 0 ? "VNPay" : "COD"),
+                    trangThai = (hoaDon.TrangThai == 1 || hoaDon.TrangThai == 2) ? "Đã thanh toán" : "Chờ thanh toán",
+                    warehouse = new 
+                    {
+                        name = "Tổng Kho Salon LG Hair",
+                        address = "Số 123 Nguyễn Trãi, Phường Bến Thành, Quận 1, TP. Hồ Chí Minh",
+                        phone = "0987.654.321"
+                    },
+                    products = productsList,
+                    delivery = delivery != null ? new 
+                    { 
+                        nguoiNhan = delivery.TenNguoiNhan, 
+                        sdt = delivery.SdtNhan, 
+                        diaChi = delivery.DiaChiNhan, 
+                        phiShip = delivery.PhiShip,
+                        ghiChu = delivery.GhiChu
+                    } : null
+                };
+
+                return Ok(new { success = true, data = receipt });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { success = false, message = ex.Message });
+            }
+        }
+
 }
-
-
-
