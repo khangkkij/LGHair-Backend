@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -553,8 +553,6 @@ namespace MinhTamHair.KhanchHang.Controllers
             }
         }
 
-    }
-
         [HttpGet("get-receipt")]
         public async Task<IActionResult> GetReceipt(
             [FromQuery] string orderId,
@@ -598,16 +596,16 @@ namespace MinhTamHair.KhanchHang.Controllers
                 foreach (var ct in chitietSps)
                 {
                     var bt = await _context.BienTheSanphams.FindAsync(ct.MaBienThe);
-                    var sp = bt != null ? await _context.SanPhams.FindAsync(bt.MaSanPham) : null;
-                    productsList.Add(new 
-                    { 
+                    var spItem = bt != null ? await _context.SanPhams.FindAsync(bt.MaSanPham) : null;
+                    productsList.Add(new
+                    {
                         id = ct.MaBienThe,
-                        name = sp?.TenSp ?? "Sản phẩm", 
+                        name = spItem?.TenSp ?? "Sản phẩm",
                         variant = bt?.TenBienThe ?? "Mặc định",
-                        qty = ct.SoLuong, 
-                        price = ct.DonGiaLucBan, 
+                        qty = ct.SoLuong,
+                        price = ct.DonGiaLucBan,
                         total = ct.ThanhTien,
-                        img = sp?.HinhAnh
+                        img = spItem?.HinhAnhDaiDien
                     });
                 }
 
@@ -622,20 +620,19 @@ namespace MinhTamHair.KhanchHang.Controllers
                     tienDaTra = hoaDon.TienDaTra,
                     phuongThucThanhToan = thanhToan?.PhuongThuc ?? (hoaDon.TienDaTra > 0 ? "VNPay" : "COD"),
                     trangThai = (hoaDon.TrangThai == 1 || hoaDon.TrangThai == 2) ? "Đã thanh toán" : "Chờ thanh toán",
-                    warehouse = new 
+                    warehouse = new
                     {
                         name = "Tổng Kho Salon LG Hair",
                         address = "Số 123 Nguyễn Trãi, Phường Bến Thành, Quận 1, TP. Hồ Chí Minh",
                         phone = "0987.654.321"
                     },
                     products = productsList,
-                    delivery = delivery != null ? new 
-                    { 
-                        nguoiNhan = delivery.TenNguoiNhan, 
-                        sdt = delivery.SdtNhan, 
-                        diaChi = delivery.DiaChiNhan, 
-                        phiShip = delivery.PhiShip,
-                        ghiChu = delivery.GhiChu
+                    delivery = delivery != null ? new
+                    {
+                        nguoiNhan = delivery.TenNguoiNhan,
+                        sdt = delivery.SdtNhan,
+                        diaChi = delivery.DiaChiNhan,
+                        phiShip = delivery.PhiShip
                     } : null
                 };
 
@@ -646,5 +643,5 @@ namespace MinhTamHair.KhanchHang.Controllers
                 return BadRequest(new { success = false, message = ex.Message });
             }
         }
-
+    }
 }

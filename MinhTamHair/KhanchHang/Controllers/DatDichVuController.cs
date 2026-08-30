@@ -1040,7 +1040,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                 return BadRequest("Lỗi kiểm tra thợ: " + ex.Message);
             }
         }
-    }
 
         [HttpGet("get-receipt")]
         public async Task<IActionResult> GetReceipt(
@@ -1068,7 +1067,6 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                 var lichDat = await _context.Lichdats
                     .Include(l => l.MaKhNavigation)
-                    .Include(l => l.MaNvNavigation)
                     .FirstOrDefaultAsync(l => l.MaLd == hoaDon.MaLd);
 
                 bool hasPaymentStatus = !string.IsNullOrEmpty(vnp_ResponseCode) || !string.IsNullOrEmpty(resultCode);
@@ -1090,12 +1088,15 @@ namespace MinhTamHair.KhanchHang.Controllers
                 var khachHangInfo = lichDat?.MaKhNavigation ?? await _context.Khachhangs.FindAsync(hoaDon.MaKh);
 
                 var chitietDvs = await _context.ChitietLichdats
+                    .Include(c => c.MaNvNavigation)
                     .Where(c => c.MaLd == hoaDon.MaLd)
                     .ToListAsync();
 
                 var servicesList = new List<object>();
+                string defaultStylist = chitietDvs.FirstOrDefault()?.MaNvNavigation?.HoTenNv ?? "Stylist LG Hair";
                 foreach (var ct in chitietDvs)
                 {
+                    string stylistName = ct.MaNvNavigation?.HoTenNv ?? defaultStylist;
                     if (ct.MaDv != null && ct.MaDv.StartsWith("CB"))
                     {
                         var cb = await _context.Combos.FindAsync(ct.MaDv);
@@ -1103,8 +1104,8 @@ namespace MinhTamHair.KhanchHang.Controllers
                         {
                             id = ct.MaDv,
                             name = cb?.TenCombo ?? "Combo làm tóc",
-                            price = ct.DonGia,
-                            stylist = lichDat?.MaNvNavigation?.HoTen ?? "Stylist LG Hair"
+                            price = ct.GiaLucDat ?? 0,
+                            stylist = stylistName
                         });
                     }
                     else
@@ -1114,8 +1115,8 @@ namespace MinhTamHair.KhanchHang.Controllers
                         {
                             id = ct.MaDv,
                             name = dv?.TenDv ?? "Dịch vụ tóc",
-                            price = ct.DonGia,
-                            stylist = lichDat?.MaNvNavigation?.HoTen ?? "Stylist LG Hair"
+                            price = ct.GiaLucDat ?? 0,
+                            stylist = stylistName
                         });
                     }
                 }
@@ -1134,9 +1135,9 @@ namespace MinhTamHair.KhanchHang.Controllers
                     trangThai = (hoaDon.TrangThai == 1 || hoaDon.TrangThai == 2) ? "Đã thanh toán" : "Chờ thanh toán",
                     booking = lichDat != null ? new
                     {
-                        gioBatDau = lichDat.GioBatDau?.ToString(@"hh:mm") ?? "",
-                        ngayHen = lichDat.NgayHen.ToString("dd/MM/yyyy"),
-                        stylist = lichDat.MaNvNavigation?.HoTen ?? "Stylist LG Hair",
+                        gioBatDau = lichDat.GioBatDau?.ToString(@"hh\:mm") ?? "",
+                        ngayHen = lichDat.NgayHen.HasValue ? lichDat.NgayHen.Value.ToString("dd/MM/yyyy") : "",
+                        stylist = defaultStylist,
                         services = servicesList
                     } : null
                 };
@@ -1148,5 +1149,5 @@ namespace MinhTamHair.KhanchHang.Controllers
                 return BadRequest(new { success = false, message = ex.Message });
             }
         }
-
+    }
 }
