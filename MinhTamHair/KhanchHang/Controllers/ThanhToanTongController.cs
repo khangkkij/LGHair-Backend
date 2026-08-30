@@ -571,7 +571,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     string phuongThucSp = coSanPham ? (req.ProductPaymentMethod ?? "COD") : "COD";
 
                     bool dvLaOnline = coDichVu && (string.Equals(phuongThucDv, "vnpay", StringComparison.OrdinalIgnoreCase) || string.Equals(phuongThucDv, "momo", StringComparison.OrdinalIgnoreCase));
-                    bool spLaOnline = coSanPham && (string.Equals(phuongThucSp, "vnpay", StringComparison.OrdinalIgnoreCase) || string.Equals(phuongThucSp, "momo", StringComparison.OrdinalIgnoreCase));
+                    bool spLaOnline = coSanPham && string.Equals(req.ReceiveType, "home", StringComparison.OrdinalIgnoreCase) && (string.Equals(phuongThucSp, "vnpay", StringComparison.OrdinalIgnoreCase) || string.Equals(phuongThucSp, "momo", StringComparison.OrdinalIgnoreCase));
                     bool isOnlinePayment = dvLaOnline || spLaOnline;
 
                     string phuongThuc = dvLaOnline ? phuongThucDv : (spLaOnline ? phuongThucSp : (coDichVu ? phuongThucDv : phuongThucSp));
@@ -784,15 +784,16 @@ namespace MinhTamHair.KhanchHang.Controllers
                     }
 
                     decimal backendPaidAmount = 0;
-                    if (coDichVu)
+                    if (coDichVu && dvLaOnline)
                     {
-                        if (req.PaymentMode == "10") backendPaidAmount += serviceAfterVoucher * 0.1m;
-                        else if (req.PaymentMode == "100") backendPaidAmount += serviceAfterVoucher;
+                        if (req.PaymentMode == "10") backendPaidAmount += Math.Round(serviceSubTotal * 0.1m, 0);
+                        else backendPaidAmount += serviceAfterVoucher;
                     }
-                    if (spLaOnline)
+                    if (coSanPham && spLaOnline)
                     {
                         backendPaidAmount += productAfterVoucher + shippingFee;
                     }
+                    backendPaidAmount = Math.Min(backendGrandTotal, backendPaidAmount);
 
                     var hoaDon = new HoaDon
                     {
@@ -1273,7 +1274,14 @@ namespace MinhTamHair.KhanchHang.Controllers
                 {
                     var bt = await _context.BienTheSanphams.FindAsync(ct.MaBienThe);
                     var sp = bt != null ? await _context.SanPhams.FindAsync(bt.MaSanPham) : null;
-                    productsList.Add(new { name = $"{sp?.TenSp} - {bt?.TenBienThe}", qty = ct.SoLuong, price = ct.DonGiaLucBan, total = ct.ThanhTien });
+                    productsList.Add(new { 
+                        name = sp?.TenSp ?? "Sản phẩm", 
+                        variant = bt?.TenBienThe ?? "Mặc định",
+                        qty = ct.SoLuong, 
+                        price = ct.DonGiaLucBan, 
+                        total = ct.ThanhTien,
+                        img = sp?.HinhAnh
+                    });
                 }
 
                 var receipt = new
@@ -1288,7 +1296,18 @@ namespace MinhTamHair.KhanchHang.Controllers
                     trangThai = (hoaDon.TrangThai == 1 || hoaDon.TrangThai == 2) ? "Đã thanh toán" : "Chưa thanh toán",
                     booking = bookingInfo,
                     products = productsList,
-                    delivery = delivery != null ? new { nguoiNhan = delivery.TenNguoiNhan, sdt = delivery.SdtNhan, diaChi = delivery.DiaChiNhan, phiShip = delivery.PhiShip } : null
+                    warehouse = new {
+                        name = "Tổng Kho Salon LG Hair",
+                        address = "Số 123 Nguyễn Trãi, Phường Bến Thành, Quận 1, TP. Hồ Chí Minh",
+                        phone = "0987.654.321"
+                    },
+                    delivery = delivery != null ? new { 
+                        nguoiNhan = delivery.TenNguoiNhan, 
+                        sdt = delivery.SdtNhan, 
+                        diaChi = delivery.DiaChiNhan, 
+                        phiShip = delivery.PhiShip,
+                        ghiChu = delivery.GhiChu
+                    } : null
                 };
 
                 return Ok(new { success = true, data = receipt });
