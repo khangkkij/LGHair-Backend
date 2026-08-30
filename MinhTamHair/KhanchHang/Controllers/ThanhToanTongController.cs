@@ -1280,7 +1280,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         qty = ct.SoLuong, 
                         price = ct.DonGiaLucBan, 
                         total = ct.ThanhTien,
-                        img = sp?.HinhAnh
+                        img = sp?.HinhAnhDaiDien
                     });
                 }
 
@@ -1306,7 +1306,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         sdt = delivery.SdtNhan, 
                         diaChi = delivery.DiaChiNhan, 
                         phiShip = delivery.PhiShip,
-                        ghiChu = delivery.GhiChu
+                        
                     } : null
                 };
 
@@ -1391,6 +1391,7 @@ namespace MinhTamHair.KhanchHang.Controllers
         public string GioBatDau { get; set; }
         public int TongThoiGian { get; set; }
         public string MaKh { get; set; }
-        public string? Phone { get; set; }
+        public string? Phone { get; set;
     }
+}
 }
