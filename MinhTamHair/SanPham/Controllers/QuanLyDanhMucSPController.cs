@@ -1,4 +1,4 @@
-﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
@@ -30,7 +30,7 @@ public class QuanLyDanhMucSPController : ControllerBase
     public async Task<IActionResult> GetAll([FromQuery] string? keyword, [FromQuery] int? trangThai)
     {
         var query = _context.DanhMucSPs
-            .Include(d => d.SanPhams)
+            .AsNoTracking()
             .Where(d => d.TrangThai != TRANG_THAI_BANNER) // loại bỏ các row banner khỏi danh sách danh mục
             .AsQueryable();
 
@@ -94,7 +94,7 @@ public class QuanLyDanhMucSPController : ControllerBase
     public async Task<IActionResult> GetById(string id)
     {
         var d = await _context.DanhMucSPs
-            .Include(x => x.SanPhams)
+            .AsNoTracking()
             .FirstOrDefaultAsync(x => x.MaDMSP == id && x.TrangThai != TRANG_THAI_BANNER);
 
         if (d == null) return NotFound(new { message = "Không tìm thấy danh mục." });

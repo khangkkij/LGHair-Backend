@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using MinhTamHair.Models;
 using System;
@@ -42,12 +43,14 @@ namespace MinhTamHair.Controllers
         private readonly MinhTamHairContext _context;
         private readonly IUploadIMG _uploadImg;
         private readonly IConfiguration _configuration;
+        private readonly Microsoft.Extensions.Caching.Memory.IMemoryCache _cache;
 
-        public NhanVienController(MinhTamHairContext context, IUploadIMG uploadImg, IConfiguration configuration)
+        public NhanVienController(MinhTamHairContext context, IUploadIMG uploadImg, IConfiguration configuration, Microsoft.Extensions.Caching.Memory.IMemoryCache cache)
         {
             _context = context;
             _uploadImg = uploadImg;
             _configuration = configuration;
+            _cache = cache;
         }
 
         [HttpGet("roles")]
@@ -233,7 +236,26 @@ namespace MinhTamHair.Controllers
                 if (dto.NgayVaoLam.HasValue) nv.NgayVaoLam = DateOnly.FromDateTime(dto.NgayVaoLam.Value);
                 else nv.NgayVaoLam = null;
 
-                nv.TrangThai = dto.TrangThai ?? 1;
+                if (dto.TrangThai.HasValue)
+                {
+                    nv.TrangThai = dto.TrangThai.Value;
+                    if (dto.TrangThai.Value != 1)
+                    {
+                        var oldTokens = await _context.Refreshtokens.Where(rt => rt.UserId == nv.MaNv).ToListAsync();
+                        if (oldTokens.Any())
+                        {
+                            _context.Refreshtokens.RemoveRange(oldTokens);
+                        }
+                        var currentUnixTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                        _cache.Set($"UserLocked_{nv.MaNv}", true, TimeSpan.FromDays(7));
+                        _cache.Set($"UserRevokedAt_{nv.MaNv}", currentUnixTime, TimeSpan.FromDays(7));
+                    }
+                    else
+                    {
+                        _cache.Remove($"UserLocked_{nv.MaNv}");
+                        _cache.Remove($"UserRevokedAt_{nv.MaNv}");
+                    }
+                }
                 nv.TenDangNhap = dto.TenDangNhap;
 
                 if (!string.IsNullOrEmpty(dto.MatKhau))

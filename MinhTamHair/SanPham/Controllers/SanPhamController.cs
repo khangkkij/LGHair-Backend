@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using MinhTamHair.Models;
@@ -172,56 +172,25 @@ public class SanPhamController : ControllerBase
         // phẩm thuộc TRANG ĐANG XEM mới được kéo đầy đủ biến thể/đánh giá về, các trang
         // chưa bấm tới hoàn toàn không được truy vấn.
         var paged = await query
-            // Hot lên đầu trước tiên; trong từng nhóm (Hot / không-Hot) sản phẩm tạo SAU
-            // vẫn hiển thị TRƯỚC như cũ (mã sản phẩm tăng dần theo thứ tự tạo, nên sắp
-            // giảm dần theo mã là đúng).
             .OrderByDescending(sp => hotProductIds.Contains(sp.MaSp))
             .ThenByDescending(sp => sp.MaSp)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
-            .Include(sp => sp.MaDanhMucTheNavigation)
-            .Include(sp => sp.Thuonghieu)
-            .Include(sp => sp.BienTheSanphams)
-            .Include(sp => sp.DanhgiaSanphams)
-            .Include(sp => sp.Hinhanhsps)
-            .AsSplitQuery()
-            .ToListAsync();
-
-        var result = paged.Select(sp =>
-        {
-            var btHoatDong = sp.BienTheSanphams
-                .Where(bt => bt.TrangThai == 1).ToList();
-
-            // Giá thấp nhất & cao nhất từ biến thể đang hoạt động
-            var giaMin = btHoatDong.Any() ? btHoatDong.Min(bt => bt.GiaBan) : (decimal?)null;
-            var giaMax = btHoatDong.Any() ? btHoatDong.Max(bt => bt.GiaBan) : (decimal?)null;
-            var tonKho = btHoatDong.Sum(bt => bt.SoLuongTon ?? 0);
-
-            var danhGia = sp.DanhgiaSanphams.Where(dg => dg.TrangThai == 1).ToList();
-            var soSao = danhGia.Any()
-                ? Math.Round(danhGia.Average(dg => dg.SoSao ?? 0), 1)
-                : (double?)null;
-
-            return new
+            .Select(sp => new
             {
                 sp.MaSp,
                 sp.TenSp,
                 sp.MoTa,
                 sp.HinhAnhDaiDien,
-                // Vài ảnh phụ đầu tiên (ngoài ảnh đại diện) để hiển thị lướt trái/phải
-                // ngay trên card danh sách — không lấy hết gallery cho nhẹ payload.
-                HinhAnhs = sp.Hinhanhsps
-                    .OrderBy(h => h.MaHa)
-                    .Take(5)
-                    .Select(h => h.DuongDan)
-                    .ToList(),
-                GiaTu = giaMin,
-                GiaDen = giaMax,
-                SoLuongTon = tonKho,
-                SoBienThe = btHoatDong.Count,
-                SoSao = soSao,
-                SoLuongDanhGia = danhGia.Count,
-                IsHot = hotProductIds.Contains(sp.MaSp),
+                HinhAnhs = sp.Hinhanhsps.OrderBy(h => h.MaHa).Take(5).Select(h => h.DuongDan).ToList(),
+                GiaTu = sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => (decimal?)bt.GiaBan),
+                GiaDen = sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Max(bt => (decimal?)bt.GiaBan),
+                SoLuongTon = sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Sum(bt => bt.SoLuongTon ?? 0),
+                SoBienThe = sp.BienTheSanphams.Count(bt => bt.TrangThai == 1),
+                SoSao = sp.DanhgiaSanphams.Where(dg => dg.TrangThai == 1).Any()
+                    ? Math.Round(sp.DanhgiaSanphams.Where(dg => dg.TrangThai == 1).Average(dg => (double)(dg.SoSao ?? 0)), 1)
+                    : (double?)null,
+                SoLuongDanhGia = sp.DanhgiaSanphams.Count(dg => dg.TrangThai == 1),
                 DanhMuc = sp.MaDanhMucTheNavigation == null ? null : new
                 {
                     sp.MaDanhMucTheNavigation.MaDMSP,
@@ -232,7 +201,25 @@ public class SanPhamController : ControllerBase
                     sp.Thuonghieu.MaTh,
                     sp.Thuonghieu.TenThuongHieu,
                 },
-            };
+            })
+            .ToListAsync();
+
+        var result = paged.Select(sp => new
+        {
+            sp.MaSp,
+            sp.TenSp,
+            sp.MoTa,
+            sp.HinhAnhDaiDien,
+            sp.HinhAnhs,
+            sp.GiaTu,
+            sp.GiaDen,
+            sp.SoLuongTon,
+            sp.SoBienThe,
+            sp.SoSao,
+            sp.SoLuongDanhGia,
+            IsHot = hotProductIds.Contains(sp.MaSp),
+            sp.DanhMuc,
+            sp.ThuongHieu,
         }).ToList();
 
         var response = new { data = result, totalPages, total };
@@ -310,11 +297,6 @@ public class SanPhamController : ControllerBase
                 })
                 .ToList();
 
-            // Số thứ tự hiển thị của danh mục được mã hóa trong TÊN của banner — MỌI banner
-            // cùng 1 danh mục đều mang CÙNG MỘT TÊN (xem UpdateThuTu/AddBanner bên
-            // QuanLyDanhMucSPController) — nên lấy banner BẤT KỲ (FirstOrDefault trong danh
-            // sách "banners" đã lọc theo đúng danh mục này ở trên) là đủ để đọc đúng STT; xóa
-            // banner nào cũng không làm mất STT miễn danh mục còn ít nhất 1 banner.
             var bannerBatKy = banners.FirstOrDefault();
 
             return new
@@ -326,12 +308,6 @@ public class SanPhamController : ControllerBase
             };
         }).ToList();
 
-        // 🔥 GHÉP DANH MỤC KHÔNG-BANNER VÀO DANH MỤC-BANNER GẦN NHẤT
-        // Danh mục nào không có banner riêng thì sẽ "ở ké" sản phẩm chung khối với 1 danh
-        // mục có banner, thay vì đứng thành 1 khối trơ trọi không banner giữa trang.
-        // Ưu tiên ghép vào danh mục-banner gần nhất đứng NGAY TRƯỚC nó (theo thứ tự alphabet
-        // đang OrderBy ở trên); nếu nó nằm trước mọi danh mục-banner (chưa có ai phía trước)
-        // thì tạm ghép vào danh mục-banner đầu tiên tìm thấy.
         var coBanner = danhMucVoiBanner.Where(dm => dm.Banners.Count > 0).ToList();
         var nhomGhep = coBanner.ToDictionary(dm => dm.MaDMSP, dm => new List<string> { dm.MaDMSP });
 
@@ -350,27 +326,18 @@ public class SanPhamController : ControllerBase
             }
         }
 
-        // 🔥 SẮP XẾP THEO SỐ THỨ TỰ HIỂN THỊ
-        // Danh mục có banner: sắp theo ThuTu đọc từ tên banner đầu tiên (chưa đặt số thì
-        // coi như "chưa set", xếp sau các danh mục đã có số, giữ thứ tự alphabet cũ giữa
-        // các danh mục cùng chưa-set hoặc cùng số). Danh mục không-banner luôn xếp sau
-        // toàn bộ danh mục có banner (chúng chỉ "ở ké" hiển thị, không đứng khối riêng).
         var coBannerDaSapXep = coBanner
             .OrderBy(dm => dm.ThuTu.HasValue ? 0 : 1)
             .ThenBy(dm => dm.ThuTu ?? int.MaxValue)
             .ThenBy(dm => dm.TenDanhMuc)
             .ToList();
 
-        // Nếu không có danh mục nào có banner (hiếm khi xảy ra) thì đành giữ nguyên,
-        // mỗi danh mục vẫn là 1 khối riêng như trước (không có gì để ghép vào cả).
         var result = coBanner.Count > 0
             ? coBannerDaSapXep.Select(dm => new
             {
                 maDanhMuc = dm.MaDMSP,
                 tenDanhMuc = dm.TenDanhMuc,
                 banners = dm.Banners,
-                // Toàn bộ mã danh mục đang "ở ké" chung khối này (luôn gồm chính nó) — FE
-                // dùng để gộp sản phẩm của các danh mục không-banner vào chung khối này.
                 maDanhMucGop = nhomGhep[dm.MaDMSP],
             }).ToList()
             : danhMucVoiBanner.Select(dm => new
@@ -397,9 +364,6 @@ public class SanPhamController : ControllerBase
         if (string.IsNullOrWhiteSpace(maDanhMuc))
             return BadRequest(new { message = "Thiếu mã danh mục." });
 
-        // 🔥 Hỗ trợ ghép sản phẩm nhiều danh mục vào chung 1 khối feed (danh mục không có
-        // banner "ở ké" sản phẩm vào khối của danh mục có banner) — maDanhMuc có thể là
-        // 1 mã đơn hoặc nhiều mã cách nhau dấu phẩy, ví dụ "DM01,DM02,DM03".
         var maDanhMucList = maDanhMuc
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Distinct()
@@ -427,49 +391,28 @@ public class SanPhamController : ControllerBase
         var total = await query.CountAsync();
         var totalPages = (int)Math.Ceiling(total / (double)pageSize);
 
-        // Lấy TRƯỚC khi Skip/Take vì cần đưa vào ORDER BY để phân trang theo đúng thứ tự
-        // Hot-lên-đầu.
         var hotProductIds = await GetHotProductIdsAsync();
 
         var paged = await query
-            // Hot lên đầu trước tiên; trong từng nhóm (Hot / không-Hot) sản phẩm tạo SAU
-            // vẫn hiển thị TRƯỚC như cũ — đồng bộ với BuildFilterResultAsync.
             .OrderByDescending(sp => hotProductIds.Contains(sp.MaSp))
             .ThenByDescending(sp => sp.MaSp)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
-            .Include(sp => sp.MaDanhMucTheNavigation)
-            .Include(sp => sp.Thuonghieu)
-            .Include(sp => sp.BienTheSanphams)
-            .Include(sp => sp.DanhgiaSanphams)
-            .Include(sp => sp.Hinhanhsps)
-            .AsSplitQuery()
-            .ToListAsync();
-
-        var result = paged.Select(sp =>
-        {
-            var btHoatDong = sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).ToList();
-            var giaMin = btHoatDong.Any() ? btHoatDong.Min(bt => bt.GiaBan) : (decimal?)null;
-            var giaMax = btHoatDong.Any() ? btHoatDong.Max(bt => bt.GiaBan) : (decimal?)null;
-            var tonKho = btHoatDong.Sum(bt => bt.SoLuongTon ?? 0);
-
-            var danhGia = sp.DanhgiaSanphams.Where(dg => dg.TrangThai == 1).ToList();
-            var soSao = danhGia.Any() ? Math.Round(danhGia.Average(dg => dg.SoSao ?? 0), 1) : (double?)null;
-
-            return new
+            .Select(sp => new
             {
                 sp.MaSp,
                 sp.TenSp,
                 sp.MoTa,
                 sp.HinhAnhDaiDien,
                 HinhAnhs = sp.Hinhanhsps.OrderBy(h => h.MaHa).Take(5).Select(h => h.DuongDan).ToList(),
-                GiaTu = giaMin,
-                GiaDen = giaMax,
-                SoLuongTon = tonKho,
-                SoBienThe = btHoatDong.Count,
-                SoSao = soSao,
-                SoLuongDanhGia = danhGia.Count,
-                IsHot = hotProductIds.Contains(sp.MaSp),
+                GiaTu = sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => (decimal?)bt.GiaBan),
+                GiaDen = sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Max(bt => (decimal?)bt.GiaBan),
+                SoLuongTon = sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Sum(bt => bt.SoLuongTon ?? 0),
+                SoBienThe = sp.BienTheSanphams.Count(bt => bt.TrangThai == 1),
+                SoSao = sp.DanhgiaSanphams.Where(dg => dg.TrangThai == 1).Any()
+                    ? Math.Round(sp.DanhgiaSanphams.Where(dg => dg.TrangThai == 1).Average(dg => (double)(dg.SoSao ?? 0)), 1)
+                    : (double?)null,
+                SoLuongDanhGia = sp.DanhgiaSanphams.Count(dg => dg.TrangThai == 1),
                 DanhMuc = sp.MaDanhMucTheNavigation == null ? null : new
                 {
                     sp.MaDanhMucTheNavigation.MaDMSP,
@@ -480,7 +423,25 @@ public class SanPhamController : ControllerBase
                     sp.Thuonghieu.MaTh,
                     sp.Thuonghieu.TenThuongHieu,
                 },
-            };
+            })
+            .ToListAsync();
+
+        var result = paged.Select(sp => new
+        {
+            sp.MaSp,
+            sp.TenSp,
+            sp.MoTa,
+            sp.HinhAnhDaiDien,
+            sp.HinhAnhs,
+            sp.GiaTu,
+            sp.GiaDen,
+            sp.SoLuongTon,
+            sp.SoBienThe,
+            sp.SoSao,
+            sp.SoLuongDanhGia,
+            IsHot = hotProductIds.Contains(sp.MaSp),
+            sp.DanhMuc,
+            sp.ThuongHieu,
         }).ToList();
 
         var response = new { data = result, totalPages, total, page };

@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
 
@@ -23,21 +23,17 @@ public class QuanLyDoiSoatDichVuController : ControllerBase
         if (page < 1) page = 1;
         if (pageSize < 1 || pageSize > 200) pageSize = 20;
 
-        var q = _db.HoaDons
-            .Include(h => h.MaKhNavigation)
-            .Include(h => h.MaNvNavigation)
-            .Include(h => h.MaLdNavigation)
-                .ThenInclude(ld => ld!.ChitietLichdats)
-                    .ThenInclude(ct => ct.MaDvNavigation)
+        var baseQuery = _db.HoaDons
+            .AsNoTracking()
             .AsQueryable();
 
-        if (tuNgay.HasValue) q = q.Where(h => h.NgayTao >= tuNgay.Value);
-        if (denNgay.HasValue) q = q.Where(h => h.NgayTao <= denNgay.Value.AddDays(1));
+        if (tuNgay.HasValue) baseQuery = baseQuery.Where(h => h.NgayTao >= tuNgay.Value);
+        if (denNgay.HasValue) baseQuery = baseQuery.Where(h => h.NgayTao <= denNgay.Value.AddDays(1));
 
         if (!string.IsNullOrWhiteSpace(search))
         {
             var kw = search.Trim();
-            q = q.Where(h =>
+            baseQuery = baseQuery.Where(h =>
                 h.MaHd.Contains(kw) ||
                 (h.MaKhNavigation != null && h.MaKhNavigation.HoTen != null && h.MaKhNavigation.HoTen.Contains(kw)) ||
                 (h.MaLdNavigation != null && h.MaLdNavigation.ChitietLichdats.Any(ct =>
@@ -47,15 +43,53 @@ public class QuanLyDoiSoatDichVuController : ControllerBase
             );
         }
 
-        var hoaDonList = await q.ToListAsync();
-        var maHdList = hoaDonList.Select(h => h.MaHd).ToList();
+        var q = baseQuery;
+        if (trangThai == "khop")
+        {
+            q = q.Where(h => _db.HoaDonDienTus.Any(x => x.MaHd == h.MaHd) && _db.HoaDonDienTus.Where(x => x.MaHd == h.MaHd).All(x => x.TrangThai == 1));
+        }
+        else if (trangThai == "thieu")
+        {
+            q = q.Where(h => !_db.HoaDonDienTus.Any(x => x.MaHd == h.MaHd) || _db.HoaDonDienTus.Where(x => x.MaHd == h.MaHd).Any(x => x.TrangThai != 1));
+        }
+
+        var total = await q.CountAsync();
+        var tongLuot = await baseQuery.CountAsync();
+        var daKhop = await baseQuery
+            .Where(h => _db.HoaDonDienTus.Any(x => x.MaHd == h.MaHd) && _db.HoaDonDienTus.Where(x => x.MaHd == h.MaHd).All(x => x.TrangThai == 1))
+            .CountAsync();
+
+        var pagedHoaDons = await q
+            .OrderByDescending(h => h.NgayTao)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(h => new
+            {
+                h.MaHd,
+                h.NgayTao,
+                h.TongTien,
+                h.TrangThai,
+                TenKh = h.MaKhNavigation != null ? h.MaKhNavigation.HoTen : null,
+                SdtKh = h.MaKhNavigation != null ? h.MaKhNavigation.Sdt : null,
+                TenNv = h.MaNvNavigation != null ? h.MaNvNavigation.HoTenNv : null,
+                DanhSachDichVu = h.MaLdNavigation != null
+                    ? h.MaLdNavigation.ChitietLichdats
+                        .Select(ct => ct.MaDvNavigation != null ? ct.MaDvNavigation.TenDv : null)
+                        .Where(t => t != null)
+                        .ToList()
+                    : new List<string?>()
+            })
+            .ToListAsync();
+
+        var maHdList = pagedHoaDons.Select(h => h.MaHd).ToList();
 
         var allHddt = await _db.HoaDonDienTus
+            .AsNoTracking()
             .Where(x => maHdList.Contains(x.MaHd))
             .ToListAsync();
         var hddtByMaHd = allHddt.GroupBy(x => x.MaHd).ToDictionary(g => g.Key, g => g.ToList());
 
-        var joined = hoaDonList.Select(h =>
+        var list = pagedHoaDons.Select(h =>
         {
             var hddts = hddtByMaHd.TryGetValue(h.MaHd, out var lst) ? lst : new List<HoaDonDienTu>();
             var hoaDonDienTus = hddts.Select(hddt => new
@@ -80,15 +114,10 @@ public class QuanLyDoiSoatDichVuController : ControllerBase
                 h.NgayTao,
                 h.TongTien,
                 h.TrangThai,
-                TenKh = h.MaKhNavigation != null ? h.MaKhNavigation.HoTen : null,
-                SdtKh = h.MaKhNavigation != null ? h.MaKhNavigation.Sdt : null,
-                TenNv = h.MaNvNavigation != null ? h.MaNvNavigation.HoTenNv : null,
-                DanhSachDichVu = h.MaLdNavigation != null
-                    ? h.MaLdNavigation.ChitietLichdats
-                        .Select(ct => ct.MaDvNavigation != null ? ct.MaDvNavigation.TenDv : null)
-                        .Where(t => t != null)
-                        .ToList()
-                    : new List<string?>(),
+                h.TenKh,
+                h.SdtKh,
+                h.TenNv,
+                h.DanhSachDichVu,
                 CoHoaDon = hoaDonDienTus.Count > 0,
                 DaKhopHoanToan = daKhopHoanToan,
                 HoaDonDienTus = hoaDonDienTus,
@@ -102,19 +131,7 @@ public class QuanLyDoiSoatDichVuController : ControllerBase
                 LinkPdfSanPham = hddtSanPham?.LinkPdf,
                 GhiChuLoiSanPham = hddtSanPham?.GhiChuLoi
             };
-        }).AsQueryable();
-        if (trangThai == "khop") joined = joined.Where(x => x.DaKhopHoanToan);
-        else if (trangThai == "thieu") joined = joined.Where(x => !x.DaKhopHoanToan);
-
-        var total = joined.Count();
-        var tongLuot = hoaDonList.Count;
-        var daKhop = joined.Count(x => x.DaKhopHoanToan);
-
-        var list = joined
-            .OrderByDescending(x => x.NgayTao)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .ToList();
+        }).ToList();
 
         return Ok(new
         {

@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -73,11 +73,13 @@ namespace MinhTamHair.KhanchHang.Controllers
         {
             try
             {
-                var query = _context.SanPhams.Where(sp => sp.TrangThai == 1);
+                var query = _context.SanPhams
+                    .AsNoTracking()
+                    .Where(sp => sp.TrangThai == 1);
 
                 if (!string.IsNullOrWhiteSpace(keyword))
                 {
-                    query = query.Where(sp => sp.TenSp.Contains(keyword));
+                    query = query.Where(sp => sp.TenSp != null && sp.TenSp.Contains(keyword));
                 }
                 query = query.Where(sp => sp.BienTheSanphams.Any(bt => bt.TrangThai == 1));
                 var result = await query.Select(sp => new
@@ -111,7 +113,7 @@ namespace MinhTamHair.KhanchHang.Controllers
         public async Task<IActionResult> GetMyVouchers(string maKH, [FromQuery] decimal subTotal, [FromQuery] string? productIds)
         {
 
-            var kh = await _context.Khachhangs.Include(k => k.MaCodes).FirstOrDefaultAsync(k => k.MaKh == maKH);
+            var kh = await _context.Khachhangs.AsNoTracking().Include(k => k.MaCodes).FirstOrDefaultAsync(k => k.MaKh == maKH);
 
             var now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
             var cartIds = string.IsNullOrWhiteSpace(productIds) ? new List<string>() : productIds.Split(',').ToList();
@@ -139,11 +141,15 @@ namespace MinhTamHair.KhanchHang.Controllers
             var myCodes = kh != null ? kh.MaCodes : new List<Voucher>();
             var allVouchers = myCodes.ToList();
 
-            var usageMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            foreach (var c in allVouchers.Select(v => v.MaCode))
-            {
-                usageMap[c] = await _context.HoaDons.AsNoTracking().CountAsync(h => h.MaKh == maKH && h.MaCode == c);
-            }
+            var voucherCodes = allVouchers.Select(v => v.MaCode).ToList();
+            var usageCounts = await _context.HoaDons
+                .AsNoTracking()
+                .Where(h => h.MaKh == maKH && h.MaCode != null && voucherCodes.Contains(h.MaCode))
+                .GroupBy(h => h.MaCode!)
+                .Select(g => new { MaCode = g.Key, Count = g.Count() })
+                .ToListAsync();
+
+            var usageMap = usageCounts.ToDictionary(x => x.MaCode, x => x.Count, StringComparer.OrdinalIgnoreCase);
 
             var result = new List<object>();
             foreach (var v in allVouchers)

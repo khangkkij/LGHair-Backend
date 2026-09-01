@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -36,9 +36,9 @@ namespace MinhTamHair.Admin.Controllers
             try
             {
                 var query = _context.HoaDons
+                    .AsNoTracking()
                     .Include(h => h.MaKhNavigation)
                     .Include(h => h.MaNvNavigation)
-                    .Include(h => h.ChitietHoadonSps)
                     .AsQueryable();
 
                 if (!string.IsNullOrEmpty(tuNgay) && DateTime.TryParseExact(tuNgay, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var startDate))
@@ -222,10 +222,18 @@ namespace MinhTamHair.Admin.Controllers
                     int oldStatus = hd.TrangThai ?? 1;
                     int newStatus = request.TrangThai;
 
-                    // Không cho phép sửa nếu đơn hàng đã chốt trạng thái đóng cuối cùng (3: Hoàn thành, 0: Đã hủy, 5: Đã nhập kho hoàn)
-                    if ((oldStatus == 3 || oldStatus == 0 || oldStatus == 5) && oldStatus != newStatus)
+                    // Hóa đơn dịch vụ (gắn với Lịch đặt hoặc không phải mã SP/HDSP) không được phép chỉnh sửa trạng thái
+                    bool laDonSp = cleanMaHd.StartsWith("SP", StringComparison.OrdinalIgnoreCase) || cleanMaHd.StartsWith("HDSP", StringComparison.OrdinalIgnoreCase);
+                    if (!laDonSp || hd.MaLd != null)
                     {
-                        return BadRequest(new { success = false, message = "Đơn hàng đã hoàn tất hoặc đã hủy/nhập kho đóng đơn, không thể thay đổi." });
+                        return BadRequest(new { success = false, message = "Hóa đơn dịch vụ không được phép chỉnh sửa trạng thái." });
+                    }
+
+                    // Chỉ cho phép cập nhật trạng thái khi đơn hàng ở trạng thái Chờ xử lý (1) hoặc Đang giao hàng (2)
+                    // Các trạng thái: Đã giao/Đã nhận hàng (3), Đang hoàn hàng (4), Đã nhận hàng hoàn (5), Đã hoàn tiền (6), Đã hủy (0) không được phép chỉnh sửa
+                    if (oldStatus != 1 && oldStatus != 2 && oldStatus != newStatus)
+                    {
+                        return BadRequest(new { success = false, message = "Trạng thái đã nhận hàng, đã hoàn hàng và đã hoàn tiền không được phép chỉnh sửa trạng thái." });
                     }
 
                     // ---------------------------------------------------------------------------------

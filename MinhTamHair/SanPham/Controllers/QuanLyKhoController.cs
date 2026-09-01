@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Data.SqlClient;
 using MinhTamHair.Models;
@@ -16,6 +16,7 @@ public class QuanLyKhoController : ControllerBase
     public async Task<IActionResult> GetNhaCungCap()
     {
         var list = await _db.Nhacungcaps
+            .AsNoTracking()
             .Select(n => new
             {
                 n.MaNcc,
@@ -143,11 +144,7 @@ public class QuanLyKhoController : ControllerBase
         [FromQuery] DateTime? denNgay)
     {
         var q = _db.Phieunhaps
-            .Include(p => p.MaNccNavigation)
-            .Include(p => p.MaNvNavigation)
-            .Include(p => p.ChitietPhieunhaps)
-                .ThenInclude(c => c.MaBienTheNavigation)
-                    .ThenInclude(bt => bt.MaSpNavigation)
+            .AsNoTracking()
             .AsQueryable();
 
         if (!string.IsNullOrEmpty(maNcc)) q = q.Where(p => p.MaNcc == maNcc);
@@ -191,38 +188,36 @@ public class QuanLyKhoController : ControllerBase
     public async Task<IActionResult> GetPhieuNhapDetail(string id)
     {
         var p = await _db.Phieunhaps
-            .Include(p => p.MaNccNavigation)
-            .Include(p => p.MaNvNavigation)
-            .Include(p => p.ChitietPhieunhaps)
-                .ThenInclude(c => c.MaBienTheNavigation)
-                    .ThenInclude(bt => bt.MaSpNavigation)
-            .FirstOrDefaultAsync(x => x.MaPn == id);
+            .AsNoTracking()
+            .Where(x => x.MaPn == id)
+            .Select(p => new
+            {
+                p.MaPn,
+                p.MaNcc,
+                TenNcc = p.MaNccNavigation != null ? p.MaNccNavigation.TenNcc : null,
+                p.MaNv,
+                TenNv = p.MaNvNavigation != null ? p.MaNvNavigation.HoTenNv : null,
+                p.NgayNhap,
+                p.TongTien,
+                p.GhiChu,
+                p.TrangThai,
+                ChiTiet = p.ChitietPhieunhaps.Select(c => new
+                {
+                    c.MaBienThe,
+                    TenBienThe = c.MaBienTheNavigation.TenBienThe,
+                    TenSanPham = c.MaBienTheNavigation.MaSpNavigation != null ? c.MaBienTheNavigation.MaSpNavigation.TenSp : null,
+                    HinhAnh = c.MaBienTheNavigation.HinhAnhDaiDien,
+                    GiaBanHienTai = c.MaBienTheNavigation.GiaBan,
+                    c.SoLuong,
+                    c.GiaNhap,
+                    ThanhTien = c.SoLuong * c.GiaNhap
+                }).ToList()
+            })
+            .FirstOrDefaultAsync();
 
         if (p == null) return NotFound();
 
-        return Ok(new
-        {
-            p.MaPn,
-            p.MaNcc,
-            TenNcc = p.MaNccNavigation?.TenNcc,
-            p.MaNv,
-            TenNv = p.MaNvNavigation?.HoTenNv,
-            p.NgayNhap,
-            p.TongTien,
-            p.GhiChu,
-            p.TrangThai,
-            ChiTiet = p.ChitietPhieunhaps.Select(c => new
-            {
-                c.MaBienThe,
-                TenBienThe = c.MaBienTheNavigation.TenBienThe,
-                TenSanPham = c.MaBienTheNavigation.MaSpNavigation?.TenSp,
-                HinhAnh = c.MaBienTheNavigation.HinhAnhDaiDien,
-                GiaBanHienTai = c.MaBienTheNavigation.GiaBan,
-                c.SoLuong,
-                c.GiaNhap,
-                ThanhTien = c.SoLuong * c.GiaNhap
-            })
-        });
+        return Ok(p);
     }
 
     // Tự sinh mã phiếu nhập dạng PN01, PN02, PN03...
@@ -460,8 +455,7 @@ public class QuanLyKhoController : ControllerBase
         [FromQuery] int? trangThai)
     {
         var q = _db.BienTheSanphams
-            .Include(b => b.MaSpNavigation)
-                .ThenInclude(s => s!.MaDanhMucTheNavigation)
+            .AsNoTracking()
             .AsQueryable();
 
         if (!string.IsNullOrWhiteSpace(search))
@@ -504,7 +498,7 @@ public class QuanLyKhoController : ControllerBase
     public async Task<IActionResult> GetBienTheLookup([FromQuery] string? q)
     {
         var query = _db.BienTheSanphams
-            .Include(b => b.MaSpNavigation)
+            .AsNoTracking()
             .Where(b => b.TrangThai == 1)
             .AsQueryable();
 
@@ -546,8 +540,7 @@ public class QuanLyKhoController : ControllerBase
         if (pageSize < 1 || pageSize > 200) pageSize = 20;
 
         var q = _db.LichSuTonKhos
-            .Include(l => l.MaBienTheNavigation)
-                .ThenInclude(b => b!.MaSpNavigation)
+            .AsNoTracking()
             .AsQueryable();
 
         if (!string.IsNullOrWhiteSpace(maBienThe)) q = q.Where(l => l.MaBienThe == maBienThe);
@@ -595,8 +588,7 @@ public class QuanLyKhoController : ControllerBase
         if (pageSize < 1 || pageSize > 200) pageSize = 20;
 
         var q = _db.LichSuTonKhos
-            .Include(l => l.MaBienTheNavigation)
-                .ThenInclude(b => b!.MaSpNavigation)
+            .AsNoTracking()
             .Where(l => l.LoaiBienDong == "BAN")
             .AsQueryable();
 
@@ -616,7 +608,7 @@ public class QuanLyKhoController : ControllerBase
             );
         }
 
-        var hddtSanPhamOnly = _db.HoaDonDienTus.Where(h => h.MaHddt != null && !h.MaHddt.EndsWith("D"));
+        var hddtSanPhamOnly = _db.HoaDonDienTus.AsNoTracking().Where(h => h.MaHddt != null && !h.MaHddt.EndsWith("D"));
 
         var joined = from l in q
                      join hddt in hddtSanPhamOnly on l.MaChungTu equals hddt.MaHd into hddtGroup
@@ -643,12 +635,13 @@ public class QuanLyKhoController : ControllerBase
 
         var total = await joined.CountAsync();
 
+        var tongLuot = await q.CountAsync();
         var statsQuery = from l in q
                          join hddt in hddtSanPhamOnly on l.MaChungTu equals hddt.MaHd into hddtGroup2
                          from hddt in hddtGroup2.DefaultIfEmpty()
-                         select hddt != null && hddt.TrangThai == 1 ? 1 : 0;
-        var tongLuot = await q.CountAsync();
-        var daKhop = await statsQuery.SumAsync();
+                         where hddt != null && hddt.TrangThai == 1
+                         select l.MaLich;
+        var daKhop = await statsQuery.CountAsync();
 
         var list = await joined
             .OrderByDescending(x => x.ThoiGian)
@@ -672,7 +665,7 @@ public class QuanLyKhoController : ControllerBase
         if (nguong < 0 || nguong > 100_000) nguong = 10;
 
         var list = await _db.BienTheSanphams
-            .Include(b => b.MaSpNavigation)
+            .AsNoTracking()
             .Where(b => b.TrangThai == 1 && (b.SoLuongTon ?? 0) < nguong)
             .OrderBy(b => b.SoLuongTon)
             .Select(b => new
@@ -696,6 +689,7 @@ public class QuanLyKhoController : ControllerBase
         var namXet = nam ?? MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().Year;
 
         var raw = await _db.Phieunhaps
+            .AsNoTracking()
             .Where(p => p.TrangThai == 1 && p.NgayNhap.HasValue && p.NgayNhap.Value.Year == namXet)
             .Select(p => new
             {
