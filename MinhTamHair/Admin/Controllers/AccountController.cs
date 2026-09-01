@@ -57,7 +57,7 @@ namespace MinhTamHair.Admin.Controllers
 
 			if (nhanVien.TrangThai != 1)
 			{
-				return BadRequest(new { success = false, message = "Tài khoản của bạn đã bị khóa." });
+				return Unauthorized(new { success = false, isLocked = true, message = "Tài khoản nhân viên của bạn đã bị khóa. Vui lòng liên hệ quản trị viên." });
 			}
 
 			var accessToken = GenerateJwtToken(nhanVien);
@@ -157,7 +157,10 @@ namespace MinhTamHair.Admin.Controllers
 
 			if (nhanVien == null || nhanVien.TrangThai != 1)
 			{
-				return Unauthorized(new { message = "Tài khoản nhân viên không tồn tại hoặc bị khóa." });
+				var deleteCookieOptions = new CookieOptions { Secure = true, SameSite = SameSiteMode.None };
+				Response.Cookies.Delete("adminAccessToken", deleteCookieOptions);
+				Response.Cookies.Delete("adminRefreshToken", deleteCookieOptions);
+				return Unauthorized(new { success = false, isLocked = true, message = "Tài khoản nhân viên của bạn đã bị khóa hoặc không tồn tại." });
 			}
 
 			var newAccessToken = GenerateJwtToken(nhanVien);
@@ -216,9 +219,18 @@ namespace MinhTamHair.Admin.Controllers
 		//  KIỂM TRA PHIÊN NGẦM (HEARTBEAT / PING)
 		// ==========================================
 		[HttpGet("ping")]
-		[Microsoft.AspNetCore.Authorization.Authorize(Roles = "Admin,Quản trị viên,Quản trị viên (Admin),Staff,R01,R02,R03,R04")]
-		public IActionResult Ping()
+		[Microsoft.AspNetCore.Authorization.Authorize]
+		public async Task<IActionResult> Ping()
 		{
+			var userId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+			if (!string.IsNullOrEmpty(userId))
+			{
+				var nv = await _context.Nhanviens.AsNoTracking().FirstOrDefaultAsync(n => n.MaNv == userId);
+				if (nv != null && nv.TrangThai != 1)
+				{
+					return Unauthorized(new { success = false, isLocked = true, message = "Tài khoản nhân viên của bạn đã bị khóa." });
+				}
+			}
 			return Ok(new { success = true, serverTime = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now() });
 		}
 

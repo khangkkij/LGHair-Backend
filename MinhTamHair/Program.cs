@@ -225,6 +225,13 @@ builder.Services.AddAuthentication(options =>
                         }
                     }
 
+                    // 0. Kiểm tra nếu tài khoản đang bị đánh dấu KHÓA
+                    if (memCache != null && memCache.TryGetValue($"UserLocked_{userId}", out bool isLocked) && isLocked)
+                    {
+                        context.Fail("TÀI_KHOẢN_BỊ_KHÓA: Tài khoản của bạn đã bị khóa.");
+                        return;
+                    }
+
                     if (revokedUnix.HasValue)
                     {
                         // Lấy thời điểm token được cấp phát (iat)
@@ -249,6 +256,16 @@ builder.Services.AddAuthentication(options =>
                             }
                         }
                     }
+                }
+            },
+            OnChallenge = async context =>
+            {
+                if (context.AuthenticateFailure != null && context.AuthenticateFailure.Message.Contains("TÀI_KHOẢN_BỊ_KHÓA"))
+                {
+                    context.HandleResponse();
+                    context.Response.StatusCode = 401;
+                    context.Response.ContentType = "application/json; charset=utf-8";
+                    await context.Response.WriteAsync("{\"success\":false,\"isLocked\":true,\"message\":\"Tài khoản của bạn đã bị khóa. Vui lòng liên hệ quản trị viên.\"}");
                 }
             }
         };

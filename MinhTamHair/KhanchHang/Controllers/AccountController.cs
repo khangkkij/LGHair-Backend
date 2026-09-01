@@ -74,7 +74,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 
 			if (khachHang.TrangThai == 0)
 			{
-				return BadRequest(new { success = false, message = "Tài khoản đã bị khóa. Vui lòng đăng nhập lại hoặc liên hệ hỗ trợ." });
+				return Unauthorized(new { success = false, isLocked = true, message = "Tài khoản của bạn đã bị khóa. Vui lòng liên hệ quản trị viên." });
 			}
 
             // Cập nhật lại Rank dựa trên điểm hiện tại trước khi trả về cho khách
@@ -383,11 +383,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                 if (khachHang != null && khachHang.TrangThai == 0)
                 {
-                    if (khachHang.MaKh != null && khachHang.MaKh.StartsWith("GG", StringComparison.OrdinalIgnoreCase))
-                    {
-                        return BadRequest(new { success = false, message = "Tài khoản đã bị khóa. Vui lòng đăng nhập lại hoặc liên hệ hỗ trợ." });
-                    }
-                    return BadRequest(new { success = false, message = "Tài khoản Google này liên kết với một tài khoản đã bị khóa. Không thể đăng nhập." });
+                    return Unauthorized(new { success = false, isLocked = true, message = "Tài khoản của bạn đã bị khóa. Vui lòng liên hệ quản trị viên." });
                 }
 
                 // 3. Nếu chưa có, tạo tài khoản mới tự động
@@ -644,6 +640,11 @@ namespace MinhTamHair.KhanchHang.Controllers
             var khachHang = await _context.Khachhangs.FirstOrDefaultAsync(kh => kh.MaKh == maKh);
             if (khachHang == null) return NotFound();
 
+            if (khachHang.TrangThai == 0)
+            {
+                return Unauthorized(new { success = false, isLocked = true, message = "Tài khoản của bạn đã bị khóa. Vui lòng liên hệ quản trị viên." });
+            }
+
             // Tính lại Rank mới nhất
             khachHang.MaRank = await GetRankByPointsAsync(khachHang.DiemTichLuy);
             await _context.SaveChangesAsync();
@@ -734,7 +735,10 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             if (khachHang.TrangThai == 0)
             {
-                return Unauthorized(new { message = "Tài khoản đã bị khóa. Vui lòng đăng nhập lại hoặc liên hệ hỗ trợ." });
+                var cookieOptions = new CookieOptions { Secure = true, SameSite = SameSiteMode.None };
+                Response.Cookies.Delete("accessToken", cookieOptions);
+                Response.Cookies.Delete("refreshToken", cookieOptions);
+                return Unauthorized(new { success = false, isLocked = true, message = "Tài khoản của bạn đã bị khóa. Vui lòng liên hệ quản trị viên." });
             }
 
             // 4. Cấp bộ Token mới
@@ -765,6 +769,16 @@ namespace MinhTamHair.KhanchHang.Controllers
         [Authorize]
         public async Task<IActionResult> VerifySession()
         {
+            var maKh = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            if (!string.IsNullOrEmpty(maKh))
+            {
+                var kh = await _context.Khachhangs.AsNoTracking().FirstOrDefaultAsync(k => k.MaKh == maKh);
+                if (kh != null && kh.TrangThai == 0)
+                {
+                    return Unauthorized(new { success = false, isLocked = true, message = "Tài khoản của bạn đã bị khóa. Vui lòng liên hệ quản trị viên." });
+                }
+            }
+
             // Lấy Refresh Token từ Cookie của máy đang gọi API này
             if (Request.Cookies.TryGetValue("refreshToken", out string refreshToken))
             {
@@ -776,7 +790,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 }
                 return Ok(new { success = true, message = "Session is valid" });
             }
-            return Unauthorized(new { message = "Không tìm thấy token." });
+            return Ok(new { success = true, message = "Session is valid" });
         }
     }
 }

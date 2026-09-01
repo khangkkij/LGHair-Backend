@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
 using System.Text.RegularExpressions;
@@ -27,28 +27,31 @@ namespace MinhTamHair.Controllers
             if (string.IsNullOrEmpty(id))
                 return BadRequest(new { message = "Mã nhân viên không hợp lệ." });
 
-            var employee = await _context.Nhanviens
-                .Include(nv => nv.MaLoaiNvNavigation)
-                .Where(nv => nv.MaNv == id && nv.TrangThai == 1)
-                .Select(nv => new
-                {
-                    maNv = nv.MaNv,
-                    hoTenNv = nv.HoTenNv ?? "Chưa cập nhật",
-                    email = nv.Email ?? "Chưa cập nhật",
-                    sdt = nv.Sdt ?? "Chưa cập nhật",
-                    diaChi = nv.DiaChi ?? "Chưa cập nhật",
-                    cccd = nv.Cccd ?? "Chưa cập nhật",
-                    gioiTinh = nv.GioiTinh ?? "Nam",
-                    namSinh = nv.NamSinh ?? 2000,
-                    ngayVaoLam = nv.NgayVaoLam.HasValue ? nv.NgayVaoLam.Value.ToString("dd/MM/yyyy") : "Chưa rõ",
-                    hinhAnh = nv.HinhAnh ?? "",
-                    tenDangNhap = nv.TenDangNhap ?? "",
-                    tenLoaiNv = nv.MaLoaiNvNavigation != null ? nv.MaLoaiNvNavigation.TenLoai : "Nhân viên"
-                })
-                .FirstOrDefaultAsync();
+            var nv = await _context.Nhanviens
+                .Include(n => n.MaLoaiNvNavigation)
+                .FirstOrDefaultAsync(n => n.MaNv == id);
 
-            if (employee == null)
-                return NotFound(new { message = "Không tìm thấy thông tin nhân viên." });
+            if (nv == null)
+                return NotFound(new { success = false, message = "Không tìm thấy thông tin nhân viên." });
+
+            if (nv.TrangThai != 1)
+                return Unauthorized(new { success = false, isLocked = true, message = "Tài khoản nhân viên của bạn đã bị khóa. Vui lòng liên hệ quản trị viên." });
+
+            var employee = new
+            {
+                maNv = nv.MaNv,
+                hoTenNv = nv.HoTenNv ?? "Chưa cập nhật",
+                email = nv.Email ?? "Chưa cập nhật",
+                sdt = nv.Sdt ?? "Chưa cập nhật",
+                diaChi = nv.DiaChi ?? "Chưa cập nhật",
+                cccd = nv.Cccd ?? "Chưa cập nhật",
+                gioiTinh = nv.GioiTinh ?? "Nam",
+                namSinh = nv.NamSinh ?? 2000,
+                ngayVaoLam = nv.NgayVaoLam.HasValue ? nv.NgayVaoLam.Value.ToString("dd/MM/yyyy") : "Chưa rõ",
+                hinhAnh = nv.HinhAnh ?? "",
+                tenDangNhap = nv.TenDangNhap ?? "",
+                tenLoaiNv = nv.MaLoaiNvNavigation != null ? nv.MaLoaiNvNavigation.TenLoai : "Nhân viên"
+            };
 
             return Ok(employee);
         }

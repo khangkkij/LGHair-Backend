@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
 using MinhTamHair.SanPham.Controllers;
@@ -128,6 +128,7 @@ public class QuanLySanPhamController : ControllerBase
     public async Task<IActionResult> GetDanhMuc()
     {
         var list = await _context.DanhMucSPs
+            .AsNoTracking()
             .Where(d => d.TrangThai == 1) // chỉ lấy danh mục đang hiện, loại banner (2) và danh mục tạm ẩn (0)
             .OrderBy(d => d.TenDanhMuc)
             .Select(d => new { d.MaDMSP, d.TenDanhMuc, d.TrangThai })
@@ -139,6 +140,7 @@ public class QuanLySanPhamController : ControllerBase
     public async Task<IActionResult> GetThuongHieu()
     {
         var list = await _context.Thuonghieus
+            .AsNoTracking()
             .OrderBy(t => t.TenThuongHieu)
             .Select(t => new { t.MaTh, t.TenThuongHieu, t.TrangThai })
             .ToListAsync();
@@ -154,8 +156,6 @@ public class QuanLySanPhamController : ControllerBase
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 10)
     {
-        await DongBoTrangThaiTheoSoLuongAsync();
-
         if (page < 1) page = 1;
         if (pageSize < 1) pageSize = 10;
         if (pageSize > 100) pageSize = 100; // chặn client xin quá nhiều 1 lần
@@ -174,20 +174,16 @@ public class QuanLySanPhamController : ControllerBase
         if (trangThai.HasValue)
             query = query.Where(s => s.TrangThai == trangThai.Value);
 
-        // Đếm tổng số bản ghi khớp filter (1 câu SELECT COUNT, không kéo dữ liệu về)
+        // Đếm tổng số bản ghi khớp filter (1 câu SELECT COUNT)
         var total = await query.CountAsync();
         var totalPages = (int)Math.Ceiling(total / (double)pageSize);
 
-        // Lấy trước danh sách mã để sort theo số thứ tự (mã mới nhất lên đầu),
-        // vì OrderBy trên DB không parse được phần số bên trong chuỗi MaSp.
-        var maSpSapXep = (await query.Select(s => s.MaSp).ToListAsync())
-            .OrderByDescending(LayPhanSoTuMa)
+        // Phân trang và sắp xếp trực tiếp trên SQL Server
+        var list = await query
+            .OrderByDescending(s => s.MaSp.Length)
+            .ThenByDescending(s => s.MaSp)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
-            .ToList();
-
-        var listTho = await query
-            .Where(s => maSpSapXep.Contains(s.MaSp))
             .Select(s => new
             {
                 s.MaSp,
@@ -199,11 +195,6 @@ public class QuanLySanPhamController : ControllerBase
                 SoLuongBienThe = s.BienTheSanphams.Count(bt => bt.TrangThai == 1),
             })
             .ToListAsync();
-
-        // EF không giữ nguyên thứ tự của mệnh đề Where(Contains), nên sắp lại theo maSpSapXep
-        var list = maSpSapXep
-            .Select(ma => listTho.First(s => s.MaSp == ma))
-            .ToList();
 
         return Ok(new { data = list, total, totalPages, page, pageSize });
     }
@@ -521,8 +512,8 @@ public class QuanLySanPhamController : ControllerBase
     [HttpGet("{maSP}/bienthe")]
     public async Task<IActionResult> GetBienThe(string maSP)
     {
-        await DongBoTrangThaiTheoSoLuongAsync(maSP);
         var listTho = await _context.BienTheSanphams
+            .AsNoTracking()
             .Where(bt => bt.MaSanPham == maSP)
             .Select(bt => new
             {
@@ -761,12 +752,14 @@ public class QuanLySanPhamController : ControllerBase
     public async Task<IActionResult> GetInit()
     {
         var danhMuc = await _context.DanhMucSPs
+            .AsNoTracking()
             .Where(d => d.TrangThai == 1)
             .Select(d => new { d.MaDMSP, d.TenDanhMuc })
             .OrderBy(d => d.TenDanhMuc)
             .ToListAsync();
 
         var thuongHieu = await _context.Thuonghieus
+            .AsNoTracking()
             .Where(t => t.TrangThai == 1)
             .Select(t => new { t.MaTh, t.TenThuongHieu })
             .OrderBy(t => t.TenThuongHieu)
@@ -783,13 +776,9 @@ public class QuanLySanPhamController : ControllerBase
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 9)
     {
-        await DongBoTrangThaiTheoSoLuongAsync();
         var query = _context.SanPhams
+            .AsNoTracking()
             .Where(sp => sp.TrangThai == 1)
-            .Include(sp => sp.MaDanhMucTheNavigation)
-            .Include(sp => sp.Thuonghieu)
-            .Include(sp => sp.BienTheSanphams)
-            .Include(sp => sp.DanhgiaSanphams)
             .AsQueryable();
 
         if (!string.IsNullOrWhiteSpace(search))
@@ -803,46 +792,43 @@ public class QuanLySanPhamController : ControllerBase
         if (!string.IsNullOrWhiteSpace(thuongHieu) && thuongHieu != "all")
             query = query.Where(sp => sp.MaTh == thuongHieu);
 
-        var allList = await query.ToListAsync();
-
         if (!string.IsNullOrWhiteSpace(priceRange) && priceRange != "all")
         {
-            allList = priceRange switch
+            query = priceRange switch
             {
-                "low" => allList.Where(sp => sp.BienTheSanphams.Any(bt => bt.TrangThai == 1) &&
-                              sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => bt.GiaBan) < 200000).ToList(),
-                "mid" => allList.Where(sp => sp.BienTheSanphams.Any(bt => bt.TrangThai == 1) &&
+                "low" => query.Where(sp => sp.BienTheSanphams.Any(bt => bt.TrangThai == 1) &&
+                              sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => bt.GiaBan) < 200000),
+                "mid" => query.Where(sp => sp.BienTheSanphams.Any(bt => bt.TrangThai == 1) &&
                               sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => bt.GiaBan) >= 200000 &&
-                              sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => bt.GiaBan) <= 500000).ToList(),
-                "high" => allList.Where(sp => sp.BienTheSanphams.Any(bt => bt.TrangThai == 1) &&
-                              sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => bt.GiaBan) > 500000).ToList(),
-                _ => allList
+                              sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => bt.GiaBan) <= 500000),
+                "high" => query.Where(sp => sp.BienTheSanphams.Any(bt => bt.TrangThai == 1) &&
+                              sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => bt.GiaBan) > 500000),
+                _ => query
             };
         }
 
-        var total = allList.Count;
+        var total = await query.CountAsync();
         var totalPages = (int)Math.Ceiling(total / (double)pageSize);
-        var paged = allList.Skip((page - 1) * pageSize).Take(pageSize).ToList();
 
-        var result = paged.Select(sp =>
-        {
-            var btHD = sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).ToList();
-            var giaMin = btHD.Any() ? btHD.Min(bt => bt.GiaBan) : (decimal?)null;
-            var giaMax = btHD.Any() ? btHD.Max(bt => bt.GiaBan) : (decimal?)null;
-            var danhGia = sp.DanhgiaSanphams.Where(dg => dg.TrangThai == 1).ToList();
-
-            return new
+        var paged = await query
+            .OrderByDescending(sp => sp.MaSp.Length)
+            .ThenByDescending(sp => sp.MaSp)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(sp => new
             {
                 sp.MaSp,
                 sp.TenSp,
                 sp.MoTa,
                 sp.HinhAnhDaiDien,
-                GiaTu = giaMin,
-                GiaDen = giaMax,
-                SoLuongTon = btHD.Sum(bt => bt.SoLuongTon ?? 0),
-                SoBienThe = btHD.Count,
-                SoSao = danhGia.Any() ? Math.Round(danhGia.Average(dg => dg.SoSao ?? 0), 1) : (double?)null,
-                SoLuongDanhGia = danhGia.Count,
+                GiaTu = sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => (decimal?)bt.GiaBan),
+                GiaDen = sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Max(bt => (decimal?)bt.GiaBan),
+                SoLuongTon = sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Sum(bt => bt.SoLuongTon ?? 0),
+                SoBienThe = sp.BienTheSanphams.Count(bt => bt.TrangThai == 1),
+                SoSao = sp.DanhgiaSanphams.Where(dg => dg.TrangThai == 1).Any()
+                    ? Math.Round(sp.DanhgiaSanphams.Where(dg => dg.TrangThai == 1).Average(dg => (double)(dg.SoSao ?? 0)), 1)
+                    : (double?)null,
+                SoLuongDanhGia = sp.DanhgiaSanphams.Count(dg => dg.TrangThai == 1),
                 DanhMuc = sp.MaDanhMucTheNavigation == null ? null : new
                 {
                     sp.MaDanhMucTheNavigation.MaDMSP,
@@ -853,16 +839,16 @@ public class QuanLySanPhamController : ControllerBase
                     sp.Thuonghieu.MaTh,
                     sp.Thuonghieu.TenThuongHieu,
                 },
-            };
-        });
+            })
+            .ToListAsync();
 
-        return Ok(new { data = result, totalPages, total });
+        return Ok(new { data = paged, totalPages, total });
     }
     [HttpGet("{id}")]
     public async Task<IActionResult> GetById(string id)
     {
-        await DongBoTrangThaiTheoSoLuongAsync(id);
         var sp = await _context.SanPhams
+            .AsNoTracking()
             .Include(s => s.MaDanhMucTheNavigation)
             .Include(s => s.Thuonghieu)
             .Include(s => s.Hinhanhsps)
@@ -877,9 +863,8 @@ public class QuanLySanPhamController : ControllerBase
         var danhGia = sp.DanhgiaSanphams.Where(dg => dg.TrangThai == 1).ToList();
 
         var goiY = await _context.SanPhams
+            .AsNoTracking()
             .Where(s => s.MaDanhMuc == sp.MaDanhMuc && s.MaSp != id && s.TrangThai == 1)
-            .Include(s => s.Thuonghieu)
-            .Include(s => s.BienTheSanphams)
             .Take(4)
             .Select(s => new
             {
