@@ -22,7 +22,7 @@ namespace MinhTamHair.Services
         {
             var senderEmail = _configuration["MailSettings:Mail"] ?? _configuration["EmailSettings:SenderEmail"];
             var password = _configuration["MailSettings:Password"] ?? _configuration["EmailSettings:Password"];
-            var senderName = _configuration["MailSettings:DisplayName"] ?? _configuration["EmailSettings:SenderName"] ?? "LG Hair Salon";
+            var senderName = _configuration["MailSettings:DisplayName"] ?? _configuration["EmailSettings:SenderName"] ?? "LGHair Salon";
             var host = _configuration["MailSettings:Host"] ?? "smtp.gmail.com";
             var port = int.TryParse(_configuration["MailSettings:Port"], out var p) ? p : 587;
 
@@ -36,12 +36,12 @@ namespace MinhTamHair.Services
             string body = $@"
             <div style='font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 25px; border: 1px solid #e2e8f0; border-radius: 16px; background: #ffffff;'>
                 <div style='text-align: center; margin-bottom: 24px;'>
-                    <h2 style='color: #0f172a; margin: 0; font-size: 24px; font-weight: 800; letter-spacing: 1px;'>LG HAIR SALON</h2>
+                    <h2 style='color: #0f172a; margin: 0; font-size: 24px; font-weight: 800; letter-spacing: 1px;'>LGHair SALON</h2>
                     <p style='color: #059669; font-size: 13px; margin-top: 6px; font-weight: bold; text-transform: uppercase;'>✓ XÁC NHẬN ĐẶT LỊCH HẸN THÀNH CÔNG</p>
                 </div>
                 
                 <p style='font-size: 14px; color: #334155;'>Xin chào <b>{customerName}</b>,</p>
-                <p style='font-size: 14px; color: #334155;'>Cảm ơn Quý khách đã đặt lịch làm tóc tại <b>LG Hair Salon</b>. Dưới đây là thông tin chi tiết lịch hẹn và mã QR Check-in:</p>
+                <p style='font-size: 14px; color: #334155;'>Cảm ơn Quý khách đã đặt lịch làm tóc tại <b>LGHair Salon</b>. Dưới đây là thông tin chi tiết lịch hẹn và mã QR Check-in:</p>
                 
                 <div style='background: #f8fafc; padding: 18px; border-radius: 12px; margin: 20px 0; border: 1px solid #e2e8f0;'>
                     <p style='margin: 6px 0; font-size: 14px;'><b>Mã lịch hẹn:</b> <span style='color: #2563eb; font-weight: bold;'>#{bookingId}</span></p>
@@ -63,14 +63,14 @@ namespace MinhTamHair.Services
 
                 <p style='margin-top: 30px; text-align: center; color: #64748b; font-size: 12px; border-top: 1px solid #f1f5f9; padding-top: 20px;'>
                     Hotline hỗ trợ: <b>0123.456.789</b> | Địa chỉ: <b>123 Đường ABC, Buôn Ma Thuột</b><br/>
-                    Trân trọng,<br/><b>Đội ngũ LG Hair Salon</b>
+                    Trân trọng,<br/><b>Đội ngũ LGHair Salon</b>
                 </p>
             </div>";
 
             var message = new MimeMessage();
             message.From.Add(new MailboxAddress(senderName, senderEmail));
             message.To.Add(new MailboxAddress("", toEmail));
-            message.Subject = $"[LG Hair] Xác nhận lịch hẹn #{bookingId} thành công";
+            message.Subject = $"[LGHair] Xác nhận lịch hẹn #{bookingId} thành công";
 
             var bodyBuilder = new BodyBuilder { HtmlBody = body };
             message.Body = bodyBuilder.ToMessageBody();

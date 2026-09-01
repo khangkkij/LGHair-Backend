@@ -488,11 +488,11 @@ namespace MinhTamHair.Admin.Controllers
                     {
                         try
                         {
-                            var subject = $"[LG Hair Salon] Thông báo tạm hủy lịch hẹn #{maDon} & Mở khóa quyền Dời lịch / Hoàn tiền";
+                            var subject = $"[LGHair Salon] Thông báo tạm hủy lịch hẹn #{maDon} & Mở khóa quyền Dời lịch / Hoàn tiền";
                             var htmlContent = $@"
                             <div style='font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 14px; background-color: #ffffff;'>
                                 <div style='text-align: center; padding-bottom: 18px; border-bottom: 2px solid #f1f5f9;'>
-                                    <h1 style='color: #0f172a; margin: 0; font-size: 24px; letter-spacing: 2px; font-weight: 800; text-transform: uppercase;'>LG HAIR SALON</h1>
+                                    <h1 style='color: #0f172a; margin: 0; font-size: 24px; letter-spacing: 2px; font-weight: 800; text-transform: uppercase;'>LGHair SALON</h1>
                                     <p style='color: #64748b; font-size: 13px; margin: 6px 0 0; text-transform: uppercase; letter-spacing: 1px;'>Thông báo tình trạng lịch hẹn phục vụ</p>
                                 </div>
                                 <div style='padding: 24px 0;'>
@@ -503,14 +503,14 @@ namespace MinhTamHair.Admin.Controllers
                                     <div style='background-color: #fffbeb; border: 1px solid #fef3c7; border-left: 4px solid #f59e0b; padding: 16px; margin: 20px 0; border-radius: 8px;'>
                                         <p style='margin: 0 0 10px; font-size: 14px; font-weight: bold; color: #92400e;'>📋 Hệ thống đã Mở Khóa Quyền Hạn cho đơn hàng #{maDon}:</p>
                                         <ul style='margin: 0; padding-left: 20px; font-size: 13.5px; color: #78350f; line-height: 1.7;'>
-                                            <li><b>Lựa chọn 1 (Khuyên dùng):</b> Quý khách vào website <b>LG Hair Salon &gt; Tài khoản &gt; Lịch sử hóa đơn</b> và bấm nút <b>[🔄 Dời lịch]</b> để chọn lại Ngày &amp; Giờ hẹn mới hoàn toàn <b>MIỄN PHÍ (Bảo lưu 100% tiền cọc)</b>.</li>
+                                            <li><b>Lựa chọn 1 (Khuyên dùng):</b> Quý khách vào website <b>LGHair Salon &gt; Tài khoản &gt; Lịch sử hóa đơn</b> và bấm nút <b>[🔄 Dời lịch]</b> để chọn lại Ngày &amp; Giờ hẹn mới hoàn toàn <b>MIỄN PHÍ (Bảo lưu 100% tiền cọc)</b>.</li>
                                             <li><b>Lựa chọn 2:</b> Bấm nút <b>[💳 Hoàn tiền]</b> để điền thông tin Số tài khoản ngân hàng nhận tiền hoàn cọc qua VietQR.</li>
                                             <li><b>Thời hạn xử lý:</b> Trong vòng <b>3 ngày</b> kể từ hôm nay. Sau 3 ngày, phí thủ tục bảo lưu đơn là <b>5.000đ/ngày</b> quá hạn.</li>
                                         </ul>
                                     </div>
                                     <div style='background: #f8fafc; border: 1px dashed #cbd5e1; padding: 16px; border-radius: 8px; text-align: center; margin-top: 24px;'>
                                         <p style='margin: 0; font-size: 14px; color: #0f172a; font-weight: 600;'>
-                                            👉 Quý khách chỉ cần mở website LG Hair Salon, đăng nhập tài khoản và vào mục <span style='color: #be123c;'>""Lịch sử hóa đơn""</span> để thao tác ngay!
+                                            👉 Quý khách chỉ cần mở website LGHair Salon, đăng nhập tài khoản và vào mục <span style='color: #be123c;'>""Lịch sử hóa đơn""</span> để thao tác ngay!
                                         </p>
                                     </div>
                                     <p style='font-size: 13px; color: #64748b; text-align: center; margin-top: 24px; margin-bottom: 0;'>
@@ -518,7 +518,7 @@ namespace MinhTamHair.Admin.Controllers
                                     </p>
                                 </div>
                                 <div style='border-top: 1px solid #f1f5f9; padding-top: 16px; text-align: center; font-size: 12px; color: #94a3b8;'>
-                                    © 2026 LG Hair Salon. Trân trọng cảm ơn Quý khách!
+                                    © 2026 LGHair Salon. Trân trọng cảm ơn Quý khách!
                                 </div>
                             </div>
                             ";

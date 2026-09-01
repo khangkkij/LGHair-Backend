@@ -179,9 +179,12 @@ namespace MinhTamHair.Admin.Controllers
                     {
                         chiTietList.Add(new
                         {
+                            Loai = "DichVu",
                             TenHangMuc = ct.MaCbNavigation != null ? ct.MaCbNavigation.TenCombo : (ct.MaDvNavigation != null ? ct.MaDvNavigation.TenDv : "Dịch vụ Salon"),
                             ThoThucHien = ct.MaNvNavigation != null ? ct.MaNvNavigation.HoTenNv : (hd.MaNvNavigation != null ? hd.MaNvNavigation.HoTenNv : "Thợ Salon"),
-                            Gia = ct.GiaLucDat ?? 0
+                            SoLuong = 1,
+                            Gia = ct.GiaLucDat ?? 0,
+                            ThanhTien = ct.GiaLucDat ?? 0
                         });
                     }
                 }
@@ -194,12 +197,18 @@ namespace MinhTamHair.Admin.Controllers
                         var tenSp = ct.MaBienTheNavigation?.MaSpNavigation?.TenSp ?? "Sản phẩm";
                         var tenBt = ct.MaBienTheNavigation?.TenBienThe;
                         var tenHienThi = !string.IsNullOrEmpty(tenBt) ? $"{tenSp} ({tenBt})" : tenSp;
+                        var sl = ct.SoLuong ?? 1;
+                        var donGia = ct.DonGiaLucBan ?? 0;
+                        var thanhTien = ct.ThanhTien ?? (donGia * sl);
 
                         chiTietList.Add(new
                         {
-                            TenHangMuc = $"{tenHienThi} (x{ct.SoLuong ?? 1})",
+                            Loai = "SanPham",
+                            TenHangMuc = tenHienThi,
                             ThoThucHien = "Sản phẩm",
-                            Gia = ct.ThanhTien ?? ((ct.DonGiaLucBan ?? 0) * (ct.SoLuong ?? 1))
+                            SoLuong = sl,
+                            Gia = donGia > 0 ? donGia : (thanhTien / sl),
+                            ThanhTien = thanhTien
                         });
                     }
                 }

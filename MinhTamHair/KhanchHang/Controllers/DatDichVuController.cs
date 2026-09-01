@@ -35,6 +35,24 @@ namespace MinhTamHair.KhanchHang.Controllers
         public async Task<IActionResult> GetAll()
         {
             var now = VnTimeHelper.Now();
+            var viCulture = System.Globalization.CultureInfo.GetCultureInfo("vi-VN");
+
+            var hotServiceIds = (await _context.ChitietLichdats
+                .AsNoTracking()
+                .Where(x => x.MaDv != null)
+                .Join(
+                    _context.Dichvus.AsNoTracking(),
+                    ct => ct.MaDv,
+                    dv => dv.MaDv,
+                    (ct, dv) => new { ct.MaDv, dv.MaDm }
+                )
+                .GroupBy(x => new { x.MaDv, x.MaDm })
+                .Select(g => new { g.Key.MaDv, g.Key.MaDm, SoLuong = g.Count() })
+                .ToListAsync())
+                .GroupBy(x => x.MaDm)
+                .SelectMany(g => g.OrderByDescending(x => x.SoLuong).Take(3))
+                .Select(x => x.MaDv)
+                .ToHashSet();
 
             var rawServices = await _context.Dichvus
                 .AsNoTracking()
@@ -74,11 +92,15 @@ namespace MinhTamHair.KhanchHang.Controllers
                     duration = s.duration,
                     icon = s.icon,
                     phanTramHoaHong = s.phanTramHoaHong,
-                    hinhAnh = s.hinhAnh
+                    hinhAnh = s.hinhAnh,
+                    isHot = hotServiceIds.Contains(s.id)
                 };
-            }).ToList();
+            })
+            .OrderByDescending(s => hotServiceIds.Contains(s.id))
+            .ThenBy(s => s.name, StringComparer.Create(viCulture, true))
+            .ToList();
 
-            var combos = await _context.Combos
+            var rawCombos = await _context.Combos
                 .AsNoTracking()
                 .Where(c => c.TrangThai == 1)
                 .Select(c => new
@@ -93,6 +115,10 @@ namespace MinhTamHair.KhanchHang.Controllers
                     hinhAnh = c.HinhAnh
                 })
                 .ToListAsync();
+
+            var combos = rawCombos
+                .OrderBy(c => c.name, StringComparer.Create(viCulture, true))
+                .ToList();
 
             return Ok(new { services, combos });
         }
@@ -1229,7 +1255,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     .ToListAsync();
 
                 var servicesList = new List<object>();
-                string defaultStylist = chitietDvs.FirstOrDefault()?.MaNvNavigation?.HoTenNv ?? "Stylist LG Hair";
+                string defaultStylist = chitietDvs.FirstOrDefault()?.MaNvNavigation?.HoTenNv ?? "Stylist LGHair";
                 foreach (var ct in chitietDvs)
                 {
                     string stylistName = ct.MaNvNavigation?.HoTenNv ?? defaultStylist;
