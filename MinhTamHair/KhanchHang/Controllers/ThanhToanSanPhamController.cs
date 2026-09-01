@@ -628,7 +628,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     trangThai = (hoaDon.TrangThai == 1 || hoaDon.TrangThai == 2) ? "Đã thanh toán" : "Chờ thanh toán",
                     warehouse = new
                     {
-                        name = "Tổng Kho Salon LG Hair",
+                        name = "Tổng Kho Salon LGHair",
                         address = "Số 123 Nguyễn Trãi, Phường Bến Thành, Quận 1, TP. Hồ Chí Minh",
                         phone = "0987.654.321"
                     },

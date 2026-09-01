@@ -115,13 +115,13 @@ namespace MinhTamHair.KhanchHang.Controllers
                     return BadRequest(new { success = false, message = "Vui lòng nhập đầy đủ mã đơn hàng và mã vận đơn." });
                 }
 
+                var hd = await _context.HoaDons.FirstOrDefaultAsync(x => x.MaHd == req.MaHd);
+                if (hd == null)
+                    return NotFound(new { success = false, message = "Không tìm thấy thông tin đơn hàng." });
+
                 var yeuCau = await _context.YeuCauHoanHangs.FirstOrDefaultAsync(x => x.MaHd == req.MaHd);
                 if (yeuCau == null)
                 {
-                    var hd = await _context.HoaDons.FirstOrDefaultAsync(x => x.MaHd == req.MaHd);
-                    if (hd == null)
-                        return NotFound(new { success = false, message = "Không tìm thấy thông tin đơn hàng." });
-
                     yeuCau = new YeuCauHoanHang
                     {
                         MaHd = req.MaHd,
@@ -139,6 +139,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     yeuCau.HinhAnhBienLai = req.HinhAnhBienLai;
                 }
                 yeuCau.TrangThai = 3; // 3: Khách đã gửi bưu phẩm và có mã vận đơn thực tế
+                hd.TrangThai = 4; // 4: Đang hoàn hàng (quay đầu)
 
                 await _context.SaveChangesAsync();
 

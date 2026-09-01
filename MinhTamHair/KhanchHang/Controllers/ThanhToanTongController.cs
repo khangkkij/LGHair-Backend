@@ -53,6 +53,24 @@ namespace MinhTamHair.KhanchHang.Controllers
             try
             {
                 var now = VnTimeHelper.Now();
+                var viCulture = System.Globalization.CultureInfo.GetCultureInfo("vi-VN");
+
+                var hotServiceIds = (await _context.ChitietLichdats
+                    .AsNoTracking()
+                    .Where(x => x.MaDv != null)
+                    .Join(
+                        _context.Dichvus.AsNoTracking(),
+                        ct => ct.MaDv,
+                        dv => dv.MaDv,
+                        (ct, dv) => new { ct.MaDv, dv.MaDm }
+                    )
+                    .GroupBy(x => new { x.MaDv, x.MaDm })
+                    .Select(g => new { g.Key.MaDv, g.Key.MaDm, SoLuong = g.Count() })
+                    .ToListAsync())
+                    .GroupBy(x => x.MaDm)
+                    .SelectMany(g => g.OrderByDescending(x => x.SoLuong).Take(3))
+                    .Select(x => x.MaDv)
+                    .ToHashSet();
 
                 var rawServices = await _context.Dichvus
                     .AsNoTracking()
@@ -89,11 +107,15 @@ namespace MinhTamHair.KhanchHang.Controllers
                         originalPrice = s.originalPrice,
                         duration = s.duration,
                         hinhAnh = s.hinhAnh,
-                        icon = s.hinhAnh
+                        icon = s.hinhAnh,
+                        isHot = hotServiceIds.Contains(s.id)
                     };
-                }).ToList();
+                })
+                .OrderByDescending(s => hotServiceIds.Contains(s.id))
+                .ThenBy(s => s.name, StringComparer.Create(viCulture, true))
+                .ToList();
 
-                var combos = await _context.Combos
+                var rawCombos = await _context.Combos
                     .AsNoTracking()
                     .Where(c => c.TrangThai == 1)
                     .Select(c => new
@@ -107,6 +129,10 @@ namespace MinhTamHair.KhanchHang.Controllers
                         icon = "fas fa-layer-group",
                     })
                     .ToListAsync();
+
+                var combos = rawCombos
+                    .OrderBy(c => c.name, StringComparer.Create(viCulture, true))
+                    .ToList();
 
                 return Ok(new { success = true, services = services, combos = combos });
             }
@@ -1332,7 +1358,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     booking = bookingInfo,
                     products = productsList,
                     warehouse = new {
-                        name = "Tổng Kho Salon LG Hair",
+                        name = "Tổng Kho Salon LGHair",
                         address = "Số 123 Nguyễn Trãi, Phường Bến Thành, Quận 1, TP. Hồ Chí Minh",
                         phone = "0987.654.321"
                     },

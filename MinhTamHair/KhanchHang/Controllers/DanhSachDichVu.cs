@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using MinhTamHair.Models;
@@ -94,28 +94,31 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             var hotServiceIds = await GetHotServiceIdsAsync();
             var now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
+            var viCulture = System.Globalization.CultureInfo.GetCultureInfo("vi-VN");
 
             // ---------- DỊCH VỤ (phân trang) ----------
             var serviceQuery = _context.Dichvus
                 .AsNoTracking()
                 .Where(x => x.TrangThai == 1);
 
-            var totalServices = await serviceQuery.CountAsync();
-
-            var servicesRaw = await serviceQuery
+            var allServicesRaw = await serviceQuery
                 .Include(x => x.Hinhanhs)
                 .Include(x => x.ChitietFlashsales)
                     .ThenInclude(fs => fs.MaFlNavigation)
-                // Dịch vụ tạo SAU hiển thị TRƯỚC (mới nhất lên đầu) — mã dịch vụ tăng dần
-                // theo thứ tự tạo (DV014 tạo sau DV013), nên sắp giảm dần theo mã là đúng.
-                // Riêng mã "vip" không theo quy tắc đặt mã DV0xx (là chữ, không phải số thứ
-                // tự) nên sort theo mã sẽ đẩy nó lên đầu sai chỗ — luôn đẩy nó xuống CUỐI
-                // bằng điều kiện ưu tiên phụ trước khi mới sắp theo mã.
-                .OrderBy(x => x.MaDv == "vip" ? 1 : 0)
-                .ThenByDescending(x => x.MaDv)
+                .ToListAsync();
+
+            // Sắp xếp: Dịch vụ hot ưu tiên xếp lên đầu, các dịch vụ sau sắp xếp theo bảng chữ cái ABC (A-Z)
+            var servicesSorted = allServicesRaw
+                .OrderByDescending(x => hotServiceIds.Contains(x.MaDv))
+                .ThenBy(x => x.TenDv, StringComparer.Create(viCulture, true))
+                .ToList();
+
+            var totalServices = servicesSorted.Count;
+
+            var servicesRaw = servicesSorted
                 .Skip((servicePage - 1) * servicePageSize)
                 .Take(servicePageSize)
-                .ToListAsync();
+                .ToList();
 
             var services = servicesRaw.Select(x =>
             {
@@ -244,12 +247,8 @@ namespace MinhTamHair.KhanchHang.Controllers
             // nên phải tính trước rồi mới lọc theo priceRange thay vì lọc
             // thẳng trên x.Gia gốc.
             var hotServiceIds = await GetHotServiceIdsAsync();
-            var dvRaw = await query
-                // Dịch vụ tạo SAU hiển thị TRƯỚC (mới nhất lên đầu) — đồng bộ với GetAll.
-                // Riêng mã "vip" luôn đẩy xuống CUỐI (xem giải thích trong GetAll ở trên).
-                .OrderBy(x => x.MaDv == "vip" ? 1 : 0)
-                .ThenByDescending(x => x.MaDv)
-                .ToListAsync();
+            var viCulture = System.Globalization.CultureInfo.GetCultureInfo("vi-VN");
+            var dvRaw = await query.ToListAsync();
 
             var dvPriced = dvRaw.Select(x =>
             {
@@ -283,10 +282,15 @@ namespace MinhTamHair.KhanchHang.Controllers
                     dvPriced = dvPriced.Where(x => x.GiaThucTe > 700000);
             }
 
-            var dvPricedList = dvPriced.ToList();
-            var totalItems = dvPricedList.Count;
+            // Sắp xếp: Dịch vụ hot ưu tiên xếp lên đầu, các dịch vụ sau sắp xếp theo bảng chữ cái ABC (A-Z)
+            var dvSorted = dvPriced
+                .OrderByDescending(x => hotServiceIds.Contains(x.Dv.MaDv))
+                .ThenBy(x => x.Dv.TenDv, StringComparer.Create(viCulture, true))
+                .ToList();
 
-            var pagedList = dvPricedList
+            var totalItems = dvSorted.Count;
+
+            var pagedList = dvSorted
                 .Skip((page - 1) * pageSize)
                 .Take(pageSize)
                 .ToList();
