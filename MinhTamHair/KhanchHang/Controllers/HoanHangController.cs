@@ -165,7 +165,12 @@ namespace MinhTamHair.KhanchHang.Controllers
         {
             try
             {
-                var yeuCau = await _context.YeuCauHoanHangs.FirstOrDefaultAsync(x => x.MaHd == maHd);
+                var cleanId = maHd.Trim();
+                var yeuCau = await _context.YeuCauHoanHangs.FirstOrDefaultAsync(x => x.MaHd == cleanId);
+                if (yeuCau == null) {
+                    var hd = await _context.HoaDons.FirstOrDefaultAsync(h => h.MaLd == cleanId);
+                    if (hd != null) yeuCau = await _context.YeuCauHoanHangs.FirstOrDefaultAsync(x => x.MaHd == hd.MaHd);
+                }
                 if (yeuCau == null)
                 {
                     return Ok(new { success = true, hasData = false, message = "Chưa có yêu cầu hoàn tiền cho đơn này." });
@@ -322,16 +327,24 @@ namespace MinhTamHair.KhanchHang.Controllers
         // CHỈ ĐƯỢC HOÀN TIỀN KHI ĐÃ NHẬP KHO XONG (TRẠNG THÁI 4) HOẶC THỦ CÔNG
         // PATCH: api/hoan-hang/admin/xac-nhan-hoan-tien-xong/{maHd}
         // =========================================================================
-        [HttpPatch("admin/xac-nhan-hoan-tien-xong/{maHd}")]
+                [HttpPatch("admin/xac-nhan-hoan-tien-xong/{maHd}")]
         [AllowAnonymous]
         public async Task<IActionResult> AdminXacNhanHoanTienXong(string maHd)
         {
             try
             {
-                var yeuCau = await _context.YeuCauHoanHangs.FirstOrDefaultAsync(x => x.MaHd == maHd);
-                
-                // Kiểm tra điều kiện nghiêm ngặt: Phải qua bước nhập kho (Trạng thái 4)
-                if (yeuCau != null && yeuCau.TrangThai < 4)
+                var cleanId = maHd.Trim();
+                var yeuCau = await _context.YeuCauHoanHangs.FirstOrDefaultAsync(x => x.MaHd == cleanId);
+                if (yeuCau == null)
+                {
+                    var hdMatch = await _context.HoaDons.FirstOrDefaultAsync(h => h.MaLd == cleanId);
+                    if (hdMatch != null) yeuCau = await _context.YeuCauHoanHangs.FirstOrDefaultAsync(x => x.MaHd == hdMatch.MaHd);
+                }
+
+                var isBooking = await _context.Lichdats.AnyAsync(x => x.MaLd == cleanId) || 
+                                await _context.HoaDons.AnyAsync(x => x.MaHd == cleanId && x.MaLd != null);
+
+                if (!isBooking && yeuCau != null && yeuCau.TrangThai < 4 && !string.IsNullOrEmpty(yeuCau.DonViVanChuyen))
                 {
                     return BadRequest(new
                     {
@@ -343,12 +356,19 @@ namespace MinhTamHair.KhanchHang.Controllers
                 if (yeuCau != null)
                 {
                     yeuCau.TrangThai = 5; // 5: Hoàn tất hoàn tiền
+                    yeuCau.NgayHoanTien = DateTime.Now;
                 }
 
-                var hd = await _context.HoaDons.FirstOrDefaultAsync(x => x.MaHd == maHd);
+                var hd = await _context.HoaDons.FirstOrDefaultAsync(x => x.MaHd == cleanId || x.MaLd == cleanId);
                 if (hd != null)
                 {
-                    hd.TrangThai = 6; // Trạng thái 6: Đã hoàn tiền hoàn tất 100%
+                    hd.TrangThai = 6; // Trạng thái 6: Đã hoàn tiền
+                }
+
+                var ld = await _context.Lichdats.FirstOrDefaultAsync(x => x.MaLd == cleanId || (hd != null && x.MaLd == hd.MaLd));
+                if (ld != null)
+                {
+                    ld.TrangThai = 6; // Trạng thái 6: Đã hoàn tiền
                 }
 
                 await _context.SaveChangesAsync();
@@ -356,7 +376,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 return Ok(new
                 {
                     success = true,
-                    message = "Đã hoàn tất chuyển tiền hoàn cho đơn hàng #" + maHd + " (Trạng thái: Đã hoàn hàng)!"
+                    message = "Đã hoàn tất chuyển tiền hoàn cho đơn #" + cleanId + " (Trạng thái: Đã hoàn tiền)!"
                 });
             }
             catch (Exception ex)

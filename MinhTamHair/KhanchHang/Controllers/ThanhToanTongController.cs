@@ -381,11 +381,32 @@ namespace MinhTamHair.KhanchHang.Controllers
                             lichTrinhChiTiet.Add($"Lịch trống: {currentTime.ToString(@"HH\:mm")} - {shiftEnd.ToString(@"HH\:mm")}");
                         }
 
-                        var lichKhet = cacLichCuaTho.FirstOrDefault(b => b.GioBatDau < end && b.GioKetThuc > start);
-                        if (lichKhet != null)
+                        const int MAX_CAPACITY = 2;
+                        int maxActiveInInterval = 0;
+                        bool isOverCapacity = false;
+
+                        for (TimeOnly t = start; t < end; t = t.AddMinutes(15))
+                        {
+                            int activeAtT = cacLichCuaTho.Count(b => b.GioBatDau.HasValue && b.GioKetThuc.HasValue && b.GioBatDau.Value <= t && t < b.GioKetThuc.Value);
+                            if (activeAtT > maxActiveInInterval)
+                            {
+                                maxActiveInInterval = activeAtT;
+                            }
+                            if (activeAtT >= MAX_CAPACITY)
+                            {
+                                isOverCapacity = true;
+                                break;
+                            }
+                        }
+
+                        if (isOverCapacity)
                         {
                             isAvailable = false;
-                            reason = $"Bận khách ({lichKhet.GioBatDau?.ToString(@"HH\:mm")} - {lichKhet.GioKetThuc?.ToString(@"HH\:mm")})";
+                            reason = $"Đã kín chỗ ({maxActiveInInterval}/{MAX_CAPACITY} khách)";
+                        }
+                        else if (maxActiveInInterval > 0)
+                        {
+                            reason = $"Đang nhận ({maxActiveInInterval}/{MAX_CAPACITY} khách)";
                         }
                     }
 
@@ -688,11 +709,25 @@ namespace MinhTamHair.KhanchHang.Controllers
                                         if (oldPayment != null) oldPayment.TrangThai = 0;
                                     }
                                     await _context.SaveChangesAsync();
+                                    conflictingBookings.Remove(myStuckBooking);
                                 }
-                                else
+
+                                const int MAX_CAPACITY = 2;
+                                bool isOverCapacity = false;
+                                for (TimeOnly t = requestedStart; t < requestedEnd; t = t.AddMinutes(15))
+                                {
+                                    int countAtT = conflictingBookings.Count(b => b.GioBatDau.HasValue && b.GioKetThuc.HasValue && b.GioBatDau.Value <= t && t < b.GioKetThuc.Value);
+                                    if (countAtT >= MAX_CAPACITY)
+                                    {
+                                        isOverCapacity = true;
+                                        break;
+                                    }
+                                }
+
+                                if (isOverCapacity)
                                 {
                                     await transaction.RollbackAsync();
-                                    return BadRequest(new { success = false, message = "Rất tiếc, thợ bạn chọn đang có khách giao dịch. Vui lòng chọn thợ hoặc giờ khác!" });
+                                    return BadRequest(new { success = false, message = "Rất tiếc, thợ bạn chọn đã kín chỗ (tối đa 2 khách) vào khung giờ này. Vui lòng chọn thợ hoặc giờ khác!" });
                                 }
                             }
                         }
