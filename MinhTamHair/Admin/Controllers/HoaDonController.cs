@@ -98,16 +98,41 @@ namespace MinhTamHair.Admin.Controllers
                         trangThai = h.TrangThai ?? 1
                     }).ToList();
 
-                var danhSachDichVu = allInvoices
+                                var danhSachDichVu = allInvoices
                     .Where(h => h.MaHd != null && !string.IsNullOrEmpty(h.MaLd))
-                    .Select(h => new {
-                        maHd = h.MaHd,
-                        tenKhachHang = h.MaKhNavigation != null ? h.MaKhNavigation.HoTen : "Khách vãng lai",
-                        tenNhanVien = h.MaNvNavigation != null ? h.MaNvNavigation.HoTenNv : "Hệ thống",
-                        ngayTao = h.NgayTao,
-                        tongTien = h.TongTien ?? 0,
-                        thanhTien = h.ThanhTien ?? h.TongTien ?? 0,
-                        trangThai = h.TrangThai ?? 1
+                    .OrderByDescending(h => h.NgayTao)
+                    .Select(h => {
+                        decimal soTienHoanThucTe = 0;
+                        if (h.TienDaTra.HasValue && h.TienDaTra.Value > 0)
+                        {
+                            soTienHoanThucTe = h.TienDaTra.Value;
+                        }
+                        else if (h.TrangThai == 1)
+                        {
+                            soTienHoanThucTe = Math.Round((h.ThanhTien ?? h.TongTien ?? 0) * 0.1m);
+                        }
+                        else
+                        {
+                            soTienHoanThucTe = h.ThanhTien ?? h.TongTien ?? 0;
+                        }
+
+                        if (h.MaHd != null && yeuCauMap.TryGetValue(h.MaHd, out var ycHh) && ycHh != null && ycHh.SoTienHoan > 0)
+                          {
+                              soTienHoanThucTe = ycHh.SoTienHoan;
+                          }
+
+                        return new {
+                            maHd = h.MaHd,
+                            maLd = h.MaLd,
+                            tenKhachHang = h.MaKhNavigation != null ? h.MaKhNavigation.HoTen : "Khách vãng lai",
+                            tenNhanVien = h.MaNvNavigation != null ? h.MaNvNavigation.HoTenNv : "Hệ thống",
+                            ngayTao = h.NgayTao,
+                            tongTien = h.TongTien ?? 0,
+                            thanhTien = h.ThanhTien ?? h.TongTien ?? 0,
+                            tienDaTra = h.TienDaTra ?? (h.TrangThai == 1 ? Math.Round((h.ThanhTien ?? h.TongTien ?? 0) * 0.1m) : (h.ThanhTien ?? h.TongTien ?? 0)),
+                            soTienHoan = soTienHoanThucTe,
+                            trangThai = h.TrangThai ?? 1
+                        };
                     }).ToList();
 
                 return Ok(new { success = true, hoaDonSanPham = danhSachSanPham, hoaDonDichVu = danhSachDichVu });
@@ -145,35 +170,37 @@ namespace MinhTamHair.Admin.Controllers
 
                 if (hd == null) return NotFound();
 
-                bool laDonSanPham = maHd.StartsWith("SP") || maHd.StartsWith("HDSP") || (hd.ChitietHoadonSps != null && hd.ChitietHoadonSps.Any());
-                var chiTietList = new List<object>();
+                                var chiTietList = new List<object>();
 
-                if (laDonSanPham)
+                // 1. Thêm danh sách dịch vụ / combo của lịch hẹn
+                if (hd.MaLdNavigation != null && hd.MaLdNavigation.ChitietLichdats != null)
                 {
-                    var items = hd.ChitietHoadonSps ?? new List<ChitietHoadonSp>();
-                    foreach (var ct in items)
+                    foreach (var ct in hd.MaLdNavigation.ChitietLichdats)
                     {
                         chiTietList.Add(new
                         {
-                            TenHangMuc = ct.MaBienTheNavigation?.MaSpNavigation?.TenSp ?? "Sản phẩm kinh doanh",
-                            ThoThucHien = "Mua mang về",
-                            Gia = ct.ThanhTien ?? ((ct.DonGiaLucBan ?? 0) * (ct.SoLuong ?? 1))
+                            TenHangMuc = ct.MaCbNavigation != null ? ct.MaCbNavigation.TenCombo : (ct.MaDvNavigation != null ? ct.MaDvNavigation.TenDv : "Dịch vụ Salon"),
+                            ThoThucHien = ct.MaNvNavigation != null ? ct.MaNvNavigation.HoTenNv : (hd.MaNvNavigation != null ? hd.MaNvNavigation.HoTenNv : "Thợ Salon"),
+                            Gia = ct.GiaLucDat ?? 0
                         });
                     }
                 }
-                else
+
+                // 2. Thêm danh sách sản phẩm (mua trực tiếp hoặc mua kèm tại quầy)
+                if (hd.ChitietHoadonSps != null && hd.ChitietHoadonSps.Any())
                 {
-                    if (hd.MaLdNavigation != null && hd.MaLdNavigation.ChitietLichdats != null)
+                    foreach (var ct in hd.ChitietHoadonSps)
                     {
-                        foreach (var ct in hd.MaLdNavigation.ChitietLichdats)
+                        var tenSp = ct.MaBienTheNavigation?.MaSpNavigation?.TenSp ?? "Sản phẩm";
+                        var tenBt = ct.MaBienTheNavigation?.TenBienThe;
+                        var tenHienThi = !string.IsNullOrEmpty(tenBt) ? $"{tenSp} ({tenBt})" : tenSp;
+
+                        chiTietList.Add(new
                         {
-                            chiTietList.Add(new
-                            {
-                                TenHangMuc = ct.MaCbNavigation != null ? ct.MaCbNavigation.TenCombo : (ct.MaDvNavigation != null ? ct.MaDvNavigation.TenDv : "Dịch vụ Salon"),
-                                ThoThucHien = ct.MaNvNavigation != null ? ct.MaNvNavigation.HoTenNv : "Thợ Salon",
-                                Gia = ct.GiaLucDat ?? 0
-                            });
-                        }
+                            TenHangMuc = $"{tenHienThi} (x{ct.SoLuong ?? 1})",
+                            ThoThucHien = "Sản phẩm",
+                            Gia = ct.ThanhTien ?? ((ct.DonGiaLucBan ?? 0) * (ct.SoLuong ?? 1))
+                        });
                     }
                 }
 
@@ -287,7 +314,7 @@ namespace MinhTamHair.Admin.Controllers
                     // Cập nhật trạng thái mới cho Hóa đơn
                     hd.TrangThai = newStatus;
 
-                    if (hd.MaLdNavigation != null && hd.MaLdNavigation.TrangThai != 4)
+                    if (hd.MaLdNavigation != null)
                     {
                         hd.MaLdNavigation.TrangThai = newStatus;
                     }

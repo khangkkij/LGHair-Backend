@@ -335,6 +335,7 @@ builder.Services.AddScoped<IServiceCacheService, ServiceCacheService>();
 // ===== END SERVICE CACHE SERVICE =====
 builder.Services.AddHostedService<VoucherExpirationBackgroundService>();
 builder.Services.AddHostedService<AttendanceBackgroundService>();
+builder.Services.AddHostedService<AppointmentLateAutoCancelBackgroundService>();
 //=== cleanup booking service
 //builder.Services.AddHostedService<BookingCleanupService>();
 

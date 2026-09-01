@@ -341,8 +341,13 @@ namespace MinhTamHair.KhanchHang.Controllers
                             if (existingKhach != null)
                             {
                                 currentMaKh = existingKhach.MaKh;
-                                emailGuiMail = !string.IsNullOrEmpty(emailGuiMail) ? emailGuiMail : existingKhach.Email;
-                                tenKhachGuiMail = !string.IsNullOrEmpty(tenKhachGuiMail) ? tenKhachGuiMail : existingKhach.HoTen;
+                                if (!string.IsNullOrEmpty(model.Email) && string.IsNullOrEmpty(existingKhach.Email))
+                                {
+                                    existingKhach.Email = model.Email;
+                                    await _context.SaveChangesAsync();
+                                }
+                                emailGuiMail = !string.IsNullOrEmpty(model.Email) ? model.Email : existingKhach.Email;
+                                tenKhachGuiMail = !string.IsNullOrEmpty(model.HoTen) ? model.HoTen : existingKhach.HoTen;
                             }
                             else
                             {
@@ -380,8 +385,12 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                         if (khachHangDb != null)
                         {
-                            emailGuiMail = !string.IsNullOrEmpty(emailGuiMail) ? emailGuiMail : khachHangDb.Email;
-                            tenKhachGuiMail = !string.IsNullOrEmpty(tenKhachGuiMail) ? tenKhachGuiMail : khachHangDb.HoTen;
+                            if (!string.IsNullOrEmpty(model.Email) && string.IsNullOrEmpty(khachHangDb.Email))
+                            {
+                                khachHangDb.Email = model.Email;
+                            }
+                            emailGuiMail = !string.IsNullOrEmpty(model.Email) ? model.Email : khachHangDb.Email;
+                            tenKhachGuiMail = !string.IsNullOrEmpty(model.HoTen) ? model.HoTen : khachHangDb.HoTen;
                         }
 
                         string? maRank = khachHangDb?.MaRank;
@@ -535,12 +544,36 @@ namespace MinhTamHair.KhanchHang.Controllers
                                     if (oldPayment != null) oldPayment.TrangThai = 0;
 
                                     await _context.SaveChangesAsync();
+                                    conflictingBookings.Remove(myStuckBooking);
                                 }
-                                else
+
+                                // Kiểm tra xem tại bất kỳ mốc 15 phút nào trong [requestedStart, requestedEnd] có bị quá MAX_CAPACITY (2 khách) không
+                                // Kiểm tra quy tắc so le 30 phút: Không cho 2 khách bắt đầu trùng giờ hoặc cách nhau dưới 30 phút
+                                bool isTooCloseStart = conflictingBookings.Any(b => b.GioBatDau.HasValue && Math.Abs((b.GioBatDau.Value.ToTimeSpan() - requestedStart.ToTimeSpan()).TotalMinutes) < 30);
+                                if (isTooCloseStart)
                                 {
-                                    // Thợ đã bị người khác book hoặc đã cọc thành công -> BLOCK!
                                     await transaction.RollbackAsync();
-                                    return BadRequest(new { message = "Rất tiếc, thợ bạn chọn đang có khách giao dịch. Vui lòng chọn thợ hoặc giờ khác!" });
+                                    return BadRequest(new { message = "Thợ đã có lịch hẹn bắt đầu trùng khung giờ này. Vui lòng chọn giờ hẹn cách ít nhất 30 phút để thợ phục vụ tốt nhất!" });
+                                }
+
+                                const int BUFFER_MINUTES = 10;
+                                const int MAX_CAPACITY = 2;
+                                bool isOverCapacity = false;
+                                for (TimeOnly t = requestedStart; t < requestedEnd; t = t.AddMinutes(5))
+                                {
+                                    int countAtT = conflictingBookings.Count(b => b.GioBatDau.HasValue && b.GioKetThuc.HasValue && b.GioBatDau.Value <= t && t < b.GioKetThuc.Value.AddMinutes(BUFFER_MINUTES));
+                                    if (countAtT >= MAX_CAPACITY)
+                                    {
+                                        isOverCapacity = true;
+                                        break;
+                                    }
+                                }
+
+                                if (isOverCapacity)
+                                {
+                                    // Thợ đã bị kín chỗ (đủ 2 khách) -> BLOCK!
+                                    await transaction.RollbackAsync();
+                                    return BadRequest(new { message = "Rất tiếc, thợ bạn chọn đã kín chỗ (tối đa 2 khách) vào khung giờ này. Vui lòng chọn thợ hoặc giờ khác!" });
                                 }
                             }
                         }
@@ -922,6 +955,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     var lich = lichLamViecs.FirstOrDefault(l => (l.MaNv ?? "").Trim().Equals(nvId, StringComparison.OrdinalIgnoreCase));
 
                     bool isAvailable = true;
+                    string nextAvailableTime = "";
                     var lichTrinhChiTiet = new List<string>();
                     string ca = (lich?.CaLam ?? "").Trim();
 
@@ -968,6 +1002,9 @@ namespace MinhTamHair.KhanchHang.Controllers
                             lichTrinhChiTiet.Add($"Lịch trống: {currentTime.ToString(@"HH\:mm")} - {shiftEnd.ToString(@"HH\:mm")}");
                         }
 
+                        const int MAX_CAPACITY = 2; // Mỗi thợ phục vụ tối đa 2 khách đồng thời/gối đầu
+                        int maxActiveInInterval = 0;
+
                         if (hasSelectedTime)
                         {
                             bool dungCaLam = (start >= shiftStart && end <= shiftEnd);
@@ -978,10 +1015,56 @@ namespace MinhTamHair.KhanchHang.Controllers
                             }
                             else
                             {
-                                bool isConflict = cacLichCuaTho.Any(b => b.GioBatDau < end && b.GioKetThuc > start);
-                                if (isConflict)
+                                const int BUFFER_MINUTES = 10;
+                                // QUY TẮC SO LE 30 PHÚT: Không cho 2 khách bắt đầu trùng giờ hoặc cách nhau dưới 30 phút
+                                var conflictStartAppt = cacLichCuaTho.FirstOrDefault(b => b.GioBatDau.HasValue && Math.Abs((b.GioBatDau.Value.ToTimeSpan() - start.ToTimeSpan()).TotalMinutes) < 30);
+
+                                if (conflictStartAppt != null && conflictStartAppt.GioBatDau.HasValue)
                                 {
                                     isAvailable = false;
+                                    TimeOnly staggeredSlot = conflictStartAppt.GioBatDau.Value.AddMinutes(30);
+                                    nextAvailableTime = staggeredSlot.ToString(@"HH\:mm");
+                                    lichTrinhChiTiet.Insert(0, $"Kín lúc {start.ToString(@"HH\:mm")} (Nhận từ {nextAvailableTime})");
+                                }
+                                else
+                                {
+                                    // THUẬT TOÁN QUÉT LÁT CẮT 15 PHÚT (TIME-SLICE SWEEPING) - KÈM 10 PHÚT BUFFER NGHỈ NGƠI
+                                    bool isOverCapacity = false;
+                                    for (TimeOnly t = start; t < end; t = t.AddMinutes(5))
+                                    {
+                                        int activeAtT = cacLichCuaTho.Count(b => b.GioBatDau.HasValue && b.GioKetThuc.HasValue && b.GioBatDau.Value <= t && t < b.GioKetThuc.Value.AddMinutes(BUFFER_MINUTES));
+                                        if (activeAtT > maxActiveInInterval)
+                                        {
+                                            maxActiveInInterval = activeAtT;
+                                        }
+                                        if (activeAtT >= MAX_CAPACITY)
+                                        {
+                                            isOverCapacity = true;
+                                            break;
+                                        }
+                                    }
+
+                                    if (isOverCapacity)
+                                    {
+                                        isAvailable = false;
+                                        var lastActive = cacLichCuaTho.Where(b => b.GioKetThuc.HasValue).OrderByDescending(b => b.GioKetThuc).FirstOrDefault();
+                                        string nextFreeNote = "";
+                                        if (lastActive != null && lastActive.GioKetThuc.HasValue)
+                                        {
+                                            TimeOnly nextSlot = lastActive.GioKetThuc.Value.AddMinutes(BUFFER_MINUTES);
+                                            nextAvailableTime = nextSlot.ToString(@"HH\:mm");
+                                            nextFreeNote = $" (Nhận từ {nextAvailableTime})";
+                                        }
+                                        lichTrinhChiTiet.Insert(0, $"Đã kín chỗ ({maxActiveInInterval}/{MAX_CAPACITY} khách){nextFreeNote}");
+                                    }
+                                    else
+                                    {
+                                        isAvailable = true;
+                                        if (maxActiveInInterval > 0)
+                                        {
+                                            lichTrinhChiTiet.Insert(0, $"Đang nhận ({maxActiveInInterval}/{MAX_CAPACITY} khách - Còn {MAX_CAPACITY - maxActiveInInterval} chỗ)");
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1023,7 +1106,8 @@ namespace MinhTamHair.KhanchHang.Controllers
                         hasShift = lich != null,
                         lichTrinh = lichTrinhChiTiet,
                         caLam = ca,
-                        isFavorite = isFav
+                        isFavorite = isFav,
+                        nextAvailableTime = nextAvailableTime
                     });
                 }
 
@@ -1073,6 +1157,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 bool isPaymentSuccess = (vnp_ResponseCode == "00") || (resultCode == "0");
                 var thanhToan = hoaDon.Thanhtoans.FirstOrDefault();
 
+                bool shouldSendEmail = false;
                 if (hasPaymentStatus && hoaDon.TrangThai == 0)
                 {
                     if (isPaymentSuccess)
@@ -1082,10 +1167,61 @@ namespace MinhTamHair.KhanchHang.Controllers
                         hoaDon.TrangThai = isCoc ? 1 : 2;
                         if (thanhToan != null) thanhToan.TrangThai = 1;
                         await _context.SaveChangesAsync();
+                        shouldSendEmail = true;
                     }
                 }
 
                 var khachHangInfo = lichDat?.MaKhNavigation ?? await _context.Khachhangs.FindAsync(hoaDon.MaKh);
+
+                if (shouldSendEmail)
+                {
+                    try
+                    {
+                        var hddt = await _context.HoaDonDienTus.FirstOrDefaultAsync(h => h.MaHd == hoaDon.MaHd);
+                        var emailGui = !string.IsNullOrEmpty(lichDat?.MaKhNavigation?.Email)
+                            ? lichDat.MaKhNavigation.Email
+                            : (!string.IsNullOrEmpty(khachHangInfo?.Email) ? khachHangInfo.Email : hddt?.EmailNhanHd);
+                        var tenGui = !string.IsNullOrEmpty(lichDat?.MaKhNavigation?.HoTen)
+                            ? lichDat.MaKhNavigation.HoTen
+                            : (!string.IsNullOrEmpty(khachHangInfo?.HoTen) ? khachHangInfo.HoTen : (hddt?.TenNguoiMua ?? "Khách hàng"));
+
+                        DateTime ngayHenDateTime = VnTimeHelper.Now();
+                        if (lichDat != null && lichDat.NgayHen.HasValue && lichDat.GioBatDau.HasValue)
+                        {
+                            ngayHenDateTime = lichDat.NgayHen.Value.ToDateTime(lichDat.GioBatDau.Value);
+                        }
+                        else if (lichDat != null && lichDat.NgayHen.HasValue)
+                        {
+                            ngayHenDateTime = lichDat.NgayHen.Value.ToDateTime(TimeOnly.MinValue);
+                        }
+
+                        decimal tongTienGui = hoaDon.ThanhTien ?? hoaDon.TongTien ?? 0;
+                        decimal? depositAmount = thanhToan?.SoTien;
+                        string maLdGui = hoaDon.MaLd ?? hoaDon.MaHd;
+
+                        if (!string.IsNullOrEmpty(emailGui))
+                        {
+                            _ = Task.Run(async () =>
+                            {
+                                try
+                                {
+                                    using var scope = _scopeFactory.CreateScope();
+                                    var qrService = scope.ServiceProvider.GetRequiredService<IQrEmailService>();
+                                    await qrService.SendBookingEmailAsync(emailGui, tenGui, maLdGui, ngayHenDateTime, tongTienGui, depositAmount);
+                                    Console.WriteLine($"[EMAIL] Đã gửi mã QR thành công tới email: {emailGui} cho lịch {maLdGui}");
+                                }
+                                catch (Exception ex)
+                                {
+                                    Console.WriteLine($"[EMAIL ERROR] Lỗi gửi email cho lịch {maLdGui}: {ex.Message}");
+                                }
+                            });
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("====== LỖI GỬI EMAIL QR TRONG GET-RECEIPT ======\n" + ex.Message);
+                    }
+                }
 
                 var chitietDvs = await _context.ChitietLichdats
                     .Include(c => c.MaNvNavigation)
