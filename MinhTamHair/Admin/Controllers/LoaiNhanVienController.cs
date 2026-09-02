@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
 using System;
@@ -141,6 +141,9 @@ namespace MinhTamHair.Controllers
                     maLoai = "LNV" + MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().ToString("yyMMddHHmmss");
                 }
 
+                if (dto.Luong.HasValue && (dto.Luong.Value < 0 || dto.Luong.Value > 100000000))
+                    return BadRequest(new { message = "Lương cơ bản phải nằm trong khoảng từ 0 đến 100.000.000 VNĐ." });
+
                 var entity = new Loainhanvien
                 {
                     MaLoaiNv = maLoai,
@@ -195,6 +198,9 @@ namespace MinhTamHair.Controllers
                 // Kiểm tra trùng tên với chức vụ khác
                 if (await _context.Loainhanviens.AnyAsync(x => x.MaLoaiNv != id && x.TenLoai != null && x.TenLoai.ToLower() == tenClean.ToLower()))
                     return BadRequest(new { message = "Tên chức vụ này đã được sử dụng bởi một chức vụ khác." });
+
+                if (dto.Luong.HasValue && (dto.Luong.Value < 0 || dto.Luong.Value > 100000000))
+                    return BadRequest(new { message = "Lương cơ bản phải nằm trong khoảng từ 0 đến 100.000.000 VNĐ." });
 
                 entity.TenLoai = tenClean;
                 if (dto.Luong.HasValue) entity.Luong = dto.Luong.Value;

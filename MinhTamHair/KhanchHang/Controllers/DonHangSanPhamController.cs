@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
 
@@ -23,7 +23,7 @@ namespace MinhTamHair.KhachHang.Controllers
             if (string.IsNullOrEmpty(maKh)) return BadRequest("Mã khách hàng không hợp lệ");
 
             // Tối ưu hóa truy vấn bằng IQueryable để tăng tốc độ lấy danh sách
-            var query = from hd in _context.HoaDons
+            var query = from hd in _context.HoaDons.AsNoTracking()
                         where hd.MaKh == maKh && _context.ChitietHoadonSps.Any(ct => ct.MaHd == hd.MaHd)
                         orderby hd.NgayTao descending
                         select new
@@ -43,7 +43,7 @@ namespace MinhTamHair.KhachHang.Controllers
 
                             Status = hd.TrangThai == 0 ? "cancelled" :
                                      hd.TrangThai == 1 ? "pending" :
-                                     hd.TrangThai == 2 ? "shipping" : "completed"
+                                     hd.TrangThai == 2 ? "shipping" : hd.TrangThai == 3 ? "completed" : hd.TrangThai == 4 ? "returning" : hd.TrangThai == 5 ? "returned" : hd.TrangThai == 6 ? "refunded" : "completed"
                         };
 
             var history = await query.ToListAsync();
@@ -55,46 +55,92 @@ namespace MinhTamHair.KhachHang.Controllers
         [HttpGet("chi-tiet/{id}")]
         public async Task<IActionResult> GetProductOrderDetail(string id)
         {
-            // Lấy thông tin giao nhận từ bảng ThongtinGiaohang dựa trên MaHd (Tránh xử lý lồng trong Select gán trực tiếp)
             var deliveryInfo = await _context.ThongtinGiaohangs
+                .AsNoTracking()
                 .Where(tt => tt.MaHd == id)
                 .Select(tt => new {
                     tt.TenNguoiNhan,
+                    tt.SdtNhan,
                     tt.DiaChiNhan,
-                    tt.PhiShip
+                    tt.PhiShip,
+                    tt.DonViVanChuyen,
+                    tt.MaVanDon,
+                    tt.TrangThaiGiaoHang
                 })
                 .FirstOrDefaultAsync();
 
-            var order = await _context.HoaDons
-                .Where(hd => hd.MaHd == id)
-                .Select(hd => new
-                {
-                    tenNguoiNhan = deliveryInfo != null ? deliveryInfo.TenNguoiNhan : "Chưa cập nhật",
-                    diaChiGiao = deliveryInfo != null ? deliveryInfo.DiaChiNhan : "Chưa cập nhật",
-                    trangThai = hd.TrangThai == 0 ? "cancelled" :
-                                 hd.TrangThai == 1 ? "pending" :
-                                 hd.TrangThai == 2 ? "shipping" : "completed",
+            var hd = await _context.HoaDons
+                .AsNoTracking()
+                .Include(h => h.MaKhNavigation)
+                .FirstOrDefaultAsync(h => h.MaHd == id);
 
-                    tongTienHang = hd.TongTien ?? 0m,
-                    phiVanChuyen = deliveryInfo != null ? (deliveryInfo.PhiShip ?? 0m) : 0m,
-                    giamGiaVoucher = ((hd.TongTien ?? 0m) - (hd.ThanhTien ?? 0m)) > 0 ? ((hd.TongTien ?? 0m) - (hd.ThanhTien ?? 0m)) : 0m,
-                    tongThanhToan = hd.ThanhTien ?? 0m,
+            if (hd == null) return NotFound(new { success = false, message = "Không tìm thấy chi tiết đơn hàng." });
 
-                    // Lấy chi tiết danh sách vật phẩm bằng cách đi qua Navigation Property chuẩn hóa
-                    items = _context.ChitietHoadonSps
-                        .Where(ct => ct.MaHd == hd.MaHd)
-                        .Select(ct => new {
-                            maSP = ct.MaBienThe,
-                            tenSP = ct.MaBienTheNavigation.MaSpNavigation.TenSp,
-                            soLuong = ct.SoLuong ?? 0,
-                            giaBan = ct.DonGiaLucBan ?? 0m
-                        }).ToList()
-                })
-                .FirstOrDefaultAsync();
+            var items = await _context.ChitietHoadonSps
+                .AsNoTracking()
+                .Where(ct => ct.MaHd == id)
+                .Select(ct => new {
+                    maSp = ct.MaBienThe,
+                    tenSp = ct.MaBienTheNavigation.MaSpNavigation.TenSp,
+                    hinhAnh = ct.MaBienTheNavigation.HinhAnhDaiDien ?? ct.MaBienTheNavigation.MaSpNavigation.HinhAnhDaiDien,
+                    soLuong = ct.SoLuong ?? 0,
+                    giaBan = ct.DonGiaLucBan ?? 0m,
+                    thanhTien = (ct.DonGiaLucBan ?? 0m) * (ct.SoLuong ?? 0)
+                }).ToListAsync();
 
-            if (order == null) return NotFound();
+            DateTime orderDate = hd.NgayTao ?? DateTime.Now;
 
-            return Ok(order);
+            string statusStr = hd.TrangThai == 0 ? "cancelled" :
+                               hd.TrangThai == 1 ? "pending" :
+                               hd.TrangThai == 2 ? "shipping" :
+                               hd.TrangThai == 3 ? "completed" :
+                               hd.TrangThai == 4 ? "returning" :
+                               hd.TrangThai == 5 ? "returned" :
+                               hd.TrangThai == 6 ? "refunded" : "completed";
+
+            var result = new
+            {
+                maHd = hd.MaHd,
+                ngayTao = orderDate.ToString("yyyy-MM-dd HH:mm:ss"),
+                date = orderDate.ToString("yyyy-MM-dd HH:mm:ss"),
+                ngayDat = orderDate.ToString("HH:mm dd/MM/yyyy"),
+                phuongThucThanhToan = "Tiền mặt",
+
+                tenNguoiNhan = deliveryInfo != null && !string.IsNullOrEmpty(deliveryInfo.TenNguoiNhan) 
+                    ? deliveryInfo.TenNguoiNhan 
+                    : (hd.MaKhNavigation != null ? hd.MaKhNavigation.HoTen : "Khách hàng"),
+
+                sdtNhan = deliveryInfo != null && !string.IsNullOrEmpty(deliveryInfo.SdtNhan) 
+                    ? deliveryInfo.SdtNhan 
+                    : (hd.MaKhNavigation != null ? hd.MaKhNavigation.Sdt : ""),
+
+                diaChiGiao = deliveryInfo != null && !string.IsNullOrEmpty(deliveryInfo.DiaChiNhan) 
+                    ? deliveryInfo.DiaChiNhan 
+                    : "Tại cửa hàng / Chưa cập nhật",
+
+                diaChiNhan = deliveryInfo != null && !string.IsNullOrEmpty(deliveryInfo.DiaChiNhan) 
+                    ? deliveryInfo.DiaChiNhan 
+                    : "Tại cửa hàng / Chưa cập nhật",
+
+                donViVanChuyen = deliveryInfo != null ? (deliveryInfo.DonViVanChuyen ?? "") : "",
+                maVanDon = deliveryInfo != null ? (deliveryInfo.MaVanDon ?? "") : "",
+
+                trangThai = statusStr,
+                status = statusStr,
+                trangThaiText = statusStr,
+
+                tongTienHang = hd.TongTien ?? 0m,
+                tongTien = hd.TongTien ?? 0m,
+                phiVanChuyen = deliveryInfo != null ? (deliveryInfo.PhiShip ?? 0m) : 0m,
+                phiShip = deliveryInfo != null ? (deliveryInfo.PhiShip ?? 0m) : 0m,
+                giamGiaVoucher = ((hd.TongTien ?? 0m) - (hd.ThanhTien ?? 0m)) > 0 ? ((hd.TongTien ?? 0m) - (hd.ThanhTien ?? 0m)) : 0m,
+                tongThanhToan = hd.ThanhTien ?? (hd.TongTien ?? 0m),
+                thanhTien = hd.ThanhTien ?? (hd.TongTien ?? 0m),
+
+                items = items
+            };
+
+            return Ok(result);
         }
 
         // 3. HỦY ĐƠN HÀNG SẢN PHẨM

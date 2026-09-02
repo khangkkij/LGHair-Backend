@@ -57,7 +57,7 @@ namespace MinhTamHair.Admin.Controllers
 
 			if (nhanVien.TrangThai != 1)
 			{
-				return BadRequest(new { success = false, message = "Tài khoản của bạn đã bị khóa." });
+				return Unauthorized(new { success = false, isLocked = true, message = "Tài khoản nhân viên của bạn đã bị khóa. Vui lòng liên hệ quản trị viên." });
 			}
 
 			var accessToken = GenerateJwtToken(nhanVien);
@@ -77,21 +77,22 @@ namespace MinhTamHair.Admin.Controllers
 			{
 				UserId = nhanVien.MaNv,
 				Token = refreshToken,
-				IssuedAt = DateTime.UtcNow,
-				ExpiredAt = DateTime.UtcNow.AddDays(7)
+				IssuedAt = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now(),
+				ExpiredAt = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().AddHours(12)
 			};
 
 			_context.Refreshtokens.Add(rtRecord);
 			await _context.SaveChangesAsync();
 
-			SetTokenCookie("adminAccessToken", accessToken, 120);
-			SetTokenCookie("adminRefreshToken", refreshToken, 7 * 24 * 60);
+			SetTokenCookie("adminAccessToken", accessToken, 30);
+			SetTokenCookie("adminRefreshToken", refreshToken, 12 * 60);
 
 			return Ok(new
 			{
 				success = true,
 				message = "Đăng nhập thành công",
 				accessToken = accessToken,
+				refreshToken = refreshToken,
 				user = new
 				{
 					maNv = nhanVien.MaNv,
@@ -107,22 +108,32 @@ namespace MinhTamHair.Admin.Controllers
 		//  LÀM MỚI TOKEN (REFRESH TOKEN)
 		// ==========================================
 		[HttpPost("refresh-token")]
-		public async Task<IActionResult> RefreshToken()
+		public async Task<IActionResult> RefreshToken([FromBody] AdminRefreshTokenRequest? request = null)
 		{
-			if (!Request.Cookies.TryGetValue("adminRefreshToken", out var oldRefreshToken))
+			// 1. Ưu tiên lấy Refresh Token từ Body (nếu client gửi trực tiếp)
+			string oldRefreshToken = request?.RefreshToken;
+
+			// Nếu Body không có, lấy từ Cookie
+			if (string.IsNullOrEmpty(oldRefreshToken))
+			{
+				Request.Cookies.TryGetValue("adminRefreshToken", out oldRefreshToken);
+			}
+
+			if (string.IsNullOrEmpty(oldRefreshToken))
 			{
 				return Unauthorized(new { message = "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại." });
 			}
 
 			var rtRecord = await _context.Refreshtokens.FirstOrDefaultAsync(rt => rt.Token == oldRefreshToken);
 
-			if (rtRecord == null || rtRecord.ExpiredAt <= DateTime.UtcNow)
+			if (rtRecord == null || rtRecord.ExpiredAt <= MinhTamHair.Services.TimeHelper.VnTimeHelper.Now())
 			{
-				Response.Cookies.Delete("adminAccessToken");
-				Response.Cookies.Delete("adminRefreshToken");
+				var deleteCookieOptions = new CookieOptions { Secure = true, SameSite = SameSiteMode.None };
+				Response.Cookies.Delete("adminAccessToken", deleteCookieOptions);
+				Response.Cookies.Delete("adminRefreshToken", deleteCookieOptions);
 
 				// Nếu token hết hạn, dọn luôn nó khỏi DB
-				if (rtRecord != null && rtRecord.ExpiredAt <= DateTime.UtcNow)
+				if (rtRecord != null && rtRecord.ExpiredAt <= MinhTamHair.Services.TimeHelper.VnTimeHelper.Now())
 				{
 					_context.Refreshtokens.Remove(rtRecord);
 					await _context.SaveChangesAsync();
@@ -133,7 +144,7 @@ namespace MinhTamHair.Admin.Controllers
 
 			// Dọn dẹp các token rác khác của nhân viên này
 			var expiredTokens = await _context.Refreshtokens
-				.Where(rt => rt.UserId == rtRecord.UserId && rt.ExpiredAt <= DateTime.UtcNow && rt.Id != rtRecord.Id)
+				.Where(rt => rt.UserId == rtRecord.UserId && rt.ExpiredAt <= MinhTamHair.Services.TimeHelper.VnTimeHelper.Now() && rt.Id != rtRecord.Id)
 				.ToListAsync();
 			if (expiredTokens.Any())
 			{
@@ -146,26 +157,41 @@ namespace MinhTamHair.Admin.Controllers
 
 			if (nhanVien == null || nhanVien.TrangThai != 1)
 			{
-				return Unauthorized(new { message = "Tài khoản nhân viên không tồn tại hoặc bị khóa." });
+				var deleteCookieOptions = new CookieOptions { Secure = true, SameSite = SameSiteMode.None };
+				Response.Cookies.Delete("adminAccessToken", deleteCookieOptions);
+				Response.Cookies.Delete("adminRefreshToken", deleteCookieOptions);
+				return Unauthorized(new { success = false, isLocked = true, message = "Tài khoản nhân viên của bạn đã bị khóa hoặc không tồn tại." });
 			}
 
 			var newAccessToken = GenerateJwtToken(nhanVien);
 			var newRefreshTokenString = GenerateRefreshToken();
 
 			rtRecord.Token = newRefreshTokenString;
-			rtRecord.IssuedAt = DateTime.UtcNow;
-			rtRecord.ExpiredAt = DateTime.UtcNow.AddDays(7);
+			rtRecord.IssuedAt = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
+			rtRecord.ExpiredAt = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().AddHours(12);
 			await _context.SaveChangesAsync();
 
-			SetTokenCookie("adminAccessToken", newAccessToken, 120);
-			SetTokenCookie("adminRefreshToken", newRefreshTokenString, 7 * 24 * 60);
+			SetTokenCookie("adminAccessToken", newAccessToken, 30);
+			SetTokenCookie("adminRefreshToken", newRefreshTokenString, 12 * 60);
 
-			return Ok(new { success = true, message = "Làm mới Token thành công.", accessToken = newAccessToken });
+			return Ok(new
+			{
+				success = true,
+				message = "Làm mới Token thành công.",
+				accessToken = newAccessToken,
+				refreshToken = newRefreshTokenString
+			});
 		}
 		[HttpPost("logout")]
-		public async Task<IActionResult> Logout()
+		public async Task<IActionResult> Logout([FromBody] AdminRefreshTokenRequest? request = null)
 		{
-			if (Request.Cookies.TryGetValue("adminRefreshToken", out string refreshToken))
+			string refreshToken = request?.RefreshToken;
+			if (string.IsNullOrEmpty(refreshToken))
+			{
+				Request.Cookies.TryGetValue("adminRefreshToken", out refreshToken);
+			}
+
+			if (!string.IsNullOrEmpty(refreshToken))
 			{
 				var refreshTokenEntry = await _context.Refreshtokens
 					.FirstOrDefaultAsync(rt => rt.Token == refreshToken);
@@ -180,13 +206,32 @@ namespace MinhTamHair.Admin.Controllers
 			var cookieOptions = new CookieOptions
 			{
 				Secure = true,
-				SameSite = SameSiteMode.Strict
+				SameSite = SameSiteMode.None
 			};
 
 			Response.Cookies.Delete("adminAccessToken", cookieOptions);
 			Response.Cookies.Delete("adminRefreshToken", cookieOptions);
 
 			return Ok(new { success = true, message = "Đã đăng xuất an toàn khỏi thiết bị này." });
+		}
+
+		// ==========================================
+		//  KIỂM TRA PHIÊN NGẦM (HEARTBEAT / PING)
+		// ==========================================
+		[HttpGet("ping")]
+		[Microsoft.AspNetCore.Authorization.Authorize]
+		public async Task<IActionResult> Ping()
+		{
+			var userId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+			if (!string.IsNullOrEmpty(userId))
+			{
+				var nv = await _context.Nhanviens.AsNoTracking().FirstOrDefaultAsync(n => n.MaNv == userId);
+				if (nv != null && nv.TrangThai != 1)
+				{
+					return Unauthorized(new { success = false, isLocked = true, message = "Tài khoản nhân viên của bạn đã bị khóa." });
+				}
+			}
+			return Ok(new { success = true, serverTime = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now() });
 		}
 
 		private string GenerateRefreshToken()
@@ -201,8 +246,8 @@ namespace MinhTamHair.Admin.Controllers
 			var cookieOptions = new CookieOptions
 			{
 				HttpOnly = true,
-				Secure = false, 
-				SameSite = SameSiteMode.Lax,
+				Secure = true, 
+				SameSite = SameSiteMode.None,
 				Expires = DateTime.UtcNow.AddMinutes(expireMinutes)
 			};
 			Response.Cookies.Append(cookieName, token, cookieOptions);
@@ -219,6 +264,7 @@ namespace MinhTamHair.Admin.Controllers
 			{
 				new Claim(JwtRegisteredClaimNames.Sub, nv.MaNv),
 				new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+				new Claim(JwtRegisteredClaimNames.Iat, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
 				new Claim(ClaimTypes.NameIdentifier, nv.MaNv),
 				new Claim(ClaimTypes.Name, nv.HoTenNv ?? ""),
 				new Claim("MaNv", nv.MaNv),
@@ -227,10 +273,13 @@ namespace MinhTamHair.Admin.Controllers
 				new Claim(ClaimTypes.Role, roleName)
 			};
 
+			var nowUtc = DateTime.UtcNow;
 			var tokenDescriptor = new SecurityTokenDescriptor
 			{
 				Subject = new ClaimsIdentity(claims),
-				Expires = DateTime.UtcNow.AddMinutes(120),
+				IssuedAt = nowUtc,
+				NotBefore = nowUtc,
+				Expires = nowUtc.AddMinutes(30), // JWT Access token 30 phút
 				Issuer = jwtSettings["Issuer"],
 				Audience = jwtSettings["Audience"],
 				SigningCredentials = new SigningCredentials(

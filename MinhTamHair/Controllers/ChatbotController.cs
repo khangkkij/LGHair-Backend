@@ -58,7 +58,7 @@ namespace MinhTamHair.Controllers
             
 
 
-                string systemPrompt = $@"Bạn là nhân viên chăm sóc khách hàng nhiệt tình của salon tóc Minh Tâm. 
+                string systemPrompt = $@"Bạn là nhân viên chăm sóc khách hàng nhiệt tình của salon tóc LGHair. 
                                     Nhiệm vụ của bạn là tư vấn và giới thiệu các dịch vụ làm tóc phù hợp với nhu cầu của khách hàng.
                                     Chỉ tư vấn dựa trên danh sách dịch vụ sau:
                                     {formattedProducts}

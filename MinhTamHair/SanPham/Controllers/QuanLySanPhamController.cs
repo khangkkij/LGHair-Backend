@@ -1,7 +1,7 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
-using MinhTamHair.Services;
+using MinhTamHair.SanPham.Controllers;
 using MinhTamHair.Services.UploadIMG;
 
 namespace MinhTamHair.Controllers;
@@ -128,6 +128,7 @@ public class QuanLySanPhamController : ControllerBase
     public async Task<IActionResult> GetDanhMuc()
     {
         var list = await _context.DanhMucSPs
+            .AsNoTracking()
             .Where(d => d.TrangThai == 1) // chỉ lấy danh mục đang hiện, loại banner (2) và danh mục tạm ẩn (0)
             .OrderBy(d => d.TenDanhMuc)
             .Select(d => new { d.MaDMSP, d.TenDanhMuc, d.TrangThai })
@@ -139,6 +140,7 @@ public class QuanLySanPhamController : ControllerBase
     public async Task<IActionResult> GetThuongHieu()
     {
         var list = await _context.Thuonghieus
+            .AsNoTracking()
             .OrderBy(t => t.TenThuongHieu)
             .Select(t => new { t.MaTh, t.TenThuongHieu, t.TrangThai })
             .ToListAsync();
@@ -154,8 +156,6 @@ public class QuanLySanPhamController : ControllerBase
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 10)
     {
-        await DongBoTrangThaiTheoSoLuongAsync();
-
         if (page < 1) page = 1;
         if (pageSize < 1) pageSize = 10;
         if (pageSize > 100) pageSize = 100; // chặn client xin quá nhiều 1 lần
@@ -174,20 +174,16 @@ public class QuanLySanPhamController : ControllerBase
         if (trangThai.HasValue)
             query = query.Where(s => s.TrangThai == trangThai.Value);
 
-        // Đếm tổng số bản ghi khớp filter (1 câu SELECT COUNT, không kéo dữ liệu về)
+        // Đếm tổng số bản ghi khớp filter (1 câu SELECT COUNT)
         var total = await query.CountAsync();
         var totalPages = (int)Math.Ceiling(total / (double)pageSize);
 
-        // Lấy trước danh sách mã để sort theo số thứ tự (mã mới nhất lên đầu),
-        // vì OrderBy trên DB không parse được phần số bên trong chuỗi MaSp.
-        var maSpSapXep = (await query.Select(s => s.MaSp).ToListAsync())
-            .OrderByDescending(LayPhanSoTuMa)
+        // Phân trang và sắp xếp trực tiếp trên SQL Server
+        var list = await query
+            .OrderByDescending(s => s.MaSp.Length)
+            .ThenByDescending(s => s.MaSp)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
-            .ToList();
-
-        var listTho = await query
-            .Where(s => maSpSapXep.Contains(s.MaSp))
             .Select(s => new
             {
                 s.MaSp,
@@ -199,11 +195,6 @@ public class QuanLySanPhamController : ControllerBase
                 SoLuongBienThe = s.BienTheSanphams.Count(bt => bt.TrangThai == 1),
             })
             .ToListAsync();
-
-        // EF không giữ nguyên thứ tự của mệnh đề Where(Contains), nên sắp lại theo maSpSapXep
-        var list = maSpSapXep
-            .Select(ma => listTho.First(s => s.MaSp == ma))
-            .ToList();
 
         return Ok(new { data = list, total, totalPages, page, pageSize });
     }
@@ -241,6 +232,9 @@ public class QuanLySanPhamController : ControllerBase
                     TenSp = dto.TenSp?.Trim(),
                     MaDanhMuc = dto.MaDanhMuc,
                     MaTh = string.IsNullOrWhiteSpace(dto.MaTh) ? null : dto.MaTh,
+                    MoTa = dto.MoTa?.Trim(),
+                    ThanhPhan = dto.ThanhPhan?.Trim(),
+                    HuongDanSuDung = dto.HuongDanSuDung?.Trim(),
                     HinhAnhDaiDien = imgPath,
                     TrangThai = dto.TrangThai ?? 1,
                 };
@@ -261,7 +255,12 @@ public class QuanLySanPhamController : ControllerBase
 
                 // Giá bán & tồn kho ban đầu — lưu vào 1 biến thể mặc định, tạo ngay trong cùng transaction
                 var maBtMoi = await SinhMaTuDongAsync("BT", 2);
-                var btImgPath = await SaveImageAsync(dto.BienTheFile, "bienthe");
+
+                // Ảnh biến thể: nếu người dùng có upload ảnh riêng cho biến thể thì dùng ảnh đó,
+                // dù đây là biến thể "Mặc định" (không nhập Màu/Dung tích) hay biến thể có nhập
+                // Màu/Dung tích riêng — cả 2 trường hợp đều xử lý giống nhau. Nếu không upload,
+                // fallback lấy luôn ảnh đại diện của sản phẩm vừa tạo ở trên, tránh để trống ảnh.
+                var btImgPath = await SaveImageAsync(dto.BienTheFile, "bienthe") ?? sp.HinhAnhDaiDien;
 
                 var bt = new BienTheSanpham
                 {
@@ -336,6 +335,9 @@ public class QuanLySanPhamController : ControllerBase
         sp.TenSp = dto.TenSp?.Trim() ?? sp.TenSp;
         sp.MaDanhMuc = dto.MaDanhMuc ?? sp.MaDanhMuc;
         sp.MaTh = string.IsNullOrWhiteSpace(dto.MaTh) ? null : dto.MaTh;
+        sp.MoTa = dto.MoTa?.Trim() ?? sp.MoTa;
+        sp.ThanhPhan = dto.ThanhPhan?.Trim() ?? sp.ThanhPhan;
+        sp.HuongDanSuDung = dto.HuongDanSuDung?.Trim() ?? sp.HuongDanSuDung;
         sp.TrangThai = dto.TrangThai ?? sp.TrangThai;
 
         if (dto.File != null && dto.File.Length > 0)
@@ -360,6 +362,13 @@ public class QuanLySanPhamController : ControllerBase
         return Ok(new { message = "Cập nhật thành công." });
     }
 
+    // Xóa sản phẩm phải dọn sạch TOÀN BỘ dữ liệu con theo đúng thứ tự (từ lá lên gốc) trong
+    // 1 transaction, KHÔNG trông cậy vào cascade delete của SQL Server: FK
+    // "BienTheSanpham.MaSanPham -> SanPham.MaSp" và "LichSuTonKho.MaBienThe ->
+    // BienTheSanpham.MaBienThe" trong DB thực tế đang ở chế độ SET NULL (không phải CASCADE),
+    // vì cả 2 cột FK đều nullable — nên trước đây "_context.SanPhams.Remove(sp)" xóa được
+    // sản phẩm "thành công" nhưng để lại BienTheSanpham/LichSuTonKho/HinhanhBT mồ côi
+    // (MaSanPham/MaBienThe bị SQL tự set NULL) thay vì báo lỗi hoặc dọn theo.
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(string id)
     {
@@ -385,24 +394,60 @@ public class QuanLySanPhamController : ControllerBase
                 message = "Sản phẩm đã phát sinh dữ liệu, không thể xóa."
             });
         }
-        if (sp == null) return NotFound(new { message = "Không tìm thấy sản phẩm." });
 
-        foreach (var bt in sp.BienTheSanphams)
+        // Dùng CreateExecutionStrategy() vì DbContext đã bật EnableRetryOnFailure ở Program.cs
+        // (đồng bộ cách làm với action Create ở trên).
+        var strategy = _context.Database.CreateExecutionStrategy();
+
+        return await strategy.ExecuteAsync(async () =>
         {
-            await DeleteImageFile(bt.HinhAnhDaiDien);
-            foreach (var hbt in bt.HinhanhBTs)
-                await DeleteImageFile(hbt.DuongDan);
-        }
+            await using var transaction = await _context.Database.BeginTransactionAsync();
+            try
+            {
+                // Xóa file ảnh vật lý (Cloudinary) trước khi xóa bản ghi trong DB.
+                foreach (var bt in sp.BienTheSanphams)
+                {
+                    await DeleteImageFile(bt.HinhAnhDaiDien);
+                    foreach (var hbt in bt.HinhanhBTs)
+                        await DeleteImageFile(hbt.DuongDan);
+                }
+                foreach (var h in sp.Hinhanhsps)
+                    await DeleteImageFile(h.DuongDan);
+                await DeleteImageFile(sp.HinhAnhDaiDien);
 
-        foreach (var h in sp.Hinhanhsps)
-            await DeleteImageFile(h.DuongDan);
+                // Xóa TƯỜNG MINH từ lá lên gốc — không để SQL tự SET NULL rồi bỏ rơi bản ghi con:
+                // 1) Lịch sử tồn kho của mọi biến thể thuộc sản phẩm này
+                var lichSuTonKho = await _context.LichSuTonKhos
+                    .Where(l => maBienThes.Contains(l.MaBienThe))
+                    .ToListAsync();
+                _context.LichSuTonKhos.RemoveRange(lichSuTonKho);
 
-        await DeleteImageFile(sp.HinhAnhDaiDien);
+                // 2) Ảnh gallery của từng biến thể
+                var hinhAnhBT = sp.BienTheSanphams.SelectMany(bt => bt.HinhanhBTs).ToList();
+                _context.HinhanhBTs.RemoveRange(hinhAnhBT);
 
-        _context.SanPhams.Remove(sp);
-        await _context.SaveChangesAsync();
-        await _cache.InvalidateAllProductCacheAsync();
-        return Ok(new { message = "Đã xóa sản phẩm." });
+                // 3) Bản thân các biến thể
+                _context.BienTheSanphams.RemoveRange(sp.BienTheSanphams);
+
+                // 4) Ảnh gallery của sản phẩm
+                _context.Hinhanhsps.RemoveRange(sp.Hinhanhsps);
+
+                // 5) Cuối cùng mới xóa sản phẩm
+                _context.SanPhams.Remove(sp);
+
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
+
+            // Xóa cache SAU khi transaction commit thành công — tránh xóa cache rồi lại rollback.
+            await _cache.InvalidateAllProductCacheAsync();
+            return Ok(new { message = "Đã xóa sản phẩm." });
+        });
     }
 
     [HttpPatch("{id}/trangthai")]
@@ -467,8 +512,8 @@ public class QuanLySanPhamController : ControllerBase
     [HttpGet("{maSP}/bienthe")]
     public async Task<IActionResult> GetBienThe(string maSP)
     {
-        await DongBoTrangThaiTheoSoLuongAsync(maSP);
         var listTho = await _context.BienTheSanphams
+            .AsNoTracking()
             .Where(bt => bt.MaSanPham == maSP)
             .Select(bt => new
             {
@@ -493,7 +538,17 @@ public class QuanLySanPhamController : ControllerBase
     {
         var maBtMoi = await SinhMaTuDongAsync("BT", 2);
 
+        // Ảnh biến thể: ưu tiên ảnh người dùng upload riêng. Nếu không có — dù biến thể này
+        // để "Mặc định" hay người dùng có nhập Màu/Dung tích riêng — đều fallback lấy ảnh đại
+        // diện của sản phẩm cha, tránh để trống ảnh biến thể.
         var imgPath = await SaveImageAsync(dto.File, "bienthe");
+        if (imgPath == null)
+        {
+            imgPath = await _context.SanPhams
+                .Where(s => s.MaSp == dto.MaSanPham)
+                .Select(s => s.HinhAnhDaiDien)
+                .FirstOrDefaultAsync();
+        }
 
         var bt = new BienTheSanpham
         {
@@ -632,6 +687,15 @@ public class QuanLySanPhamController : ControllerBase
 
         await DeleteImageFile(bt.HinhAnhDaiDien);
 
+        // Xóa TƯỜNG MINH lịch sử tồn kho của biến thể trước — FK "LichSuTonKho.MaBienThe ->
+        // BienTheSanpham.MaBienThe" trong DB là SET NULL (không cascade), nên nếu bỏ qua bước
+        // này, các dòng LichSuTonKho sẽ bị SQL tự set NULL và trở thành rác mồ côi thay vì
+        // được dọn theo biến thể (cùng lỗi như action Delete sản phẩm ở trên).
+        var lichSuTonKho = await _context.LichSuTonKhos
+            .Where(l => l.MaBienThe == maBienThe)
+            .ToListAsync();
+        _context.LichSuTonKhos.RemoveRange(lichSuTonKho);
+
         _context.BienTheSanphams.Remove(bt);
 
         await _context.SaveChangesAsync();
@@ -688,12 +752,14 @@ public class QuanLySanPhamController : ControllerBase
     public async Task<IActionResult> GetInit()
     {
         var danhMuc = await _context.DanhMucSPs
+            .AsNoTracking()
             .Where(d => d.TrangThai == 1)
             .Select(d => new { d.MaDMSP, d.TenDanhMuc })
             .OrderBy(d => d.TenDanhMuc)
             .ToListAsync();
 
         var thuongHieu = await _context.Thuonghieus
+            .AsNoTracking()
             .Where(t => t.TrangThai == 1)
             .Select(t => new { t.MaTh, t.TenThuongHieu })
             .OrderBy(t => t.TenThuongHieu)
@@ -710,13 +776,9 @@ public class QuanLySanPhamController : ControllerBase
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 9)
     {
-        await DongBoTrangThaiTheoSoLuongAsync();
         var query = _context.SanPhams
+            .AsNoTracking()
             .Where(sp => sp.TrangThai == 1)
-            .Include(sp => sp.MaDanhMucTheNavigation)
-            .Include(sp => sp.Thuonghieu)
-            .Include(sp => sp.BienTheSanphams)
-            .Include(sp => sp.DanhgiaSanphams)
             .AsQueryable();
 
         if (!string.IsNullOrWhiteSpace(search))
@@ -730,46 +792,43 @@ public class QuanLySanPhamController : ControllerBase
         if (!string.IsNullOrWhiteSpace(thuongHieu) && thuongHieu != "all")
             query = query.Where(sp => sp.MaTh == thuongHieu);
 
-        var allList = await query.ToListAsync();
-
         if (!string.IsNullOrWhiteSpace(priceRange) && priceRange != "all")
         {
-            allList = priceRange switch
+            query = priceRange switch
             {
-                "low" => allList.Where(sp => sp.BienTheSanphams.Any(bt => bt.TrangThai == 1) &&
-                              sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => bt.GiaBan) < 200000).ToList(),
-                "mid" => allList.Where(sp => sp.BienTheSanphams.Any(bt => bt.TrangThai == 1) &&
+                "low" => query.Where(sp => sp.BienTheSanphams.Any(bt => bt.TrangThai == 1) &&
+                              sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => bt.GiaBan) < 200000),
+                "mid" => query.Where(sp => sp.BienTheSanphams.Any(bt => bt.TrangThai == 1) &&
                               sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => bt.GiaBan) >= 200000 &&
-                              sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => bt.GiaBan) <= 500000).ToList(),
-                "high" => allList.Where(sp => sp.BienTheSanphams.Any(bt => bt.TrangThai == 1) &&
-                              sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => bt.GiaBan) > 500000).ToList(),
-                _ => allList
+                              sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => bt.GiaBan) <= 500000),
+                "high" => query.Where(sp => sp.BienTheSanphams.Any(bt => bt.TrangThai == 1) &&
+                              sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => bt.GiaBan) > 500000),
+                _ => query
             };
         }
 
-        var total = allList.Count;
+        var total = await query.CountAsync();
         var totalPages = (int)Math.Ceiling(total / (double)pageSize);
-        var paged = allList.Skip((page - 1) * pageSize).Take(pageSize).ToList();
 
-        var result = paged.Select(sp =>
-        {
-            var btHD = sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).ToList();
-            var giaMin = btHD.Any() ? btHD.Min(bt => bt.GiaBan) : (decimal?)null;
-            var giaMax = btHD.Any() ? btHD.Max(bt => bt.GiaBan) : (decimal?)null;
-            var danhGia = sp.DanhgiaSanphams.Where(dg => dg.TrangThai == 1).ToList();
-
-            return new
+        var paged = await query
+            .OrderByDescending(sp => sp.MaSp.Length)
+            .ThenByDescending(sp => sp.MaSp)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(sp => new
             {
                 sp.MaSp,
                 sp.TenSp,
                 sp.MoTa,
                 sp.HinhAnhDaiDien,
-                GiaTu = giaMin,
-                GiaDen = giaMax,
-                SoLuongTon = btHD.Sum(bt => bt.SoLuongTon ?? 0),
-                SoBienThe = btHD.Count,
-                SoSao = danhGia.Any() ? Math.Round(danhGia.Average(dg => dg.SoSao ?? 0), 1) : (double?)null,
-                SoLuongDanhGia = danhGia.Count,
+                GiaTu = sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Min(bt => (decimal?)bt.GiaBan),
+                GiaDen = sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Max(bt => (decimal?)bt.GiaBan),
+                SoLuongTon = sp.BienTheSanphams.Where(bt => bt.TrangThai == 1).Sum(bt => bt.SoLuongTon ?? 0),
+                SoBienThe = sp.BienTheSanphams.Count(bt => bt.TrangThai == 1),
+                SoSao = sp.DanhgiaSanphams.Where(dg => dg.TrangThai == 1).Any()
+                    ? Math.Round(sp.DanhgiaSanphams.Where(dg => dg.TrangThai == 1).Average(dg => (double)(dg.SoSao ?? 0)), 1)
+                    : (double?)null,
+                SoLuongDanhGia = sp.DanhgiaSanphams.Count(dg => dg.TrangThai == 1),
                 DanhMuc = sp.MaDanhMucTheNavigation == null ? null : new
                 {
                     sp.MaDanhMucTheNavigation.MaDMSP,
@@ -780,16 +839,16 @@ public class QuanLySanPhamController : ControllerBase
                     sp.Thuonghieu.MaTh,
                     sp.Thuonghieu.TenThuongHieu,
                 },
-            };
-        });
+            })
+            .ToListAsync();
 
-        return Ok(new { data = result, totalPages, total });
+        return Ok(new { data = paged, totalPages, total });
     }
     [HttpGet("{id}")]
     public async Task<IActionResult> GetById(string id)
     {
-        await DongBoTrangThaiTheoSoLuongAsync(id);
         var sp = await _context.SanPhams
+            .AsNoTracking()
             .Include(s => s.MaDanhMucTheNavigation)
             .Include(s => s.Thuonghieu)
             .Include(s => s.Hinhanhsps)
@@ -804,9 +863,8 @@ public class QuanLySanPhamController : ControllerBase
         var danhGia = sp.DanhgiaSanphams.Where(dg => dg.TrangThai == 1).ToList();
 
         var goiY = await _context.SanPhams
+            .AsNoTracking()
             .Where(s => s.MaDanhMuc == sp.MaDanhMuc && s.MaSp != id && s.TrangThai == 1)
-            .Include(s => s.Thuonghieu)
-            .Include(s => s.BienTheSanphams)
             .Take(4)
             .Select(s => new
             {
@@ -897,6 +955,9 @@ public class CreateSanPhamDto
     public string? TenSp { get; set; }
     public string? MaDanhMuc { get; set; }
     public string? MaTh { get; set; }
+    public string? MoTa { get; set; }
+    public string? ThanhPhan { get; set; }
+    public string? HuongDanSuDung { get; set; }
     public int? TrangThai { get; set; }
     public IFormFile? File { get; set; }
     public List<IFormFile>? GalleryFiles { get; set; }
@@ -917,6 +978,9 @@ public class UpdateSanPhamDto
     public string? TenSp { get; set; }
     public string? MaDanhMuc { get; set; }
     public string? MaTh { get; set; }
+    public string? MoTa { get; set; }
+    public string? ThanhPhan { get; set; }
+    public string? HuongDanSuDung { get; set; }
     public int? TrangThai { get; set; }
     public IFormFile? File { get; set; }
     public List<IFormFile>? GalleryFiles { get; set; }

@@ -1,5 +1,6 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using MinhTamHair.Models;
 using MinhTamHair.Services;
 
@@ -11,20 +12,32 @@ namespace MinhTamHair.KhanchHang.Controllers
     {
         private readonly MinhTamHairContext _context;
         private readonly IServiceCacheService _cache;
+        private readonly IMemoryCache _memoryCache;
 
         // TTL 10 phút cho toàn bộ cache đọc dịch vụ — đổi ở đây thay vì rải khắp file.
         private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(10);
 
-        public DanhSachDichVuController(MinhTamHairContext context, IServiceCacheService cache)
+        // "Top dịch vụ hot" không cần realtime (chỉ đổi khi có đơn đặt lịch mới), nên
+        // cache riêng lâu hơn hẳn (1 giờ) bằng IMemoryCache in-process — tránh phải
+        // join + group by toàn bộ ChitietLichdats lại mỗi lần GetAll/Filter cache-miss.
+        private const string HotServiceIdsCacheKey = "sv:hot-service-ids";
+        private static readonly TimeSpan HotServiceIdsCacheTtl = TimeSpan.FromHours(1);
+
+        public DanhSachDichVuController(MinhTamHairContext context, IServiceCacheService cache, IMemoryCache memoryCache)
         {
             _context = context;
             _cache = cache;
+            _memoryCache = memoryCache;
         }
 
         // Truy vấn "top dịch vụ hot theo từng danh mục" khá nặng (join + group by trên
-        // ChitietLichdats), dùng chung cho cả GetAll lẫn Filter.
+        // ChitietLichdats), dùng chung cho cả GetAll lẫn Filter. Cache riêng 1 giờ vì
+        // dữ liệu này thay đổi chậm.
         private async Task<HashSet<string>> GetHotServiceIdsAsync()
         {
+            if (_memoryCache.TryGetValue(HotServiceIdsCacheKey, out HashSet<string>? cached) && cached != null)
+                return cached;
+
             var hotServiceIds = (await _context.ChitietLichdats
                 .AsNoTracking()
                 .Where(x => x.MaDv != null)
@@ -42,6 +55,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 .Select(x => x.MaDv)
                 .ToHashSet();
 
+            _memoryCache.Set(HotServiceIdsCacheKey, hotServiceIds, HotServiceIdsCacheTtl);
             return hotServiceIds;
         }
 
@@ -55,7 +69,8 @@ namespace MinhTamHair.KhanchHang.Controllers
             int comboPage = 1,
             int comboPageSize = 3)
         {
-            var cacheKey = $"sv:getall:{servicePage}:{servicePageSize}:{comboPage}:{comboPageSize}";
+            var ver = await _cache.GetCurrentVersionAsync();
+            var cacheKey = $"sv:v{ver}:getall:{servicePage}:{servicePageSize}:{comboPage}:{comboPageSize}";
 
             var json = await _cache.GetOrCreateJsonAsync(cacheKey, async () =>
                 await BuildGetAllResultAsync(servicePage, servicePageSize, comboPage, comboPageSize),
@@ -79,22 +94,31 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             var hotServiceIds = await GetHotServiceIdsAsync();
             var now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
+            var viCulture = System.Globalization.CultureInfo.GetCultureInfo("vi-VN");
 
             // ---------- DỊCH VỤ (phân trang) ----------
             var serviceQuery = _context.Dichvus
                 .AsNoTracking()
                 .Where(x => x.TrangThai == 1);
 
-            var totalServices = await serviceQuery.CountAsync();
-
-            var servicesRaw = await serviceQuery
+            var allServicesRaw = await serviceQuery
                 .Include(x => x.Hinhanhs)
                 .Include(x => x.ChitietFlashsales)
                     .ThenInclude(fs => fs.MaFlNavigation)
-                .OrderBy(x => x.MaDv)
+                .ToListAsync();
+
+            // Sắp xếp: Dịch vụ hot ưu tiên xếp lên đầu, các dịch vụ sau sắp xếp theo bảng chữ cái ABC (A-Z)
+            var servicesSorted = allServicesRaw
+                .OrderByDescending(x => hotServiceIds.Contains(x.MaDv))
+                .ThenBy(x => x.TenDv, StringComparer.Create(viCulture, true))
+                .ToList();
+
+            var totalServices = servicesSorted.Count;
+
+            var servicesRaw = servicesSorted
                 .Skip((servicePage - 1) * servicePageSize)
                 .Take(servicePageSize)
-                .ToListAsync();
+                .ToList();
 
             var services = servicesRaw.Select(x =>
             {
@@ -133,7 +157,8 @@ namespace MinhTamHair.KhanchHang.Controllers
             var combosRaw = await comboQuery
                 .Include(x => x.ChitietFlashsales)
                     .ThenInclude(fs => fs.MaFlNavigation)
-                .OrderBy(x => x.MaCb)
+                // Combo tạo SAU hiển thị TRƯỚC (mới nhất lên đầu) — cùng lý do với dịch vụ.
+                .OrderByDescending(x => x.MaCb)
                 .Skip((comboPage - 1) * comboPageSize)
                 .Take(comboPageSize)
                 .ToListAsync();
@@ -190,7 +215,8 @@ namespace MinhTamHair.KhanchHang.Controllers
             int page = 1,
             int pageSize = 6)
         {
-            var cacheKey = $"sv:filter:{search}:{category}:{priceRange}:{page}:{pageSize}";
+            var ver = await _cache.GetCurrentVersionAsync();
+            var cacheKey = $"sv:v{ver}:filter:{search}:{category}:{priceRange}:{page}:{pageSize}";
 
             var json = await _cache.GetOrCreateJsonAsync(cacheKey, async () =>
                 await BuildFilterResultAsync(search, category, priceRange, page, pageSize), CacheTtl);
@@ -221,9 +247,8 @@ namespace MinhTamHair.KhanchHang.Controllers
             // nên phải tính trước rồi mới lọc theo priceRange thay vì lọc
             // thẳng trên x.Gia gốc.
             var hotServiceIds = await GetHotServiceIdsAsync();
-            var dvRaw = await query
-                .OrderBy(x => x.MaDv)
-                .ToListAsync();
+            var viCulture = System.Globalization.CultureInfo.GetCultureInfo("vi-VN");
+            var dvRaw = await query.ToListAsync();
 
             var dvPriced = dvRaw.Select(x =>
             {
@@ -257,10 +282,15 @@ namespace MinhTamHair.KhanchHang.Controllers
                     dvPriced = dvPriced.Where(x => x.GiaThucTe > 700000);
             }
 
-            var dvPricedList = dvPriced.ToList();
-            var totalItems = dvPricedList.Count;
+            // Sắp xếp: Dịch vụ hot ưu tiên xếp lên đầu, các dịch vụ sau sắp xếp theo bảng chữ cái ABC (A-Z)
+            var dvSorted = dvPriced
+                .OrderByDescending(x => hotServiceIds.Contains(x.Dv.MaDv))
+                .ThenBy(x => x.Dv.TenDv, StringComparer.Create(viCulture, true))
+                .ToList();
 
-            var pagedList = dvPricedList
+            var totalItems = dvSorted.Count;
+
+            var pagedList = dvSorted
                 .Skip((page - 1) * pageSize)
                 .Take(pageSize)
                 .ToList();
@@ -308,7 +338,8 @@ namespace MinhTamHair.KhanchHang.Controllers
             int page = 1,
             int pageSize = 3)
         {
-            var cacheKey = $"sv:filtercombo:{search}:{page}:{pageSize}";
+            var ver = await _cache.GetCurrentVersionAsync();
+            var cacheKey = $"sv:v{ver}:filtercombo:{search}:{page}:{pageSize}";
 
             var json = await _cache.GetOrCreateJsonAsync(cacheKey, async () =>
                 await BuildFilterComboResultAsync(search, page, pageSize), CacheTtl);
@@ -331,7 +362,8 @@ namespace MinhTamHair.KhanchHang.Controllers
                 query = query.Where(x => x.TenCombo.Contains(search));
 
             var comboRaw = await query
-                .OrderBy(x => x.MaCb)
+                // Combo tạo SAU hiển thị TRƯỚC (mới nhất lên đầu) — đồng bộ với GetAll.
+                .OrderByDescending(x => x.MaCb)
                 .ToListAsync();
 
             var comboPriced = comboRaw.Select(x =>

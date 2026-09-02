@@ -1,7 +1,8 @@
-﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MinhTamHair.Models;
+using MinhTamHair.SanPham.Controllers;
 using MinhTamHair.Services.UploadIMG;
 
 namespace MinhTamHair.Controllers;
@@ -13,12 +14,14 @@ public class QuanLyDanhMucSPController : ControllerBase
     private readonly MinhTamHairContext _context;
     private readonly IWebHostEnvironment _env;
     private readonly IUploadDVSP _uploadImg;
+    private readonly IProductCacheService _cache;
 
-    public QuanLyDanhMucSPController(MinhTamHairContext context, IWebHostEnvironment env, IUploadDVSP uploadImg)
+    public QuanLyDanhMucSPController(MinhTamHairContext context, IWebHostEnvironment env, IUploadDVSP uploadImg, IProductCacheService cache)
     {
         _context = context;
         _env = env;
         _uploadImg = uploadImg;
+        _cache = cache;
     }
 
     // ══ GET ALL ══════════════════════════════════════════════════════
@@ -27,7 +30,7 @@ public class QuanLyDanhMucSPController : ControllerBase
     public async Task<IActionResult> GetAll([FromQuery] string? keyword, [FromQuery] int? trangThai)
     {
         var query = _context.DanhMucSPs
-            .Include(d => d.SanPhams)
+            .AsNoTracking()
             .Where(d => d.TrangThai != TRANG_THAI_BANNER) // loại bỏ các row banner khỏi danh sách danh mục
             .AsQueryable();
 
@@ -39,17 +42,49 @@ public class QuanLyDanhMucSPController : ControllerBase
         if (trangThai.HasValue)
             query = query.Where(d => d.TrangThai == trangThai.Value);
 
-        var data = await query
+        var danhMucs = await query
             .OrderByDescending(d => d.MaDMSP)
-            .Select(d => new DanhMucSPDto
+            .Select(d => new
             {
-                MaDMSP = d.MaDMSP,
-                TenDanhMuc = d.TenDanhMuc,
-                HinhAnh = d.HinhAnh,
+                d.MaDMSP,
+                d.TenDanhMuc,
+                d.HinhAnh,
                 TrangThai = d.TrangThai ?? 1,
                 SoSanPham = d.SanPhams.Count,
             })
             .ToListAsync();
+
+        // Banner của mỗi danh mục — dùng để đọc số thứ tự hiển thị (hậu tố số trong tên
+        // banner) và biết danh mục có banner hay không. MỌI banner cùng 1 danh mục đều mang
+        // CÙNG MỘT TÊN (dạng "<tên danh mục>-<STT>", xem UpdateThuTu/AddBanner) — nên lấy
+        // banner BẤT KỲ (FirstOrDefault, không cần đúng banner mã "-1") là đủ để đọc đúng STT;
+        // xóa banner nào cũng không làm mất STT miễn còn ít nhất 1 banner.
+        var maDMSPs = danhMucs.Select(d => d.MaDMSP).ToList();
+        var allBannersRaw = await _context.DanhMucSPs
+            .AsNoTracking()
+            .Where(b => b.TrangThai == TRANG_THAI_BANNER)
+            .Select(b => new { b.MaDMSP, b.TenDanhMuc })
+            .ToListAsync();
+        var anyBannerByParent = maDMSPs
+            .Select(m => new
+            {
+                MaDMSP = m,
+                Banner = allBannersRaw.FirstOrDefault(b => b.MaDMSP.StartsWith(m + "-", StringComparison.OrdinalIgnoreCase)),
+            })
+            .Where(x => x.Banner != null)
+            .ToDictionary(x => x.MaDMSP, x => x.Banner!.TenDanhMuc);
+        var coBannerParents = new HashSet<string>(anyBannerByParent.Keys);
+
+        var data = danhMucs.Select(d => new DanhMucSPDto
+        {
+            MaDMSP = d.MaDMSP,
+            TenDanhMuc = d.TenDanhMuc,
+            HinhAnh = d.HinhAnh,
+            TrangThai = d.TrangThai,
+            SoSanPham = d.SoSanPham,
+            CoBanner = coBannerParents.Contains(d.MaDMSP),
+            ThuTu = anyBannerByParent.TryGetValue(d.MaDMSP, out var tenBanner) ? ParseSttFromTenBanner(tenBanner) : null,
+        }).ToList();
 
         return Ok(data);
     }
@@ -59,10 +94,16 @@ public class QuanLyDanhMucSPController : ControllerBase
     public async Task<IActionResult> GetById(string id)
     {
         var d = await _context.DanhMucSPs
-            .Include(x => x.SanPhams)
+            .AsNoTracking()
             .FirstOrDefaultAsync(x => x.MaDMSP == id && x.TrangThai != TRANG_THAI_BANNER);
 
         if (d == null) return NotFound(new { message = "Không tìm thấy danh mục." });
+
+        // Banner bất kỳ của danh mục là đủ để đọc STT — xem giải thích ở GetAll phía trên.
+        var anyBanner = await _context.DanhMucSPs
+            .AsNoTracking()
+            .Where(b => b.TrangThai == TRANG_THAI_BANNER && b.MaDMSP.ToUpper().StartsWith(id.ToUpper() + "-"))
+            .FirstOrDefaultAsync();
 
         return Ok(new DanhMucSPDto
         {
@@ -71,7 +112,82 @@ public class QuanLyDanhMucSPController : ControllerBase
             HinhAnh = d.HinhAnh,
             TrangThai = d.TrangThai ?? 1,
             SoSanPham = d.SanPhams.Count,
+            CoBanner = anyBanner != null,
+            ThuTu = anyBanner != null ? ParseSttFromTenBanner(anyBanner.TenDanhMuc) : null,
         });
+    }
+
+    // ══ PATCH SỐ THỨ TỰ ═══════════════════════════════════════════════
+    /// <summary>
+    /// Đổi số thứ tự hiển thị của danh mục ở trang Shop. Số thứ tự này không có cột riêng
+    /// trong DB — nó được lưu bằng cách gắn hậu tố "-<STT>" vào TÊN của MỌI banner thuộc
+    /// danh mục (tất cả banner cùng danh mục luôn mang CÙNG MỘT TÊN). Nhờ vậy dù admin xóa
+    /// banner nào, chỉ cần còn ít nhất 1 banner là vẫn đọc đúng STT — không còn phụ thuộc
+    /// riêng vào banner mã "-1" như trước (đó là lỗ hổng đã sửa). Vì vậy chỉ danh mục đang
+    /// có ít nhất 1 banner mới đổi được số thứ tự.
+    /// </summary>
+    [HttpPatch("{id}/thu-tu")]
+    public async Task<IActionResult> UpdateThuTu(string id, [FromBody] ThuTuRequest req)
+    {
+        var dm = await _context.DanhMucSPs.FindAsync(id);
+        if (dm == null || dm.TrangThai == TRANG_THAI_BANNER)
+            return NotFound(new { message = "Không tìm thấy danh mục." });
+
+        var banners = await _context.DanhMucSPs
+            .Where(b => b.TrangThai == TRANG_THAI_BANNER && b.MaDMSP.ToUpper().StartsWith(id.ToUpper() + "-"))
+            .ToListAsync();
+
+        if (banners.Count == 0)
+            return BadRequest(new { message = "Danh mục chưa có banner nên không thể đổi số thứ tự." });
+
+        // Tách tên gốc từ banner bất kỳ (mọi banner đang cùng tên nên lấy banner nào cũng
+        // ra cùng 1 tên gốc), rồi gắn STT mới, áp dụng ĐỒNG LOẠT cho toàn bộ banner.
+        var tenGoc = TachTenGocBanner(banners[0].TenDanhMuc);
+        var tenMoi = $"{tenGoc}-{req.ThuTu}";
+        foreach (var b in banners)
+            b.TenDanhMuc = tenMoi;
+
+        await _context.SaveChangesAsync();
+        // Đổi thứ tự đọc từ tên banner -> ảnh hưởng cache thứ tự hiển thị ở Shop (sp:danhmucfeed).
+        await _cache.InvalidateAllProductCacheAsync();
+        await _cache.InvalidateAllDanhMucCacheAsync();
+
+        return Ok(new
+        {
+            message = "Cập nhật số thứ tự thành công!",
+            maDMSP = id,
+            thuTu = req.ThuTu,
+            tenBanner = tenMoi,
+            soBannerDaCapNhat = banners.Count,
+        });
+    }
+
+    // Tách "tên gốc" ra khỏi tên banner hiện tại, bỏ hậu tố "-<số>" nếu có.
+    // "Chăm sóc tóc-3" -> "Chăm sóc tóc" ; "Chăm sóc tóc" -> "Chăm sóc tóc"
+    private static string TachTenGocBanner(string? tenBanner)
+    {
+        if (string.IsNullOrWhiteSpace(tenBanner)) return tenBanner ?? "";
+        var lastDash = tenBanner.LastIndexOf('-');
+        if (lastDash > 0 && lastDash < tenBanner.Length - 1
+            && int.TryParse(tenBanner[(lastDash + 1)..], out _))
+        {
+            return tenBanner[..lastDash];
+        }
+        return tenBanner;
+    }
+
+    // Đọc số thứ tự hiển thị từ tên banner đầu tiên (hậu tố "-<số>" ở cuối tên).
+    // Không có hậu tố hợp lệ -> null (chưa set số thứ tự).
+    private static int? ParseSttFromTenBanner(string? tenBanner)
+    {
+        if (string.IsNullOrWhiteSpace(tenBanner)) return null;
+        var lastDash = tenBanner.LastIndexOf('-');
+        if (lastDash > 0 && lastDash < tenBanner.Length - 1
+            && int.TryParse(tenBanner[(lastDash + 1)..], out var stt))
+        {
+            return stt;
+        }
+        return null;
     }
 
     // ══ CREATE ════════════════════════════════════════════════════════
@@ -115,6 +231,8 @@ public class QuanLyDanhMucSPController : ControllerBase
 
         _context.DanhMucSPs.Add(dm);
         await _context.SaveChangesAsync();
+        await _cache.InvalidateAllProductCacheAsync();
+        await _cache.InvalidateAllDanhMucCacheAsync();
 
         return CreatedAtAction(nameof(GetById), new { id = dm.MaDMSP }, new DanhMucSPDto
         {
@@ -123,6 +241,8 @@ public class QuanLyDanhMucSPController : ControllerBase
             HinhAnh = dm.HinhAnh,
             TrangThai = dm.TrangThai ?? 1,
             SoSanPham = 0,
+            CoBanner = false,
+            ThuTu = null,
         });
     }
 
@@ -176,6 +296,8 @@ public class QuanLyDanhMucSPController : ControllerBase
         }
 
         await _context.SaveChangesAsync();
+        await _cache.InvalidateAllProductCacheAsync();
+        await _cache.InvalidateAllDanhMucCacheAsync();
         return NoContent();
     }
 
@@ -194,6 +316,8 @@ public class QuanLyDanhMucSPController : ControllerBase
         }
 
         await _context.SaveChangesAsync();
+        await _cache.InvalidateAllProductCacheAsync();
+        await _cache.InvalidateAllDanhMucCacheAsync();
         return NoContent();
     }
 
@@ -229,6 +353,8 @@ public class QuanLyDanhMucSPController : ControllerBase
 
         _context.DanhMucSPs.Remove(dm);
         await _context.SaveChangesAsync();
+        await _cache.InvalidateAllProductCacheAsync();
+        await _cache.InvalidateAllDanhMucCacheAsync();
         return NoContent();
     }
 
@@ -273,7 +399,7 @@ public class QuanLyDanhMucSPController : ControllerBase
     // POST: api/QuanLyDanhMucSP/banner
     // Body: multipart/form-data — MaDanhMucCha (bắt buộc), TieuDe (tùy chọn), File (bắt buộc)
     [HttpPost("banner")]
-    public async Task<IActionResult> AddBanner([FromForm] string maDanhMucCha, [FromForm] string? tieuDe, IFormFile file)
+    public async Task<IActionResult> AddBanner([FromForm] string maDanhMucCha, IFormFile file)
     {
         if (string.IsNullOrWhiteSpace(maDanhMucCha))
             return BadRequest(new { message = "Vui lòng chọn danh mục cha." });
@@ -292,7 +418,6 @@ public class QuanLyDanhMucSPController : ControllerBase
         var prefix = maDanhMucCha + "-";
         var existingBanners = await _context.DanhMucSPs
             .Where(d => d.TrangThai == TRANG_THAI_BANNER && d.MaDMSP.StartsWith(prefix))
-            .Select(d => d.MaDMSP)
             .ToListAsync();
 
         int nextStt = 1;
@@ -301,7 +426,7 @@ public class QuanLyDanhMucSPController : ControllerBase
             nextStt = existingBanners
                 .Select(m =>
                 {
-                    var suffix = m.Substring(prefix.Length);
+                    var suffix = m.MaDMSP.Substring(prefix.Length);
                     return int.TryParse(suffix, out var n) ? n : 0;
                 })
                 .DefaultIfEmpty(0)
@@ -310,6 +435,13 @@ public class QuanLyDanhMucSPController : ControllerBase
 
         var maBanner = $"{maDanhMucCha}-{nextStt}";
 
+        // Tên banner KHÔNG còn nhận tiêu đề tùy ý nữa — mọi banner cùng danh mục phải luôn
+        // mang cùng 1 tên (dạng "<tên danh mục>-<STT hiển thị>") để đọc đúng số thứ tự dù
+        // banner nào bị xóa. Nếu danh mục đã có banner khác, LẤY NGUYÊN tên đang dùng (giữ
+        // đúng STT hiện tại); nếu đây là banner đầu tiên của danh mục, dùng tên gốc danh mục
+        // (chưa có hậu tố STT — admin cần vào "Đổi số thứ tự" để gắn STT sau).
+        var tenBannerDongBo = existingBanners.FirstOrDefault()?.TenDanhMuc ?? danhMucChaEntity.TenDanhMuc;
+
         var result = await SaveImageAsync(file, "danhmuc-banner");
         if (result.Error != null)
             return BadRequest(new { message = result.Error });
@@ -317,13 +449,17 @@ public class QuanLyDanhMucSPController : ControllerBase
         var banner = new DanhMucSP
         {
             MaDMSP = maBanner,
-            TenDanhMuc = string.IsNullOrWhiteSpace(tieuDe) ? danhMucChaEntity.TenDanhMuc : tieuDe.Trim(),
+            TenDanhMuc = tenBannerDongBo,
             HinhAnh = result.Path,
             TrangThai = TRANG_THAI_BANNER,
         };
 
         _context.DanhMucSPs.Add(banner);
         await _context.SaveChangesAsync();
+        // Banner mang cả nội dung hiển thị lẫn số thứ tự -> ảnh hưởng sp:danhmucfeed (Shop)
+        // và dm:...:san-pham (nếu sau này có field liên quan tới banner).
+        await _cache.InvalidateAllProductCacheAsync();
+        await _cache.InvalidateAllDanhMucCacheAsync();
 
         return Ok(new
         {
@@ -335,18 +471,18 @@ public class QuanLyDanhMucSPController : ControllerBase
     }
 
     // PUT: api/QuanLyDanhMucSP/banner/{maBanner}
-    // Body: multipart/form-data — TieuDe (tùy chọn), File (tùy chọn)
+    // Body: multipart/form-data — File (bắt buộc, chỉ sửa được ảnh). KHÔNG còn nhận TieuDe:
+    // tên banner giờ chỉ mã hóa số thứ tự và phải đồng bộ giữa mọi banner cùng danh mục —
+    // sửa tên phải đi qua "Đổi số thứ tự" (UpdateThuTu) để áp dụng đồng loạt, tránh 1 banner
+    // lẻ bị đổi tên làm lệch khỏi các banner còn lại trong cùng danh mục.
     [HttpPut("banner/{maBanner:regex(^[[A-Za-z0-9]]+-[[0-9]]+$)}")]
-    public async Task<IActionResult> UpdateBanner(string maBanner, [FromForm] string? tieuDe, IFormFile? file)
+    public async Task<IActionResult> UpdateBanner(string maBanner, IFormFile? file)
     {
         var banner = await _context.DanhMucSPs
             .FirstOrDefaultAsync(d => d.MaDMSP == maBanner && d.TrangThai == TRANG_THAI_BANNER);
 
         if (banner == null)
             return NotFound(new { message = "Không tìm thấy banner." });
-
-        if (!string.IsNullOrWhiteSpace(tieuDe))
-            banner.TenDanhMuc = tieuDe.Trim();
 
         if (file != null)
         {
@@ -359,6 +495,8 @@ public class QuanLyDanhMucSPController : ControllerBase
         }
 
         await _context.SaveChangesAsync();
+        await _cache.InvalidateAllProductCacheAsync();
+        await _cache.InvalidateAllDanhMucCacheAsync();
 
         return Ok(new
         {
@@ -383,6 +521,8 @@ public class QuanLyDanhMucSPController : ControllerBase
 
         _context.DanhMucSPs.Remove(banner);
         await _context.SaveChangesAsync();
+        await _cache.InvalidateAllProductCacheAsync();
+        await _cache.InvalidateAllDanhMucCacheAsync();
 
         return Ok(new { message = "Đã xóa banner!" });
     }
@@ -477,6 +617,17 @@ public class DanhMucSPDto
     public string? HinhAnh { get; set; }
     public int TrangThai { get; set; }
     public int SoSanPham { get; set; }
+    // Danh mục có ít nhất 1 banner hay không — chỉ khi true mới cho phép đổi ThuTu.
+    public bool CoBanner { get; set; }
+    // Số thứ tự hiển thị ở trang Shop, đọc từ hậu tố "-<số>" trong tên banner đầu tiên.
+    // null = danh mục chưa có banner, hoặc banner đầu tiên chưa được đặt số thứ tự.
+    public int? ThuTu { get; set; }
+}
+
+public class ThuTuRequest
+{
+    [Range(1, 999, ErrorMessage = "Số thứ tự không hợp lệ.")]
+    public int ThuTu { get; set; }
 }
 
 public class CreateDanhMucSPRequest

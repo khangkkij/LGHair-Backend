@@ -1,4 +1,4 @@
-﻿using System.IdentityModel.Tokens.Jwt;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Identity.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.IdentityModel.Tokens;
 using MinhTamHair.KhanchHang.Models;
 using MinhTamHair.Models;
@@ -29,13 +30,15 @@ namespace MinhTamHair.KhanchHang.Controllers
         private readonly MinhTamHairContext _context;
         private readonly IConfiguration _configuration;
         private readonly IMemoryCache _cache;
+        private readonly IDistributedCache _distributedCache;
         private readonly IEmailService _emailService;
 
-        public AccountController(MinhTamHairContext context, IConfiguration configuration, IMemoryCache cache, IEmailService emailService)
+        public AccountController(MinhTamHairContext context, IConfiguration configuration, IMemoryCache cache, IDistributedCache distributedCache, IEmailService emailService)
         {
             _context = context;
             _configuration = configuration;
             _cache = cache;
+            _distributedCache = distributedCache;
             _emailService = emailService;
         }
 
@@ -71,7 +74,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 
 			if (khachHang.TrangThai == 0)
 			{
-				return BadRequest(new { success = false, message = "Tài khoản đã bị khóa. Vui lòng đăng nhập lại hoặc liên hệ hỗ trợ." });
+				return Unauthorized(new { success = false, isLocked = true, message = "Tài khoản của bạn đã bị khóa. Vui lòng liên hệ quản trị viên." });
 			}
 
             // Cập nhật lại Rank dựa trên điểm hiện tại trước khi trả về cho khách
@@ -142,16 +145,20 @@ namespace MinhTamHair.KhanchHang.Controllers
             {
                 new Claim(JwtRegisteredClaimNames.Sub, kh.MaKh),
                 new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+                new Claim(JwtRegisteredClaimNames.Iat, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
                 new Claim(ClaimTypes.NameIdentifier, kh.MaKh),
                 new Claim(ClaimTypes.Name, kh.HoTen ?? ""),
                 new Claim(ClaimTypes.Email, kh.Email ?? ""),
                 new Claim(ClaimTypes.Role, "KhachHang") // Phân quyền là Khách hàng
             };
 
+            var nowVn = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
             var tokenDescriptor = new SecurityTokenDescriptor
             {
                 Subject = new ClaimsIdentity(claims),
-                Expires = DateTime.UtcNow.AddMinutes(30), // Access token sống 30 phút
+                IssuedAt = nowVn,
+                NotBefore = nowVn,
+                Expires = nowVn.AddMinutes(30), // Access token sống 30 phút
                 Issuer = jwtSettings["Issuer"],
                 Audience = jwtSettings["Audience"],
                 SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature)
@@ -285,10 +292,16 @@ namespace MinhTamHair.KhanchHang.Controllers
         }
 
         [HttpPost("logout")]
-        public async Task<IActionResult> Logout()
+        public async Task<IActionResult> Logout([FromBody] RefreshTokenRequest? request = null)
         {
-            // 1. Tìm Refresh Token từ Cookie thay vì từ Body
-            if (Request.Cookies.TryGetValue("refreshToken", out string refreshToken))
+            // 1. Tìm Refresh Token từ Body hoặc Cookie
+            string? refreshToken = request?.RefreshToken;
+            if (string.IsNullOrEmpty(refreshToken))
+            {
+                Request.Cookies.TryGetValue("refreshToken", out refreshToken);
+            }
+
+            if (!string.IsNullOrEmpty(refreshToken))
             {
                 var refreshTokenEntry = await _context.Refreshtokens
                     .FirstOrDefaultAsync(rt => rt.Token == refreshToken);
@@ -316,7 +329,22 @@ namespace MinhTamHair.KhanchHang.Controllers
             var maKh = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
             if (string.IsNullOrEmpty(maKh)) return Unauthorized();
 
-            // Tìm và xóa TẤT CẢ Refresh Token của User này
+            // 1. Thu hồi JWT Token ngay lập tức bằng cách ghi nhận thời điểm hủy vào Cache
+            var currentUnixTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            try
+            {
+                await _distributedCache.SetStringAsync($"UserRevokedAt_{maKh}", currentUnixTime.ToString(), new DistributedCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(24)
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[CACHE SET WARNING] {ex.Message}");
+            }
+            _cache.Set($"UserRevokedAt_{maKh}", currentUnixTime, TimeSpan.FromHours(24));
+
+            // 2. Tìm và xóa TẤT CẢ Refresh Token của User này
             var allRefreshTokens = await _context.Refreshtokens
                 .Where(rt => rt.UserId == maKh)
                 .ToListAsync();
@@ -327,12 +355,12 @@ namespace MinhTamHair.KhanchHang.Controllers
                 await _context.SaveChangesAsync();
             }
 
-            // Xóa Cookie ở máy hiện tại
+            // 3. Xóa Cookie ở máy hiện tại
             var cookieOptions = new CookieOptions { Secure = true, SameSite = SameSiteMode.None };
             Response.Cookies.Delete("accessToken", cookieOptions);
             Response.Cookies.Delete("refreshToken", cookieOptions);
 
-            return Ok(new { success = true, message = "Đã đăng xuất khỏi tất cả thiết bị." });
+            return Ok(new { success = true, message = "Đã đăng xuất và hủy toàn bộ phiên làm việc trên mọi thiết bị." });
         }
 
         [HttpPost("google-login")]
@@ -355,11 +383,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                 if (khachHang != null && khachHang.TrangThai == 0)
                 {
-                    if (khachHang.MaKh != null && khachHang.MaKh.StartsWith("GG", StringComparison.OrdinalIgnoreCase))
-                    {
-                        return BadRequest(new { success = false, message = "Tài khoản đã bị khóa. Vui lòng đăng nhập lại hoặc liên hệ hỗ trợ." });
-                    }
-                    return BadRequest(new { success = false, message = "Tài khoản Google này liên kết với một tài khoản đã bị khóa. Không thể đăng nhập." });
+                    return Unauthorized(new { success = false, isLocked = true, message = "Tài khoản của bạn đã bị khóa. Vui lòng liên hệ quản trị viên." });
                 }
 
                 // 3. Nếu chưa có, tạo tài khoản mới tự động
@@ -616,6 +640,11 @@ namespace MinhTamHair.KhanchHang.Controllers
             var khachHang = await _context.Khachhangs.FirstOrDefaultAsync(kh => kh.MaKh == maKh);
             if (khachHang == null) return NotFound();
 
+            if (khachHang.TrangThai == 0)
+            {
+                return Unauthorized(new { success = false, isLocked = true, message = "Tài khoản của bạn đã bị khóa. Vui lòng liên hệ quản trị viên." });
+            }
+
             // Tính lại Rank mới nhất
             khachHang.MaRank = await GetRankByPointsAsync(khachHang.DiemTichLuy);
             await _context.SaveChangesAsync();
@@ -654,7 +683,7 @@ namespace MinhTamHair.KhanchHang.Controllers
         }
 
         [HttpPost("refresh-token")]
-        public async Task<IActionResult> RefreshToken([FromBody] RefreshTokenRequest request)
+        public async Task<IActionResult> RefreshToken([FromBody] RefreshTokenRequest? request = null)
         {
             // 1. Lấy Refresh Token từ Body (ưu tiên cho Mobile App)
             string oldRefreshToken = request?.RefreshToken;
@@ -673,7 +702,7 @@ namespace MinhTamHair.KhanchHang.Controllers
             // 2. Tìm trong DB xem Token này có hợp lệ không
             var rtRecord = await _context.Refreshtokens.FirstOrDefaultAsync(rt => rt.Token == oldRefreshToken);
 
-            if (rtRecord == null || rtRecord.ExpiredAt <= DateTime.UtcNow)
+            if (rtRecord == null || rtRecord.ExpiredAt <= MinhTamHair.Services.TimeHelper.VnTimeHelper.Now())
             {
                 // Token lởm hoặc hết hạn 7 ngày -> Xóa cookie luôn
                 var cookieOptions = new CookieOptions { Secure = true, SameSite = SameSiteMode.None };
@@ -681,7 +710,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 Response.Cookies.Delete("refreshToken", cookieOptions);
 
                 // Nếu token hết hạn, xóa nó khỏi DB
-                if (rtRecord != null && rtRecord.ExpiredAt <= DateTime.UtcNow)
+                if (rtRecord != null && rtRecord.ExpiredAt <= MinhTamHair.Services.TimeHelper.VnTimeHelper.Now())
                 {
                     _context.Refreshtokens.Remove(rtRecord);
                     await _context.SaveChangesAsync();
@@ -692,7 +721,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             // Dọn dẹp các token rác khác của khách hàng này
             var expiredTokens = await _context.Refreshtokens
-                .Where(rt => rt.UserId == rtRecord.UserId && rt.ExpiredAt <= DateTime.UtcNow && rt.Id != rtRecord.Id)
+                .Where(rt => rt.UserId == rtRecord.UserId && rt.ExpiredAt <= MinhTamHair.Services.TimeHelper.VnTimeHelper.Now() && rt.Id != rtRecord.Id)
                 .ToListAsync();
             if (expiredTokens.Any())
             {
@@ -706,7 +735,10 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             if (khachHang.TrangThai == 0)
             {
-                return Unauthorized(new { message = "Tài khoản đã bị khóa. Vui lòng đăng nhập lại hoặc liên hệ hỗ trợ." });
+                var cookieOptions = new CookieOptions { Secure = true, SameSite = SameSiteMode.None };
+                Response.Cookies.Delete("accessToken", cookieOptions);
+                Response.Cookies.Delete("refreshToken", cookieOptions);
+                return Unauthorized(new { success = false, isLocked = true, message = "Tài khoản của bạn đã bị khóa. Vui lòng liên hệ quản trị viên." });
             }
 
             // 4. Cấp bộ Token mới
@@ -715,8 +747,8 @@ namespace MinhTamHair.KhanchHang.Controllers
 
             // 5. Cập nhật vào Database
             rtRecord.Token = newRefreshTokenString;
-            rtRecord.IssuedAt = DateTime.UtcNow;
-            rtRecord.ExpiredAt = DateTime.UtcNow.AddDays(7);
+            rtRecord.IssuedAt = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
+            rtRecord.ExpiredAt = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now().AddDays(7);
             await _context.SaveChangesAsync();
 
             // 6. Gắn lại vào Cookie (cho Web)
@@ -737,6 +769,16 @@ namespace MinhTamHair.KhanchHang.Controllers
         [Authorize]
         public async Task<IActionResult> VerifySession()
         {
+            var maKh = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            if (!string.IsNullOrEmpty(maKh))
+            {
+                var kh = await _context.Khachhangs.AsNoTracking().FirstOrDefaultAsync(k => k.MaKh == maKh);
+                if (kh != null && kh.TrangThai == 0)
+                {
+                    return Unauthorized(new { success = false, isLocked = true, message = "Tài khoản của bạn đã bị khóa. Vui lòng liên hệ quản trị viên." });
+                }
+            }
+
             // Lấy Refresh Token từ Cookie của máy đang gọi API này
             if (Request.Cookies.TryGetValue("refreshToken", out string refreshToken))
             {
@@ -748,7 +790,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                 }
                 return Ok(new { success = true, message = "Session is valid" });
             }
-            return Unauthorized(new { message = "Không tìm thấy token." });
+            return Ok(new { success = true, message = "Session is valid" });
         }
     }
 }

@@ -22,7 +22,12 @@ namespace MinhTamHair.KhanchHang.Controllers
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly IDistributedCache _cache;
 
-        public ThanhToanTongController(MinhTamHairContext context, IConfiguration configuration, IQrEmailService qrEmailService, IServiceScopeFactory scopeFactory, IDistributedCache cache)
+        public ThanhToanTongController(
+            MinhTamHairContext context,
+            IConfiguration configuration,
+            IQrEmailService qrEmailService,
+            IServiceScopeFactory scopeFactory,
+            IDistributedCache cache)
         {
             _context = context;
             _configuration = configuration;
@@ -48,6 +53,24 @@ namespace MinhTamHair.KhanchHang.Controllers
             try
             {
                 var now = VnTimeHelper.Now();
+                var viCulture = System.Globalization.CultureInfo.GetCultureInfo("vi-VN");
+
+                var hotServiceIds = (await _context.ChitietLichdats
+                    .AsNoTracking()
+                    .Where(x => x.MaDv != null)
+                    .Join(
+                        _context.Dichvus.AsNoTracking(),
+                        ct => ct.MaDv,
+                        dv => dv.MaDv,
+                        (ct, dv) => new { ct.MaDv, dv.MaDm }
+                    )
+                    .GroupBy(x => new { x.MaDv, x.MaDm })
+                    .Select(g => new { g.Key.MaDv, g.Key.MaDm, SoLuong = g.Count() })
+                    .ToListAsync())
+                    .GroupBy(x => x.MaDm)
+                    .SelectMany(g => g.OrderByDescending(x => x.SoLuong).Take(3))
+                    .Select(x => x.MaDv)
+                    .ToHashSet();
 
                 var rawServices = await _context.Dichvus
                     .AsNoTracking()
@@ -84,11 +107,15 @@ namespace MinhTamHair.KhanchHang.Controllers
                         originalPrice = s.originalPrice,
                         duration = s.duration,
                         hinhAnh = s.hinhAnh,
-                        icon = s.hinhAnh
+                        icon = s.hinhAnh,
+                        isHot = hotServiceIds.Contains(s.id)
                     };
-                }).ToList();
+                })
+                .OrderByDescending(s => hotServiceIds.Contains(s.id))
+                .ThenBy(s => s.name, StringComparer.Create(viCulture, true))
+                .ToList();
 
-                var combos = await _context.Combos
+                var rawCombos = await _context.Combos
                     .AsNoTracking()
                     .Where(c => c.TrangThai == 1)
                     .Select(c => new
@@ -102,6 +129,10 @@ namespace MinhTamHair.KhanchHang.Controllers
                         icon = "fas fa-layer-group",
                     })
                     .ToListAsync();
+
+                var combos = rawCombos
+                    .OrderBy(c => c.name, StringComparer.Create(viCulture, true))
+                    .ToList();
 
                 return Ok(new { success = true, services = services, combos = combos });
             }
@@ -156,7 +187,6 @@ namespace MinhTamHair.KhanchHang.Controllers
         [HttpGet("get-my-vouchers/{maKH}")]
         public async Task<IActionResult> GetMyVouchers(string maKH, [FromQuery] decimal subTotal, [FromQuery] string? itemIds)
         {
-
             var kh = await _context.Khachhangs
                 .Include(k => k.MaCodes)
                 .FirstOrDefaultAsync(k => k.MaKh == maKH);
@@ -234,14 +264,20 @@ namespace MinhTamHair.KhanchHang.Controllers
             return Ok(result);
         }
 
-        // ĐÃ VÁ: Cập nhật hàm GetAvailableStylists giống bản chuẩn DatDichVu
         [HttpPost("get-available-stylists")]
         public async Task<IActionResult> GetAvailableStylists([FromBody] ThanhToanCheckStylistRequest request)
         {
             try
             {
-                DateOnly ngayHen = DateOnly.Parse(request.NgayHen);
-                TimeOnly start = TimeOnly.Parse(request.GioBatDau);
+                if (!DateOnly.TryParse(request.NgayHen, out DateOnly ngayHen))
+                {
+                    return BadRequest(new { message = "Ngày hẹn không hợp lệ." });
+                }
+                if (!TimeOnly.TryParse(request.GioBatDau, out TimeOnly start))
+                {
+                    return BadRequest(new { message = "Giờ bắt đầu không hợp lệ." });
+                }
+
                 TimeOnly end = start.AddMinutes(request.TongThoiGian);
 
                 string reqMaKh = (request.MaKh ?? "").Trim();
@@ -260,6 +296,11 @@ namespace MinhTamHair.KhanchHang.Controllers
                         .ToListAsync();
                     foreach (var kId in khs) myCustomerIds.Add(kId);
                 }
+
+                var myUnpaidBookingIds = await _context.HoaDons
+                    .Where(h => myCustomerIds.Contains(h.MaKh) && h.TrangThai == 0)
+                    .Select(h => h.MaLd)
+                    .ToListAsync();
 
                 var favoriteStylistIds = new List<string>();
                 if (!string.IsNullOrEmpty(reqMaKh) && reqMaKh != "GUEST")
@@ -285,17 +326,19 @@ namespace MinhTamHair.KhanchHang.Controllers
                                 l.MaNvNavigation.TrangThai == 1)
                     .ToListAsync();
 
+                // DÙNG CHUẨN ĐIỀU KIỆN != 0
                 var cacLichBan = await _context.ChitietLichdats
                     .AsNoTracking()
                     .Where(ct => ct.MaLdNavigation.NgayHen == ngayHen
-                              && (ct.MaLdNavigation.TrangThai == 1 || ct.MaLdNavigation.TrangThai == 2 || ct.MaLdNavigation.TrangThai == 3))
+                              && ct.MaLdNavigation.TrangThai != 0)
                     .Select(ct => new
                     {
                         MaNv = (ct.MaNv ?? "").Trim(),
                         GioBatDau = ct.MaLdNavigation.GioBatDau,
                         GioKetThuc = ct.MaLdNavigation.GioKetThuc,
                         TrangThai = ct.MaLdNavigation.TrangThai,
-                        MaKh = (ct.MaLdNavigation.MaKh ?? "").Trim()
+                        MaKh = (ct.MaLdNavigation.MaKh ?? "").Trim(),
+                        MaLd = ct.MaLd
                     })
                     .Distinct()
                     .ToListAsync();
@@ -327,7 +370,7 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                     var cacLichCuaTho = cacLichBan
                         .Where(b => b.MaNv.Equals(nvId, StringComparison.OrdinalIgnoreCase)
-                                 && !(b.TrangThai == 3 && myCustomerIds.Contains(b.MaKh)))
+                                 && !((b.TrangThai != 0) && myUnpaidBookingIds.Contains(b.MaLd))) // Đã sửa theo TrangThai != 0
                         .OrderBy(b => b.GioBatDau)
                         .ToList();
 
@@ -364,11 +407,32 @@ namespace MinhTamHair.KhanchHang.Controllers
                             lichTrinhChiTiet.Add($"Lịch trống: {currentTime.ToString(@"HH\:mm")} - {shiftEnd.ToString(@"HH\:mm")}");
                         }
 
-                        var lichKhet = cacLichCuaTho.FirstOrDefault(b => b.GioBatDau < end && b.GioKetThuc > start);
-                        if (lichKhet != null)
+                        const int MAX_CAPACITY = 2;
+                        int maxActiveInInterval = 0;
+                        bool isOverCapacity = false;
+
+                        for (TimeOnly t = start; t < end; t = t.AddMinutes(15))
+                        {
+                            int activeAtT = cacLichCuaTho.Count(b => b.GioBatDau.HasValue && b.GioKetThuc.HasValue && b.GioBatDau.Value <= t && t < b.GioKetThuc.Value);
+                            if (activeAtT > maxActiveInInterval)
+                            {
+                                maxActiveInInterval = activeAtT;
+                            }
+                            if (activeAtT >= MAX_CAPACITY)
+                            {
+                                isOverCapacity = true;
+                                break;
+                            }
+                        }
+
+                        if (isOverCapacity)
                         {
                             isAvailable = false;
-                            reason = $"Bận khách ({lichKhet.GioBatDau?.ToString(@"HH\:mm")} - {lichKhet.GioKetThuc?.ToString(@"HH\:mm")})";
+                            reason = $"Đã kín chỗ ({maxActiveInInterval}/{MAX_CAPACITY} khách)";
+                        }
+                        else if (maxActiveInInterval > 0)
+                        {
+                            reason = $"Đang nhận ({maxActiveInInterval}/{MAX_CAPACITY} khách)";
                         }
                     }
 
@@ -461,7 +525,6 @@ namespace MinhTamHair.KhanchHang.Controllers
             });
         }
 
-        // ĐÃ VÁ: Lắp Mutex chống đụng độ và tự dọn đơn rác "chính chủ"
         [HttpPost("submit-checkout")]
         public async Task<IActionResult> SubmitCheckout([FromBody] CheckoutSummaryRequest req)
         {
@@ -474,7 +537,10 @@ namespace MinhTamHair.KhanchHang.Controllers
                 using var transaction = await _context.Database.BeginTransactionAsync();
                 try
                 {
-                    string maHd = "TH" + VnTimeHelper.Now().ToString("HHmmssff");
+                    var dbNow = VnTimeHelper.Now();
+
+                    // CHUẨN 10 KÝ TỰ MÃ HÓA ĐƠN VÀ MÃ LỊCH ĐẶT
+                    string maHd = "TH" + dbNow.ToString("HHmmssff");
 
                     if (req.Products != null && req.Products.Any())
                     {
@@ -505,11 +571,9 @@ namespace MinhTamHair.KhanchHang.Controllers
                         if (!string.IsNullOrEmpty(req.Phone))
                         {
                             var existingKhach = await _context.Khachhangs.FirstOrDefaultAsync(x => x.Sdt == req.Phone);
-                            if (existingKhach != null) 
-                            { 
-                                safeKhachHang = existingKhach.MaKh; 
-                                
-                                // ĐÃ VÁ: Cập nhật email nếu khách cũ nhập email mới để có thể gửi mã QR
+                            if (existingKhach != null)
+                            {
+                                safeKhachHang = existingKhach.MaKh;
                                 if (!string.IsNullOrWhiteSpace(req.Email) && existingKhach.Email != req.Email)
                                 {
                                     existingKhach.Email = req.Email;
@@ -519,7 +583,8 @@ namespace MinhTamHair.KhanchHang.Controllers
                             else
                             {
                                 string prefixSdt = req.Phone.Length >= 4 ? req.Phone.Substring(0, 4) : "0000";
-                                safeKhachHang = "KH" + prefixSdt + new Random().Next(100, 999).ToString();
+                                // CHUẨN 10 KÝ TỰ MÃ KHÁCH HÀNG (KH + 4 số + 4 random = 10 chars)
+                                safeKhachHang = "KH" + prefixSdt + Guid.NewGuid().ToString("N").Substring(0, 4).ToUpper();
                                 _context.Khachhangs.Add(new Khachhang
                                 {
                                     MaKh = safeKhachHang,
@@ -527,7 +592,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                                     Sdt = req.Phone,
                                     Email = req.Email ?? "",
                                     TrangThai = 1,
-                                    NgayTao = VnTimeHelper.Now(),
+                                    NgayTao = dbNow,
                                     DiemTichLuy = 0,
                                     MaRank = "RANK01"
                                 });
@@ -537,38 +602,113 @@ namespace MinhTamHair.KhanchHang.Controllers
                         else { safeKhachHang = null; }
                     }
 
-                    // TÍNH TOÁN CÁC CỜ PHƯƠNG THỨC THANH TOÁN TRƯỚC ĐỂ LƯU LỊCH ĐẶT CHUẨN XÁC
-                    bool coDichVu = req.Services != null && req.Services.Any();
-                    bool coSanPham = req.Products != null && req.Products.Any();
+                    var validServices = req.Services?.Where(s => !string.IsNullOrWhiteSpace(s.Id)).ToList() ?? new List<CheckoutServiceItemDto>();
+                    var validProducts = req.Products?.Where(p => !string.IsNullOrWhiteSpace(p.Id) && p.SoLuong > 0).ToList() ?? new List<ProductItemDto2>();
+
+                    bool coDichVu = validServices.Any();
+                    bool coSanPham = validProducts.Any();
+
+                    if (!coDichVu && !coSanPham)
+                    {
+                        await transaction.RollbackAsync();
+                        return BadRequest(new { success = false, message = "Giỏ hàng rỗng hoặc dữ liệu không hợp lệ!" });
+                    }
+
                     string phuongThucDv = coDichVu ? (req.ServicePaymentMethod ?? "COD") : "COD";
-                    bool isOnlineService = coDichVu && (phuongThucDv.ToLower() == "vnpay" || phuongThucDv.ToLower() == "momo");
-                    int trangThaiLichDat = isOnlineService ? 3 : (req.PaymentMode == "10" ? 1 : 2);
+                    string phuongThucSp = coSanPham ? (req.ProductPaymentMethod ?? "COD") : "COD";
+
+                    bool dvLaOnline = coDichVu && (string.Equals(phuongThucDv, "vnpay", StringComparison.OrdinalIgnoreCase) || string.Equals(phuongThucDv, "momo", StringComparison.OrdinalIgnoreCase));
+                    bool spLaOnline = coSanPham && string.Equals(req.ReceiveType, "home", StringComparison.OrdinalIgnoreCase) && (string.Equals(phuongThucSp, "vnpay", StringComparison.OrdinalIgnoreCase) || string.Equals(phuongThucSp, "momo", StringComparison.OrdinalIgnoreCase));
+                    bool isOnlinePayment = dvLaOnline || spLaOnline;
+
+                    string phuongThuc = dvLaOnline ? phuongThucDv : (spLaOnline ? phuongThucSp : (coDichVu ? phuongThucDv : phuongThucSp));
+
+                    decimal serviceSubTotal = 0;
+                    int tongThoiGianPhut = 0;
+
+                    if (coDichVu)
+                    {
+                        foreach (var sv in validServices)
+                        {
+                            if (sv.Id.StartsWith("DV"))
+                            {
+                                var dbDv = await _context.Dichvus.Include(d => d.ChitietFlashsales).ThenInclude(f => f.MaFlNavigation)
+                                    .FirstOrDefaultAsync(d => d.MaDv == sv.Id && d.TrangThai == 1);
+                                if (dbDv == null) { await transaction.RollbackAsync(); return BadRequest(new { success = false, message = $"Dịch vụ {sv.Id} không tồn tại hoặc đã ngưng hoạt động." }); }
+
+                                decimal price = (decimal)(dbDv.Gia ?? 0);
+                                var validFlashSale = dbDv.ChitietFlashsales.FirstOrDefault(fs => fs.MaFlNavigation.TrangThai == 1 && fs.MaFlNavigation.NgayBatDau <= dbNow && fs.MaFlNavigation.NgayKetThuc >= dbNow);
+                                if (validFlashSale != null && validFlashSale.PhanTramGiam > 0)
+                                {
+                                    price = price - (price * (decimal)validFlashSale.PhanTramGiam / 100m);
+                                }
+                                sv.Price = price;
+                                sv.Duration = dbDv.ThoiGianLam ?? 30;
+                                serviceSubTotal += price;
+                                tongThoiGianPhut += sv.Duration;
+                            }
+                            else if (sv.Id.StartsWith("CB"))
+                            {
+                                var dbCb = await _context.Combos.Include(c => c.Combo_DichVus).ThenInclude(cd => cd.DichVu)
+                                    .FirstOrDefaultAsync(c => c.MaCb == sv.Id && c.TrangThai == 1);
+                                if (dbCb == null) { await transaction.RollbackAsync(); return BadRequest(new { success = false, message = $"Combo {sv.Id} không tồn tại hoặc đã ngưng hoạt động." }); }
+
+                                decimal price = (decimal)(dbCb.Gia ?? 0);
+                                sv.Price = price;
+                                sv.Duration = dbCb.Combo_DichVus.Sum(cd => cd.DichVu.ThoiGianLam ?? 30);
+                                serviceSubTotal += price;
+                                tongThoiGianPhut += sv.Duration;
+                            }
+                        }
+                    }
+
+                    decimal productSubTotal = 0;
+                    if (coSanPham)
+                    {
+                        foreach (var p in validProducts)
+                        {
+                            var dbBt = await _context.BienTheSanphams.FirstOrDefaultAsync(b => b.MaBienThe == p.Id && b.TrangThai == 1);
+                            if (dbBt == null) { await transaction.RollbackAsync(); return BadRequest(new { success = false, message = $"Sản phẩm {p.Id} không tồn tại hoặc đã ngưng hoạt động." }); }
+                            if (dbBt.SoLuongTon < p.SoLuong) { await transaction.RollbackAsync(); return BadRequest(new { success = false, message = $"Sản phẩm {dbBt.TenBienThe} không đủ số lượng trong kho." }); }
+
+                            p.Gia = (decimal)(dbBt.GiaBan ?? 0);
+                            productSubTotal += p.Gia * p.SoLuong;
+                        }
+                    }
+
+                    decimal shippingFee = 0;
+                    if (coSanPham && string.Equals(req.ReceiveType, "home", StringComparison.OrdinalIgnoreCase))
+                    {
+                        shippingFee = req.ShippingFee;
+                    }
+
+                    decimal totalBeforeDiscount = serviceSubTotal + productSubTotal + shippingFee;
 
                     string maLd = null;
                     Lichdat? lichDatMoi = null;
                     if (coDichVu)
                     {
-                        maLd = VnTimeHelper.Now().ToString("yyHHmmssff");
-                        int tongThoiGianPhut = req.Services.Sum(s => s.Duration);
-                        decimal serviceSubTotalBanDau = req.Services.Sum(s => s.Price);
+                        // CHUẨN 10 KÝ TỰ MÃ LỊCH ĐẶT
+                        maLd = dbNow.ToString("yyHHmmssff");
 
-                        var localTime = req.BookingDate.HasValue ? req.BookingDate.Value.ToUniversalTime().AddHours(7) : VnTimeHelper.Now();
+                        var reqBookingDate = req.BookingDate ?? dbNow;
+                        var localTime = reqBookingDate.Kind == DateTimeKind.Utc ? reqBookingDate.ToLocalTime() : reqBookingDate;
+
                         var requestedDate = DateOnly.FromDateTime(localTime);
                         var requestedStart = TimeOnly.FromDateTime(localTime);
                         var requestedEnd = requestedStart.AddMinutes(tongThoiGianPhut);
 
-                        // ---> XIN KHÓA MUTEX <---
                         string lockResource = string.IsNullOrEmpty(req.StylistId)
                             ? $"Booking_Salon_{requestedDate.ToString("yyyyMMdd")}"
                             : $"Booking_Stylist_{req.StylistId}_{requestedDate.ToString("yyyyMMdd")}";
+
                         await _context.Database.ExecuteSqlInterpolatedAsync($"EXEC sp_getapplock @Resource = {lockResource}, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 5000");
 
-                        // ---> KHÓA SLOT & DỌN RÁC CHÍNH CHỦ <---
                         if (!string.IsNullOrEmpty(req.StylistId))
                         {
                             var conflictingBookings = await _context.Lichdats
                                 .Where(ld => ld.NgayHen == requestedDate
-                                          && (ld.TrangThai == 3 || ld.TrangThai == 1 || ld.TrangThai == 2)
+                                          && ld.TrangThai != 0 // ĐÃ SỬA THEO CHUẨN != 0
                                           && ld.GioBatDau < requestedEnd
                                           && ld.GioKetThuc > requestedStart
                                           && _context.ChitietLichdats.Any(ct => ct.MaLd == ld.MaLd && ct.MaNv == req.StylistId))
@@ -576,21 +716,44 @@ namespace MinhTamHair.KhanchHang.Controllers
 
                             if (conflictingBookings.Any())
                             {
-                                var myStuckBooking = conflictingBookings.FirstOrDefault(b => b.MaKh == safeKhachHang && b.TrangThai == 3);
+                                var myStuckBooking = conflictingBookings.FirstOrDefault(b => b.MaKh == safeKhachHang && b.TrangThai != 0);
+
+                                if (myStuckBooking != null)
+                                {
+                                    bool isUnpaid = await _context.HoaDons.AnyAsync(h => h.MaLd == myStuckBooking.MaLd && h.TrangThai == 0);
+                                    if (!isUnpaid) myStuckBooking = null;
+                                }
 
                                 if (myStuckBooking != null)
                                 {
                                     myStuckBooking.TrangThai = 0;
                                     var oldInvoice = await _context.HoaDons.FirstOrDefaultAsync(h => h.MaLd == myStuckBooking.MaLd);
-                                    if (oldInvoice != null) oldInvoice.TrangThai = 0;
-                                    var oldPayment = await _context.Thanhtoans.FirstOrDefaultAsync(t => t.MaHd == myStuckBooking.MaLd);
-                                    if (oldPayment != null) oldPayment.TrangThai = 0;
+                                    if (oldInvoice != null)
+                                    {
+                                        oldInvoice.TrangThai = 0;
+                                        var oldPayment = await _context.Thanhtoans.FirstOrDefaultAsync(t => t.MaHd == oldInvoice.MaHd);
+                                        if (oldPayment != null) oldPayment.TrangThai = 0;
+                                    }
                                     await _context.SaveChangesAsync();
+                                    conflictingBookings.Remove(myStuckBooking);
                                 }
-                                else
+
+                                const int MAX_CAPACITY = 2;
+                                bool isOverCapacity = false;
+                                for (TimeOnly t = requestedStart; t < requestedEnd; t = t.AddMinutes(15))
+                                {
+                                    int countAtT = conflictingBookings.Count(b => b.GioBatDau.HasValue && b.GioKetThuc.HasValue && b.GioBatDau.Value <= t && t < b.GioKetThuc.Value);
+                                    if (countAtT >= MAX_CAPACITY)
+                                    {
+                                        isOverCapacity = true;
+                                        break;
+                                    }
+                                }
+
+                                if (isOverCapacity)
                                 {
                                     await transaction.RollbackAsync();
-                                    return BadRequest(new { success = false, message = "Rất tiếc, thợ bạn chọn đang có khách giao dịch. Vui lòng chọn thợ hoặc giờ khác!" });
+                                    return BadRequest(new { success = false, message = "Rất tiếc, thợ bạn chọn đã kín chỗ (tối đa 2 khách) vào khung giờ này. Vui lòng chọn thợ hoặc giờ khác!" });
                                 }
                             }
                         }
@@ -602,13 +765,13 @@ namespace MinhTamHair.KhanchHang.Controllers
                             NgayHen = requestedDate,
                             GioBatDau = requestedStart,
                             GioKetThuc = requestedEnd,
-                            TongTienDuKien = serviceSubTotalBanDau,
-                            TrangThai = trangThaiLichDat // VÁ LỖI CỨNG MÃ 0 Ở ĐÂY
+                            TongTienDuKien = serviceSubTotal,
+                            TrangThai = 0 // LUÔN KHỞI TẠO BẰNG 0
                         };
                         _context.Lichdats.Add(lichDatMoi);
                         await _context.SaveChangesAsync();
 
-                        foreach (var sv in req.Services)
+                        foreach (var sv in validServices)
                         {
                             var chiTiet = new ChitietLichdat
                             {
@@ -625,58 +788,9 @@ namespace MinhTamHair.KhanchHang.Controllers
                         await _context.SaveChangesAsync();
                     }
 
-                    decimal serviceSubTotal = req.Services?.Sum(s => s.Price) ?? 0;
-                    decimal productSubTotal = req.Products?.Sum(p => p.Gia * p.SoLuong) ?? 0;
-                    decimal totalBeforeDiscount = serviceSubTotal + productSubTotal + req.ShippingFee;
-
-                    if (req.VoucherIds != null && req.VoucherIds.Any() && safeKhachHang != null)
-                    {
-                        var allCartIds = new List<string>();
-                        if (req.Services != null) allCartIds.AddRange(req.Services.Select(s => s.Id));
-                        if (req.Products != null) allCartIds.AddRange(req.Products.Select(p => p.Id));
-                        var (vErr, _, _) = await VoucherCartLogic.ValidateStackedAsync(
-                            _context, req.VoucherIds, safeKhachHang, serviceSubTotal + productSubTotal, allCartIds, VnTimeHelper.Now(), VnTimeHelper.Now(), null, null, maxVouchersAllowed: 2);
-                        if (vErr != null)
-                        {
-                            await transaction.RollbackAsync();
-                            return BadRequest(new { success = false, message = vErr });
-                        }
-                    }
-
-                    decimal tongGiamGia = Math.Max(0, totalBeforeDiscount - req.GrandTotal);
-                    decimal serviceDiscount = Math.Min(tongGiamGia, serviceSubTotal);
-                    decimal serviceAfterVoucher = Math.Max(0, serviceSubTotal - serviceDiscount);
-
-                    decimal remainingDiscount = Math.Max(0, tongGiamGia - serviceSubTotal);
-                    decimal productAfterVoucher = Math.Max(0, productSubTotal - remainingDiscount);
-                    if (lichDatMoi != null)
-                    {
-                        lichDatMoi.TongTienDuKien = serviceAfterVoucher;
-                    }
-
-                    decimal servicePayment = 0;
-                    if (coDichVu)
-                    {
-                        servicePayment = (req.PaymentMode == "10") ? serviceAfterVoucher * 0.1m : serviceAfterVoucher;
-                    }
-
-                    bool spNhanTaiTiem = string.Equals(req.ReceiveType, "store", StringComparison.OrdinalIgnoreCase);
-                    bool spLaCod = string.Equals(req.ProductPaymentMethod, "cod", StringComparison.OrdinalIgnoreCase);
-                    decimal productPayment = 0;
-                    if (coSanPham && !spLaCod && !spNhanTaiTiem)
-                    {
-                        productPayment = productAfterVoucher + req.ShippingFee;
-                    }
-
-                    string phuongThucSp = coSanPham ? (req.ProductPaymentMethod ?? "COD") : "COD";
-
-                    bool spLaOnline = coSanPham && productPayment > 0 &&
-                        (phuongThucSp.ToLower() == "vnpay" || phuongThucSp.ToLower() == "momo");
-
-                    bool isOnlinePayment = isOnlineService || spLaOnline;
-                    string phuongThuc = isOnlineService ? phuongThucDv : (spLaOnline ? phuongThucSp : (coDichVu ? phuongThucDv : phuongThucSp));
-
                     int? phanTramGiamRank = 0;
+                    decimal tienGiamThanhVien = 0;
+
                     if (!string.IsNullOrWhiteSpace(safeKhachHang) && safeKhachHang != "GUEST")
                     {
                         var khDb = await _context.Khachhangs.AsNoTracking().FirstOrDefaultAsync(k => k.MaKh == safeKhachHang);
@@ -686,34 +800,89 @@ namespace MinhTamHair.KhanchHang.Controllers
                             if (rankDb != null)
                             {
                                 phanTramGiamRank = rankDb.PhanTramGiamGia;
+                                if (phanTramGiamRank > 0 && (serviceSubTotal + productSubTotal) > 0)
+                                {
+                                    tienGiamThanhVien = Math.Round((serviceSubTotal + productSubTotal) * ((decimal)phanTramGiamRank / 100m), 0);
+                                }
                             }
                         }
                     }
 
-                    string? maCodeChinh = req.VoucherIds != null && req.VoucherIds.Any(v => !string.IsNullOrWhiteSpace(v))
-                        ? req.VoucherIds.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))
-                        : null;
-                    decimal totalOriginal = serviceSubTotal + productSubTotal;
+                    decimal subTotalSauKhiGiamRank = serviceSubTotal + productSubTotal - tienGiamThanhVien;
+                    decimal totalVoucherDiscount = 0;
+                    string? maCodeChinh = null;
+
+                    if (req.VoucherIds != null && req.VoucherIds.Any() && safeKhachHang != null)
+                    {
+                        var allCartIds = new List<string>();
+                        if (coDichVu) allCartIds.AddRange(validServices.Select(s => s.Id));
+                        if (coSanPham) allCartIds.AddRange(validProducts.Select(p => p.Id));
+
+                        var (vErr, tGiam, _) = await VoucherCartLogic.ValidateStackedAsync(
+                            _context, req.VoucherIds, safeKhachHang, subTotalSauKhiGiamRank, allCartIds, dbNow, dbNow, null, null, maxVouchersAllowed: 2);
+                        if (vErr != null)
+                        {
+                            await transaction.RollbackAsync();
+                            return BadRequest(new { success = false, message = vErr });
+                        }
+                        totalVoucherDiscount = tGiam;
+                        maCodeChinh = req.VoucherIds.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+                    }
+
+                    decimal tongGiamGia = tienGiamThanhVien + totalVoucherDiscount;
+                    decimal backendGrandTotal = serviceSubTotal + productSubTotal + shippingFee - tongGiamGia;
+                    if (backendGrandTotal < 0) backendGrandTotal = 0;
+
+                    decimal serviceDiscount = Math.Min(tongGiamGia, serviceSubTotal);
+                    decimal serviceAfterVoucher = Math.Max(0, serviceSubTotal - serviceDiscount);
+
+                    decimal remainingDiscount = Math.Max(0, tongGiamGia - serviceSubTotal);
+                    decimal productAfterVoucher = Math.Max(0, productSubTotal - remainingDiscount);
+
+                    if (lichDatMoi != null)
+                    {
+                        lichDatMoi.TongTienDuKien = serviceAfterVoucher;
+                    }
+
+                    decimal backendPaidAmount = 0;
+                    if (coDichVu && dvLaOnline)
+                    {
+                        if (req.PaymentMode == "10") backendPaidAmount += Math.Round(serviceSubTotal * 0.1m, 0);
+                        else backendPaidAmount += serviceAfterVoucher;
+                    }
+                    if (coSanPham && spLaOnline)
+                    {
+                        backendPaidAmount += productAfterVoucher + shippingFee;
+                    }
+                    backendPaidAmount = Math.Min(backendGrandTotal, backendPaidAmount);
+
                     var hoaDon = new HoaDon
                     {
                         MaHd = maHd,
                         MaKh = safeKhachHang,
                         MaLd = maLd,
-                        NgayTao = VnTimeHelper.Now(),
-                        TongTien = totalOriginal,
-                        ThanhTien = req.GrandTotal,
-                        TienDaTra = req.PaidAmount,
-                        TrangThai = isOnlinePayment ? 0 : (req.PaidAmount >= req.GrandTotal ? 2 : 1),
+                        NgayTao = dbNow,
+                        TongTien = serviceSubTotal + productSubTotal,
+                        ThanhTien = backendGrandTotal,
+                        TienDaTra = backendPaidAmount,
+                        TrangThai = isOnlinePayment ? 0 : (backendPaidAmount >= backendGrandTotal ? 2 : 1),
                         MaCode = maCodeChinh,
                         PhanTramGiamVip = phanTramGiamRank
                     };
                     _context.HoaDons.Add(hoaDon);
+
+                    // THÀNH CÔNG (THANH TOÁN COD/TIỀN MẶT LÀ XONG LUÔN) -> CẬP NHẬT LÊN 1 HOẶC 2
+                    if (!isOnlinePayment && lichDatMoi != null)
+                    {
+                        lichDatMoi.TrangThai = hoaDon.TrangThai;
+                    }
+
                     await _context.SaveChangesAsync();
 
                     string maHddtSpPhatHanh = null;
-                    if (req.Products != null && req.Products.Any())
+                    if (coSanPham)
                     {
-                        foreach (var p in req.Products)
+                        foreach (var p in validProducts)
                         {
                             _context.ChitietHoadonSps.Add(new ChitietHoadonSp
                             {
@@ -724,22 +893,23 @@ namespace MinhTamHair.KhanchHang.Controllers
                                 ThanhTien = p.Gia * p.SoLuong
                             });
 
-                            var bienthe = await _context.BienTheSanphams.FindAsync(p.Id);
-                            if (bienthe != null)
+                            int rowsAffected = await _context.Database.ExecuteSqlInterpolatedAsync($"UPDATE BIENTHE_SANPHAM SET SoLuongTon = SoLuongTon - {p.SoLuong} WHERE MaBienThe = {p.Id} AND SoLuongTon >= {p.SoLuong}");
+                            if (rowsAffected <= 0)
                             {
-                                int rowsAffected = await _context.Database.ExecuteSqlInterpolatedAsync($"UPDATE BIENTHE_SANPHAM SET SoLuongTon = SoLuongTon - {p.SoLuong} WHERE MaBienThe = {p.Id} AND SoLuongTon >= {p.SoLuong}");
-                                if (rowsAffected <= 0)
-                                {
-                                    await transaction.RollbackAsync();
-                                    return BadRequest(new { success = false, errorCode = "PRODUCT_OUT_OF_STOCK", outOfStockProductId = p.Id, message = $"Sản phẩm '{bienthe.TenBienThe}' vừa bị khách khác mua hết hoặc không đủ số lượng trong kho!" });
-                                }
+                                await transaction.RollbackAsync();
+                                var bt = await _context.BienTheSanphams.FindAsync(p.Id);
+                                return BadRequest(new { success = false, errorCode = "PRODUCT_OUT_OF_STOCK", outOfStockProductId = p.Id, message = $"Sản phẩm '{bt?.TenBienThe ?? p.Id}' vừa bị khách khác mua hết hoặc không đủ số lượng trong kho!" });
+                            }
 
-                                int tonTruoc = bienthe.SoLuongTon ?? 0;
-                                int tonSau = tonTruoc - p.SoLuong;
+                            var updatedBt = await _context.BienTheSanphams.AsNoTracking().FirstOrDefaultAsync(b => b.MaBienThe == p.Id);
+                            if (updatedBt != null)
+                            {
+                                int tonSau = updatedBt.SoLuongTon ?? 0;
+                                int tonTruoc = tonSau + p.SoLuong;
 
                                 _context.LichSuTonKhos.Add(new LichSuTonKho
                                 {
-                                    MaBienThe = bienthe.MaBienThe,
+                                    MaBienThe = updatedBt.MaBienThe,
                                     LoaiBienDong = "BAN",
                                     SoLuongThayDoi = -p.SoLuong,
                                     TonTruoc = tonTruoc,
@@ -747,12 +917,12 @@ namespace MinhTamHair.KhanchHang.Controllers
                                     MaChungTu = maHd,
                                     MaNv = null,
                                     GhiChu = $"Bán hàng theo đơn {maHd}",
-                                    ThoiGian = VnTimeHelper.Now()
+                                    ThoiGian = dbNow
                                 });
                             }
                         }
 
-                        if (req.ReceiveType == "home" && req.DeliveryInfo != null)
+                        if (string.Equals(req.ReceiveType, "home", StringComparison.OrdinalIgnoreCase) && req.DeliveryInfo != null)
                         {
                             _context.ThongtinGiaohangs.Add(new ThongtinGiaohang
                             {
@@ -761,7 +931,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                                 SdtNhan = req.DeliveryInfo.SoDienThoai ?? "",
                                 DiaChiNhan = req.DeliveryInfo.DiaChi ?? "",
                                 Email = req.DeliveryInfo.Email ?? "",
-                                PhiShip = req.ShippingFee,
+                                PhiShip = shippingFee,
                                 TrangThaiGiaoHang = 0
                             });
                         }
@@ -771,7 +941,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     {
                         MaHd = maHd,
                         PhuongThuc = (phuongThuc ?? "COD").ToUpper(),
-                        SoTien = req.PaidAmount,
+                        SoTien = backendPaidAmount,
                         TrangThai = isOnlinePayment ? 0 : 1
                     });
 
@@ -790,7 +960,6 @@ namespace MinhTamHair.KhanchHang.Controllers
                         string diaChiXuat = req.InvoiceInfo?.DiaChiXuatHD ?? req.DeliveryInfo?.DiaChi;
                         string emailNhan = req.InvoiceInfo?.EmailNhanHD ?? req.Email;
                         byte loaiKhach = laDoanhNghiep ? (byte)1 : (byte)0;
-                        var thoiDiemTao = VnTimeHelper.Now();
 
                         if (isOnlinePayment)
                         {
@@ -805,7 +974,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         }
                         else if (coDichVu)
                         {
-                            var maHddtGop = "HD" + thoiDiemTao.ToString("yyMMddHHmmss");
+                            var maHddtGop = "HD" + dbNow.ToString("yyMMddHHmmss");
                             _context.HoaDonDienTus.Add(new HoaDonDienTu
                             {
                                 MaHddt = maHddtGop,
@@ -820,7 +989,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                         }
                         else if (coSanPham)
                         {
-                            var maHddtSp = "HD" + thoiDiemTao.ToString("yyMMddHHmmss") + "S";
+                            var maHddtSp = "HD" + dbNow.ToString("yyMMddHHmmss") + "S";
                             _context.HoaDonDienTus.Add(new HoaDonDienTu
                             {
                                 MaHddt = maHddtSp,
@@ -833,6 +1002,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                                 TrangThai = 0
                             });
 
+                            bool spLaCod = string.Equals(req.ProductPaymentMethod, "cod", StringComparison.OrdinalIgnoreCase);
                             if (!spLaCod)
                             {
                                 maHddtSpPhatHanh = maHddtSp;
@@ -861,17 +1031,17 @@ namespace MinhTamHair.KhanchHang.Controllers
                     }
 
                     string paymentUrl = null;
-                    if (req.PaidAmount > 0)
+                    if (backendPaidAmount > 0 && isOnlinePayment)
                     {
-                        if (phuongThuc.ToLower() == "vnpay")
+                        if (string.Equals(phuongThuc, "vnpay", StringComparison.OrdinalIgnoreCase))
                         {
                             var vnpay = new VnPayLibrary();
                             vnpay.AddRequestData("vnp_Version", "2.1.0");
                             vnpay.AddRequestData("vnp_Command", "pay");
                             vnpay.AddRequestData("vnp_TmnCode", _configuration["Vnpay:TmnCode"] ?? "");
-                            vnpay.AddRequestData("vnp_Amount", ((long)(req.PaidAmount * 100)).ToString());
+                            vnpay.AddRequestData("vnp_Amount", ((long)(backendPaidAmount * 100)).ToString());
 
-                            var vnpayNow = VnTimeHelper.Now();
+                            var vnpayNow = dbNow;
                             vnpay.AddRequestData("vnp_CreateDate", vnpayNow.ToString("yyyyMMddHHmmss"));
                             vnpay.AddRequestData("vnp_ExpireDate", vnpayNow.AddMinutes(15).ToString("yyyyMMddHHmmss"));
                             vnpay.AddRequestData("vnp_CurrCode", "VND");
@@ -880,11 +1050,11 @@ namespace MinhTamHair.KhanchHang.Controllers
                             vnpay.AddRequestData("vnp_OrderInfo", "Thanh toan hoa don " + maHd);
                             vnpay.AddRequestData("vnp_OrderType", "other");
                             vnpay.AddRequestData("vnp_ReturnUrl", _configuration["Vnpay:ReturnUrlTong"]);
-                            vnpay.AddRequestData("vnp_TxnRef", maHd);
+                            vnpay.AddRequestData("vnp_TxnRef", maHd + "_" + vnpayNow.ToString("HHmmss"));
 
                             paymentUrl = vnpay.CreateRequestUrl(_configuration["Vnpay:BaseUrl"] ?? "", _configuration["Vnpay:HashSecret"] ?? "");
                         }
-                        else if (phuongThuc.ToLower() == "momo")
+                        else if (string.Equals(phuongThuc, "momo", StringComparison.OrdinalIgnoreCase))
                         {
                             var partnerCode = _configuration["Momo:PartnerCode"];
                             var accessKey = _configuration["Momo:AccessKey"];
@@ -893,20 +1063,22 @@ namespace MinhTamHair.KhanchHang.Controllers
                             var redirectUrl = _configuration["Momo:ReturnUrlTong"];
                             var ipnUrl = _configuration["Momo:NotifyUrl"];
 
-                            long amount = (long)req.PaidAmount;
+                            long amount = (long)backendPaidAmount;
                             string orderInfo = "Thanh toan hoa don tong " + maHd;
+                            string orderId = maHd + "_" + dbNow.ToString("HHmmss");
+                            string requestId = Guid.NewGuid().ToString();
 
                             string rawHash =
-                                $"accessKey={accessKey}&amount={amount}&extraData=&ipnUrl={ipnUrl}&orderId={maHd}&orderInfo={orderInfo}&partnerCode={partnerCode}&redirectUrl={redirectUrl}&requestId={maHd}&requestType=captureWallet";
+                                $"accessKey={accessKey}&amount={amount}&extraData=&ipnUrl={ipnUrl}&orderId={orderId}&orderInfo={orderInfo}&partnerCode={partnerCode}&redirectUrl={redirectUrl}&requestId={requestId}&requestType=captureWallet";
 
                             string signature = SignHmacSHA256(rawHash, secretKey);
 
                             var requestData = new
                             {
                                 partnerCode,
-                                requestId = maHd,
+                                requestId,
                                 amount,
-                                orderId = maHd,
+                                orderId,
                                 orderInfo,
                                 redirectUrl,
                                 ipnUrl,
@@ -943,120 +1115,127 @@ namespace MinhTamHair.KhanchHang.Controllers
             });
         }
 
-        // ĐÃ VÁ: Bắt tín hiệu khách hủy để nhả slot ngay lập tức
         [HttpGet("get-receipt")]
         public async Task<IActionResult> GetReceipt(
             [FromQuery] string maHd,
             [FromQuery] string? vnp_ResponseCode = null,
-            [FromQuery] string? resultCode = null)
+            [FromQuery] string? resultCode = null,
+            [FromQuery] string? vnp_TxnRef = null)
         {
-            if (string.IsNullOrEmpty(maHd)) return BadRequest(new { success = false, message = "Thiếu mã hóa đơn." });
+            string rawKey = !string.IsNullOrEmpty(vnp_TxnRef) ? vnp_TxnRef : maHd;
+            string realMaHd = rawKey?.Split('_')[0] ?? "";
+
+            if (string.IsNullOrEmpty(realMaHd))
+                return BadRequest(new { success = false, message = "Thiếu mã hóa đơn." });
 
             try
             {
                 var hoaDon = await _context.HoaDons
                     .Include(h => h.ThongtinGiaohangs)
                     .Include(h => h.Thanhtoans)
-                    .FirstOrDefaultAsync(h => h.MaHd == maHd);
+                    .FirstOrDefaultAsync(h => h.MaHd == realMaHd);
 
-                if (hoaDon == null) return NotFound(new { success = false, message = "Không tìm thấy hóa đơn" });
+                if (hoaDon == null)
+                    return NotFound(new { success = false, message = "Không tìm thấy hóa đơn" });
 
+                bool hasPaymentStatus = !string.IsNullOrEmpty(vnp_ResponseCode) || !string.IsNullOrEmpty(resultCode);
                 bool isPaymentSuccess = (vnp_ResponseCode == "00") || (resultCode == "0");
-                bool vuaXacNhanThanhCong = isPaymentSuccess && hoaDon.TrangThai == 0;
 
-                if (vuaXacNhanThanhCong)
+                if (hasPaymentStatus && hoaDon.TrangThai == 0)
                 {
-                    hoaDon.TrangThai = (hoaDon.TienDaTra ?? 0) >= (hoaDon.ThanhTien ?? 0) ? 2 : 1;
-                    var thanhToan = hoaDon.Thanhtoans.FirstOrDefault();
-                    if (thanhToan != null) thanhToan.TrangThai = 1;
-                    await _context.SaveChangesAsync();
-
-                    bool daCoHddt = await _context.HoaDonDienTus.AnyAsync(h => h.MaHd == maHd);
-                    if (!daCoHddt)
+                    if (isPaymentSuccess)
                     {
-                        bool coDichVuDb = !string.IsNullOrEmpty(hoaDon.MaLd);
-                        bool coSanPhamDb = await _context.ChitietHoadonSps.AnyAsync(c => c.MaHd == maHd);
-                        var pending = await _cache.GetObjectAsync<PendingInvoiceInfo>(PendingInvoiceCacheKey(maHd));
-                        if (pending != null)
-                        {
-                            await _cache.RemoveSafeAsync(PendingInvoiceCacheKey(maHd));
-                        }
-                        else
-                        {
-                            var khDuPhong = await _context.Khachhangs.FindAsync(hoaDon.MaKh);
-                            var deliveryDuPhong = hoaDon.ThongtinGiaohangs.FirstOrDefault();
-                            pending = new PendingInvoiceInfo
-                            {
-                                LoaiKhach = 0,
-                                TenNguoiMua = khDuPhong?.HoTen ?? deliveryDuPhong?.TenNguoiNhan ?? "Khach hang",
-                                Mst = null,
-                                DiaChiXuatHd = deliveryDuPhong?.DiaChiNhan,
-                                EmailNhanHd = khDuPhong?.Email ?? deliveryDuPhong?.Email
-                            };
-                        }
+                        hoaDon.TrangThai = (hoaDon.TienDaTra ?? 0) >= (hoaDon.ThanhTien ?? 0) ? 2 : 1;
+                        var thanhToan = hoaDon.Thanhtoans.FirstOrDefault();
+                        if (thanhToan != null) thanhToan.TrangThai = 1;
+                        await _context.SaveChangesAsync();
 
-                        var thoiDiemTao = VnTimeHelper.Now();
-
-                        if (coDichVuDb)
+                        bool daCoHddt = await _context.HoaDonDienTus.AnyAsync(h => h.MaHd == realMaHd);
+                        if (!daCoHddt)
                         {
-                            var maHddtGop = "HD" + thoiDiemTao.ToString("yyMMddHHmmss");
-                            _context.HoaDonDienTus.Add(new HoaDonDienTu
-                            {
-                                MaHddt = maHddtGop,
-                                MaHd = maHd,
-                                LoaiKhach = pending.LoaiKhach,
-                                TenNguoiMua = pending.TenNguoiMua,
-                                Mst = pending.Mst,
-                                DiaChiXuatHd = pending.DiaChiXuatHd,
-                                EmailNhanHd = pending.EmailNhanHd,
-                                TrangThai = 3
-                            });
-                            await _context.SaveChangesAsync();
-                        }
-                        else if (coSanPhamDb)
-                        {
-                            var maHddtSp = "HD" + thoiDiemTao.ToString("yyMMddHHmmss") + "S";
-                            _context.HoaDonDienTus.Add(new HoaDonDienTu
-                            {
-                                MaHddt = maHddtSp,
-                                MaHd = maHd,
-                                LoaiKhach = pending.LoaiKhach,
-                                TenNguoiMua = pending.TenNguoiMua,
-                                Mst = pending.Mst,
-                                DiaChiXuatHd = pending.DiaChiXuatHd,
-                                EmailNhanHd = pending.EmailNhanHd,
-                                TrangThai = 0
-                            });
-                            await _context.SaveChangesAsync();
+                            bool coDichVuDb = !string.IsNullOrEmpty(hoaDon.MaLd);
+                            bool coSanPhamDb = await _context.ChitietHoadonSps.AnyAsync(c => c.MaHd == realMaHd);
+                            var pending = await _cache.GetObjectAsync<PendingInvoiceInfo>(PendingInvoiceCacheKey(realMaHd));
 
-                            _ = Task.Run(async () =>
+                            if (pending == null)
                             {
-                                try
+                                var khDuPhong = await _context.Khachhangs.FindAsync(hoaDon.MaKh);
+                                var deliveryDuPhong = hoaDon.ThongtinGiaohangs.FirstOrDefault();
+                                pending = new PendingInvoiceInfo
                                 {
-                                    using var scope = _scopeFactory.CreateScope();
-                                    var eInvoiceService = scope.ServiceProvider.GetRequiredService<IEInvoiceService>();
-                                    await eInvoiceService.PhatHanhHoaDonAsync(maHddtSp);
-                                }
-                                catch (Exception ex)
+                                    LoaiKhach = 0,
+                                    TenNguoiMua = khDuPhong?.HoTen ?? deliveryDuPhong?.TenNguoiNhan ?? "Khach hang",
+                                    Mst = null,
+                                    DiaChiXuatHd = deliveryDuPhong?.DiaChiNhan,
+                                    EmailNhanHd = khDuPhong?.Email ?? deliveryDuPhong?.Email
+                                };
+                            }
+
+                            var thoiDiemTao = VnTimeHelper.Now();
+
+                            if (coDichVuDb)
+                            {
+                                var maHddtGop = "HD" + thoiDiemTao.ToString("yyMMddHHmmss");
+                                _context.HoaDonDienTus.Add(new HoaDonDienTu
                                 {
-                                    Console.WriteLine($"[EINVOICE ERROR] Lỗi phát hành hóa đơn {maHddtSp}: {ex.Message}");
-                                }
-                            });
+                                    MaHddt = maHddtGop,
+                                    MaHd = realMaHd,
+                                    LoaiKhach = pending.LoaiKhach,
+                                    TenNguoiMua = pending.TenNguoiMua,
+                                    Mst = pending.Mst,
+                                    DiaChiXuatHd = pending.DiaChiXuatHd,
+                                    EmailNhanHd = pending.EmailNhanHd,
+                                    TrangThai = 3
+                                });
+                                await _context.SaveChangesAsync();
+                            }
+                            else if (coSanPhamDb)
+                            {
+                                var maHddtSp = "HD" + thoiDiemTao.ToString("yyMMddHHmmss") + "S";
+                                _context.HoaDonDienTus.Add(new HoaDonDienTu
+                                {
+                                    MaHddt = maHddtSp,
+                                    MaHd = realMaHd,
+                                    LoaiKhach = pending.LoaiKhach,
+                                    TenNguoiMua = pending.TenNguoiMua,
+                                    Mst = pending.Mst,
+                                    DiaChiXuatHd = pending.DiaChiXuatHd,
+                                    EmailNhanHd = pending.EmailNhanHd,
+                                    TrangThai = 0
+                                });
+                                await _context.SaveChangesAsync();
+
+                                _ = Task.Run(async () =>
+                                {
+                                    try
+                                    {
+                                        using var scope = _scopeFactory.CreateScope();
+                                        var eInvoiceService = scope.ServiceProvider.GetRequiredService<IEInvoiceService>();
+                                        await eInvoiceService.PhatHanhHoaDonAsync(maHddtSp);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Console.WriteLine($"[EINVOICE ERROR] Lỗi phát hành hóa đơn {maHddtSp}: {ex.Message}");
+                                    }
+                                });
+                            }
+
+                            await _cache.RemoveSafeAsync(PendingInvoiceCacheKey(realMaHd));
                         }
                     }
-                }
-                else if (!isPaymentSuccess && hoaDon.TrangThai == 0) // LƯỚI BẢO VỆ DỌN RÁC KHÁCH HỦY
-                {
-                    hoaDon.TrangThai = 0;
-                    var thanhToan = hoaDon.Thanhtoans.FirstOrDefault();
-                    if (thanhToan != null) thanhToan.TrangThai = 0;
-
-                    if (!string.IsNullOrEmpty(hoaDon.MaLd))
+                    else
                     {
-                        var lichDat = await _context.Lichdats.FirstOrDefaultAsync(l => l.MaLd == hoaDon.MaLd);
-                        if (lichDat != null) lichDat.TrangThai = 0;
+                        hoaDon.TrangThai = 0;
+                        var thanhToan = hoaDon.Thanhtoans.FirstOrDefault();
+                        if (thanhToan != null) thanhToan.TrangThai = 0;
+
+                        if (!string.IsNullOrEmpty(hoaDon.MaLd))
+                        {
+                            var lichDat = await _context.Lichdats.FirstOrDefaultAsync(l => l.MaLd == hoaDon.MaLd);
+                            if (lichDat != null) lichDat.TrangThai = 0;
+                        }
+                        await _context.SaveChangesAsync();
                     }
-                    await _context.SaveChangesAsync();
                 }
 
                 bool shouldSendEmail = false;
@@ -1065,7 +1244,7 @@ namespace MinhTamHair.KhanchHang.Controllers
                     var lichDat = await _context.Lichdats.FirstOrDefaultAsync(l => l.MaLd == hoaDon.MaLd);
                     if (lichDat != null && lichDat.TrangThai == 0)
                     {
-                        lichDat.TrangThai = 1;
+                        lichDat.TrangThai = hoaDon.TrangThai; // Thành công lên 1 hoặc 2
                         await _context.SaveChangesAsync();
                         shouldSendEmail = true;
                     }
@@ -1150,13 +1329,20 @@ namespace MinhTamHair.KhanchHang.Controllers
                     };
                 }
 
-                var chiTietSp = await _context.ChitietHoadonSps.AsNoTracking().Where(c => c.MaHd == maHd).ToListAsync();
+                var chiTietSp = await _context.ChitietHoadonSps.AsNoTracking().Where(c => c.MaHd == realMaHd).ToListAsync();
                 var productsList = new List<object>();
                 foreach (var ct in chiTietSp)
                 {
                     var bt = await _context.BienTheSanphams.FindAsync(ct.MaBienThe);
                     var sp = bt != null ? await _context.SanPhams.FindAsync(bt.MaSanPham) : null;
-                    productsList.Add(new { name = $"{sp?.TenSp} - {bt?.TenBienThe}", qty = ct.SoLuong, price = ct.DonGiaLucBan, total = ct.ThanhTien });
+                    productsList.Add(new { 
+                        name = sp?.TenSp ?? "Sản phẩm", 
+                        variant = bt?.TenBienThe ?? "Mặc định",
+                        qty = ct.SoLuong, 
+                        price = ct.DonGiaLucBan, 
+                        total = ct.ThanhTien,
+                        img = sp?.HinhAnhDaiDien
+                    });
                 }
 
                 var receipt = new
@@ -1171,7 +1357,18 @@ namespace MinhTamHair.KhanchHang.Controllers
                     trangThai = (hoaDon.TrangThai == 1 || hoaDon.TrangThai == 2) ? "Đã thanh toán" : "Chưa thanh toán",
                     booking = bookingInfo,
                     products = productsList,
-                    delivery = delivery != null ? new { nguoiNhan = delivery.TenNguoiNhan, sdt = delivery.SdtNhan, diaChi = delivery.DiaChiNhan, phiShip = delivery.PhiShip } : null
+                    warehouse = new {
+                        name = "Tổng Kho Salon LGHair",
+                        address = "Số 123 Nguyễn Trãi, Phường Bến Thành, Quận 1, TP. Hồ Chí Minh",
+                        phone = "0987.654.321"
+                    },
+                    delivery = delivery != null ? new { 
+                        nguoiNhan = delivery.TenNguoiNhan, 
+                        sdt = delivery.SdtNhan, 
+                        diaChi = delivery.DiaChiNhan, 
+                        phiShip = delivery.PhiShip,
+                        
+                    } : null
                 };
 
                 return Ok(new { success = true, data = receipt });
@@ -1207,7 +1404,6 @@ namespace MinhTamHair.KhanchHang.Controllers
         public string? StylistId { get; set; }
 
         public List<CheckoutServiceItemDto>? Services { get; set; }
-
         public List<ProductItemDto2>? Products { get; set; }
         public string? ReceiveType { get; set; }
         public DeliveryInfoDto? DeliveryInfo { get; set; }
@@ -1249,7 +1445,6 @@ namespace MinhTamHair.KhanchHang.Controllers
         public string? Email { get; set; }
     }
 
-    // ĐÃ VÁ: Bổ sung trường Phone để đồng bộ logic quét "Chính chủ"
     [System.ComponentModel.DataAnnotations.Schema.NotMapped]
     public class ThanhToanCheckStylistRequest
     {
@@ -1257,6 +1452,7 @@ namespace MinhTamHair.KhanchHang.Controllers
         public string GioBatDau { get; set; }
         public int TongThoiGian { get; set; }
         public string MaKh { get; set; }
-        public string? Phone { get; set; }
+        public string? Phone { get; set;
     }
+}
 }

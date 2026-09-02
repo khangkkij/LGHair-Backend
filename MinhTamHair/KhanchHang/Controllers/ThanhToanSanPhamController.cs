@@ -73,11 +73,13 @@ namespace MinhTamHair.KhanchHang.Controllers
         {
             try
             {
-                var query = _context.SanPhams.Where(sp => sp.TrangThai == 1);
+                var query = _context.SanPhams
+                    .AsNoTracking()
+                    .Where(sp => sp.TrangThai == 1);
 
                 if (!string.IsNullOrWhiteSpace(keyword))
                 {
-                    query = query.Where(sp => sp.TenSp.Contains(keyword));
+                    query = query.Where(sp => sp.TenSp != null && sp.TenSp.Contains(keyword));
                 }
                 query = query.Where(sp => sp.BienTheSanphams.Any(bt => bt.TrangThai == 1));
                 var result = await query.Select(sp => new
@@ -111,7 +113,7 @@ namespace MinhTamHair.KhanchHang.Controllers
         public async Task<IActionResult> GetMyVouchers(string maKH, [FromQuery] decimal subTotal, [FromQuery] string? productIds)
         {
 
-            var kh = await _context.Khachhangs.Include(k => k.MaCodes).FirstOrDefaultAsync(k => k.MaKh == maKH);
+            var kh = await _context.Khachhangs.AsNoTracking().Include(k => k.MaCodes).FirstOrDefaultAsync(k => k.MaKh == maKH);
 
             var now = MinhTamHair.Services.TimeHelper.VnTimeHelper.Now();
             var cartIds = string.IsNullOrWhiteSpace(productIds) ? new List<string>() : productIds.Split(',').ToList();
@@ -139,11 +141,15 @@ namespace MinhTamHair.KhanchHang.Controllers
             var myCodes = kh != null ? kh.MaCodes : new List<Voucher>();
             var allVouchers = myCodes.ToList();
 
-            var usageMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            foreach (var c in allVouchers.Select(v => v.MaCode))
-            {
-                usageMap[c] = await _context.HoaDons.AsNoTracking().CountAsync(h => h.MaKh == maKH && h.MaCode == c);
-            }
+            var voucherCodes = allVouchers.Select(v => v.MaCode).ToList();
+            var usageCounts = await _context.HoaDons
+                .AsNoTracking()
+                .Where(h => h.MaKh == maKH && h.MaCode != null && voucherCodes.Contains(h.MaCode))
+                .GroupBy(h => h.MaCode!)
+                .Select(g => new { MaCode = g.Key, Count = g.Count() })
+                .ToListAsync();
+
+            var usageMap = usageCounts.ToDictionary(x => x.MaCode, x => x.Count, StringComparer.OrdinalIgnoreCase);
 
             var result = new List<object>();
             foreach (var v in allVouchers)
@@ -553,8 +559,95 @@ namespace MinhTamHair.KhanchHang.Controllers
             }
         }
 
+        [HttpGet("get-receipt")]
+        public async Task<IActionResult> GetReceipt(
+            [FromQuery] string orderId,
+            [FromQuery] string? vnp_ResponseCode = null,
+            [FromQuery] string? resultCode = null,
+            [FromQuery] string? vnp_TxnRef = null)
+        {
+            string rawKey = !string.IsNullOrEmpty(vnp_TxnRef) ? vnp_TxnRef : orderId;
+            string realMaHd = rawKey?.Split('_')[0] ?? "";
+
+            if (string.IsNullOrEmpty(realMaHd))
+                return BadRequest(new { success = false, message = "Thiếu mã đơn hàng." });
+
+            try
+            {
+                var hoaDon = await _context.HoaDons
+                    .Include(h => h.ThongtinGiaohangs)
+                    .Include(h => h.Thanhtoans)
+                    .FirstOrDefaultAsync(h => h.MaHd == realMaHd);
+
+                if (hoaDon == null)
+                    return NotFound(new { success = false, message = "Không tìm thấy đơn hàng." });
+
+                bool isPaymentSuccess = (vnp_ResponseCode == "00") || (resultCode == "0");
+                var thanhToan = hoaDon.Thanhtoans.FirstOrDefault();
+                if (isPaymentSuccess && thanhToan != null && thanhToan.TrangThai != 1)
+                {
+                    thanhToan.TrangThai = 1;
+                    hoaDon.TrangThai = (hoaDon.TienDaTra ?? 0) >= (hoaDon.ThanhTien ?? 0) ? 2 : 1;
+                    await _context.SaveChangesAsync();
+                }
+
+                var khachHangInfo = await _context.Khachhangs.FindAsync(hoaDon.MaKh);
+                var delivery = hoaDon.ThongtinGiaohangs.FirstOrDefault();
+
+                var chitietSps = await _context.ChitietHoadonSps
+                    .Where(c => c.MaHd == realMaHd)
+                    .ToListAsync();
+
+                var productsList = new List<object>();
+                foreach (var ct in chitietSps)
+                {
+                    var bt = await _context.BienTheSanphams.FindAsync(ct.MaBienThe);
+                    var spItem = bt != null ? await _context.SanPhams.FindAsync(bt.MaSanPham) : null;
+                    productsList.Add(new
+                    {
+                        id = ct.MaBienThe,
+                        name = spItem?.TenSp ?? "Sản phẩm",
+                        variant = bt?.TenBienThe ?? "Mặc định",
+                        qty = ct.SoLuong,
+                        price = ct.DonGiaLucBan,
+                        total = ct.ThanhTien,
+                        img = spItem?.HinhAnhDaiDien
+                    });
+                }
+
+                var receipt = new
+                {
+                    maHd = hoaDon.MaHd,
+                    ngayTao = hoaDon.NgayTao?.ToString("dd/MM/yyyy HH:mm"),
+                    khachHang = khachHangInfo?.HoTen ?? delivery?.TenNguoiNhan ?? "Khách hàng",
+                    sdt = khachHangInfo?.Sdt ?? delivery?.SdtNhan ?? "",
+                    tongTien = hoaDon.TongTien,
+                    thanhTien = hoaDon.ThanhTien,
+                    tienDaTra = hoaDon.TienDaTra,
+                    phuongThucThanhToan = thanhToan?.PhuongThuc ?? (hoaDon.TienDaTra > 0 ? "VNPay" : "COD"),
+                    trangThai = (hoaDon.TrangThai == 1 || hoaDon.TrangThai == 2) ? "Đã thanh toán" : "Chờ thanh toán",
+                    warehouse = new
+                    {
+                        name = "Tổng Kho Salon LGHair",
+                        address = "Số 123 Nguyễn Trãi, Phường Bến Thành, Quận 1, TP. Hồ Chí Minh",
+                        phone = "0987.654.321"
+                    },
+                    products = productsList,
+                    delivery = delivery != null ? new
+                    {
+                        nguoiNhan = delivery.TenNguoiNhan,
+                        sdt = delivery.SdtNhan,
+                        diaChi = delivery.DiaChiNhan,
+                        phiShip = delivery.PhiShip
+                    } : null
+                };
+
+                return Ok(new { success = true, data = receipt });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { success = false, message = ex.Message });
+            }
+        }
     }
 }
-
-
-

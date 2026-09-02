@@ -1,5 +1,6 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using MinhTamHair.Admin.Models;
 using MinhTamHair.Models;
 
@@ -11,11 +12,13 @@ public class AdminKhachHangController : ControllerBase
 {
     private readonly MinhTamHairContext _context;
     private readonly IWebHostEnvironment _env;
+    private readonly IMemoryCache _cache;
 
-    public AdminKhachHangController(MinhTamHairContext context, IWebHostEnvironment env)
+    public AdminKhachHangController(MinhTamHairContext context, IWebHostEnvironment env, IMemoryCache cache)
     {
         _context = context;
         _env = env;
+        _cache = cache;
     }
 
     [HttpGet("ranks")]
@@ -164,7 +167,27 @@ public class AdminKhachHangController : ControllerBase
         if (dto.Sdt != null) entity.Sdt = dto.Sdt.Trim();
         if (dto.GioiTinh != null) entity.GioiTinh = string.IsNullOrWhiteSpace(dto.GioiTinh) ? null : dto.GioiTinh.Trim();
         if (dto.HinhAnh != null) entity.HinhAnh = string.IsNullOrWhiteSpace(dto.HinhAnh) ? null : dto.HinhAnh.Trim();
-        if (dto.TrangThai.HasValue) entity.TrangThai = dto.TrangThai;
+        if (dto.TrangThai.HasValue)
+        {
+            entity.TrangThai = dto.TrangThai.Value;
+            if (dto.TrangThai.Value == 0)
+            {
+                // Thu hồi token và hủy phiên đăng nhập ngay lập tức
+                var rts = await _context.Refreshtokens.Where(rt => rt.UserId == maKh).ToListAsync(cancellationToken);
+                if (rts.Any())
+                {
+                    _context.Refreshtokens.RemoveRange(rts);
+                }
+                var currentUnixTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                _cache.Set($"UserLocked_{maKh}", true, TimeSpan.FromDays(7));
+                _cache.Set($"UserRevokedAt_{maKh}", currentUnixTime, TimeSpan.FromDays(7));
+            }
+            else
+            {
+                _cache.Remove($"UserLocked_{maKh}");
+                _cache.Remove($"UserRevokedAt_{maKh}");
+            }
+        }
         if (dto.DiemTichLuy.HasValue) entity.DiemTichLuy = dto.DiemTichLuy;
 
         entity.MaRank = await GetRankByPointsAsync(entity.DiemTichLuy, cancellationToken);
